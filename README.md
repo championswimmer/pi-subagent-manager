@@ -1,5 +1,9 @@
 # pi-subagent-manager
 
+[![npm version](https://img.shields.io/npm/v/pi-subagent-manager.svg)](https://www.npmjs.com/package/pi-subagent-manager)
+[![npm downloads](https://img.shields.io/npm/dm/pi-subagent-manager.svg)](https://www.npmjs.com/package/pi-subagent-manager)
+[![CI](https://github.com/championswimmer/pi-subagent-manager/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/championswimmer/pi-subagent-manager/actions/workflows/tests.yml)
+
 A pi extension for named, steerable subagent threads. Agent **types** describe a model's job; thread **paths** describe its ancestry.
 
 Requires pi **0.99.2+**. No build step.
