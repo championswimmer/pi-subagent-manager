@@ -1,4 +1,4 @@
-# pi-subagent
+# pi-subagent-manager
 
 A pi extension for named, steerable subagent threads. Agent **types** describe a model's job; thread **paths** describe its ancestry.
 
