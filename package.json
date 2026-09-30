@@ -1,0 +1,48 @@
+{
+  "name": "pi-subagent",
+  "version": "0.1.0",
+  "description": "Hierarchical, steerable subagent threads for pi",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "subagents"
+  ],
+  "license": "MIT",
+  "files": [
+    "src",
+    "agents",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "yaml": "^2.8.1",
+    "shell-quote": "^1.8.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-coding-agent": ">=0.99.2",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "^0.99.2",
+    "@earendil-works/pi-agent-core": "^0.99.2",
+    "@earendil-works/pi-coding-agent": "0.99.2",
+    "@earendil-works/pi-tui": "^0.99.2",
+    "@types/node": "^22.0.0",
+    "@types/shell-quote": "^1.7.5",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "typebox": "1.3.27"
+  }
+}
