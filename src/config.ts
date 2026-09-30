@@ -126,7 +126,10 @@ export class ConfigStore {
     for (const [directory, source] of layers) {
       if (!existsSync(directory)) continue;
       let files: string[];
-      try { files = readdirSync(directory).filter((file) => file.endsWith(".md")).sort(); }
+      try {
+        if (lstatSync(directory).isSymbolicLink()) throw new Error(`Unsafe symlink path: ${directory}`);
+        files = readdirSync(directory).filter((file) => file.endsWith(".md")).sort();
+      }
       catch (error) {
         this.diagnostics.push(`${directory}: ${String(error)}`);
         // An unreadable override layer cannot safely expose lower-precedence policies.
@@ -134,6 +137,7 @@ export class ConfigStore {
         continue;
       }
       const blocked = new Set<string>();
+      const seenNames = new Set<string>();
       for (const file of files) {
         const filePath = join(directory, file);
         let content = "";
@@ -141,6 +145,12 @@ export class ConfigStore {
           if (!lstatSync(filePath).isFile()) throw new Error("Agent definition must be a regular file, not a symlink");
           content = readFileSync(filePath, "utf8");
           const type = parseAgentType(content, filePath);
+          if (seenNames.has(type.name)) {
+            blocked.add(type.name);
+            this.diagnostics.push(`${filePath}: Duplicate agent name in ${source} layer: ${type.name}`);
+            continue;
+          }
+          seenNames.add(type.name);
           this.types.set(type.name, { ...type, source });
         } catch (error) {
           blocked.add(file.slice(0, -3));
@@ -168,19 +178,27 @@ export class ConfigStore {
     return structuredClone(type);
   }
 
-  save(type: AgentType, scope: "user" | "project"): AgentType {
+  canSaveProject(): boolean { return this.options.includeProject; }
+
+  destination(name: string, scope: "user" | "project"): string {
+    if (!NAME.test(name)) throw new Error("Unsafe agent name");
     if (scope !== "user" && scope !== "project") throw new Error("Invalid agent scope");
     if (scope === "project" && !this.options.includeProject) throw new Error("Project agents are not enabled/trusted");
+    return scope === "user" ? resolve(this.options.agentDir, "agents", `${name}.md`)
+      : resolve(this.options.cwd, ".pi", "agents", `${name}.md`);
+  }
+
+  save(type: AgentType, scope: "user" | "project"): AgentType {
     const content = serializeAgentType(type);
     const validated = parseAgentType(content);
     const base = resolve(scope === "user" ? this.options.agentDir : this.options.cwd);
-    const directory = scope === "user" ? join(base, "agents") : join(base, ".pi", "agents");
+    const filePath = this.destination(validated.name, scope);
+    const directory = dirname(filePath);
     // Reject redirected destination directories and files before writing.
     for (const path of scope === "user" ? [base, directory] : [base, join(base, ".pi"), directory]) {
       if (existsSync(path) && lstatSync(path).isSymbolicLink()) throw new Error(`Unsafe symlink path: ${path}`);
     }
     mkdirSync(directory, { recursive: true });
-    const filePath = join(directory, `${validated.name}.md`);
     if (existsSync(filePath) && !lstatSync(filePath).isFile()) throw new Error(`Unsafe agent destination: ${filePath}`);
     const temporary = join(dirname(filePath), `.${validated.name}.${randomUUID()}.tmp`);
     try {

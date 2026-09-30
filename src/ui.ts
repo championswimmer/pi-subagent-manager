@@ -24,7 +24,9 @@ export function sanitizeText(text: string): string {
 }
 
 export function renderThreads(threads: ThreadView[], width: number, theme: Pick<Theme, "fg">): string[] {
-  const visible = threads.filter((thread) => thread.path !== "/root");
+  const priority = (thread: ThreadView) => thread.state === "starting" || thread.state === "running" ? 0 : thread.state === "paused" ? 1 : 2;
+  const visible = threads.filter((thread) => thread.path !== "/root").sort((a, b) =>
+    priority(a) - priority(b) || b.updatedAt - a.updatedAt || b.createdAt - a.createdAt);
   const limit = visible.length > 8 ? 7 : 8;
   const lines = visible.slice(0, limit).map((thread) => {
     const color: ThemeColor = AGENT_COLORS.includes(thread.color as typeof AGENT_COLORS[number])
@@ -136,10 +138,10 @@ async function externalEdit(ctx: ExtensionCommandContext, text: string): Promise
 
 async function editToolList(ctx: ExtensionCommandContext, type: AgentType, field: "allow" | "block"): Promise<void> {
   const mode = await ctx.ui.select(`tools.${field} (${type.tools?.[field]?.join(", ") ?? "unset"})`, [
-    "Unset (inherit default)", "Empty list", "Enter exact tool names",
+    "Unset (use default policy)", "Empty list", "Enter exact tool names",
   ]);
   if (!mode) return;
-  if (mode === "Unset (inherit default)") {
+  if (mode === "Unset (use default policy)") {
     if (type.tools) delete type.tools[field];
   } else {
     const value = mode === "Empty list" ? "" : await ctx.ui.input(`tools.${field}: comma-separated exact names`, type.tools?.[field]?.join(", "));
@@ -179,10 +181,7 @@ function assertSaveDestination(ctx: ExtensionCommandContext, store: ConfigStore,
   if (sameName && (!original || type.name !== original.name)) {
     throw new Error(`Agent type ${type.name} already exists; choose a different name.`);
   }
-  const sameScope = entries.find((entry) => entry.source === scope && entry.filePath);
-  const directory = sameScope?.filePath ? dirname(sameScope.filePath)
-    : scope === "user" ? join(getAgentDir(), "agents") : join(ctx.cwd, ".pi", "agents");
-  const destination = resolve(directory, `${type.name}.md`);
+  const destination = store.destination(type.name, scope);
   if (existsSync(destination) && (!original?.filePath || resolve(original.filePath) !== destination)) {
     throw new Error(`Refusing to overwrite existing definition ${destination}. Edit that definition instead.`);
   }
@@ -207,7 +206,7 @@ export async function editAgentTypes(ctx: ExtensionCommandContext, store: Config
         if (field === "Save") {
           // Round-trip before saving: no partial or invalid configuration is accepted.
           const validated = parseAgentType(serializeAgentType(draft));
-          const scopeChoice = await ctx.ui.select("Save scope", ["Global", "Trusted project"]);
+          const scopeChoice = await ctx.ui.select("Save scope", store.canSaveProject() ? ["Global", "Trusted project"] : ["Global"]);
           if (!scopeChoice) continue;
           const scope = scopeChoice === "Global" ? "user" : "project";
           assertSaveDestination(ctx, store, validated, original, scope);
@@ -222,7 +221,7 @@ export async function editAgentTypes(ctx: ExtensionCommandContext, store: Config
         }
         const candidate = structuredClone(draft);
         if (field === "name" || field === "description" || field === "model") {
-          const value = await ctx.ui.input(`Agent ${field}${field === "model" ? " (provider/id, blank = default)" : ""}`, candidate[field]);
+          const value = await ctx.ui.input(`Agent ${field}${field === "model" ? " (provider/id, blank = default)" : ""}`, candidate[field] ?? "");
           if (value === undefined) continue;
           if (field === "model" && !value.trim()) delete candidate.model;
           else candidate[field] = value;

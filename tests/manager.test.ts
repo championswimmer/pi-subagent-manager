@@ -44,6 +44,7 @@ test("pause stops without handback; completed and paused revive SAME driver",asy
   await manager.steer("/root",paused.path,"second");await tick();data.finish();
   const completed=await manager.wait("/root",paused.path);
   assert.equal(completed.state,"completed");assert.equal(completed.output,"answer: second");
+  assert.equal(completed.task,"first"); // Stable task label, independent of steering history.
   await manager.steer("/root",paused.path,"third");await tick();data.finish();await manager.wait("/root",paused.path);
   assert.deepEqual(data.runs,["first","second","third"]);assert.equal(drivers.size,1);
   await manager.shutdown();
@@ -74,10 +75,13 @@ test("stop cascades but retains sessions, and children cannot wait on ancestors"
   const {manager,drivers}=fixture();
   await manager.spawn("/root",{path:"worker",type:"worker",task:"parent",wait:false});await tick();
   await manager.spawn("/root/worker",{path:"child",type:"worker",task:"child",wait:false});await tick();
+  await manager.spawn("/root/worker",{path:"finished",type:"worker",task:"finished",wait:false});await tick();
+  drivers.get("/root/worker/finished")!.finish();await manager.wait("/root","/root/worker/finished");
   await assert.rejects(manager.wait("/root/worker/child","/root/worker"),/descendants/);
   await assert.rejects(manager.stop("/root/worker","/root/worker"),/descendants/);
   assert.equal((await manager.stop("/root","worker")).state,"stopped");
   assert.equal(manager.get("/root/worker/child").state,"stopped");
+  assert.equal(manager.get("/root/worker/finished").state,"completed");
   assert.equal(drivers.get("/root/worker")!.disposed,false);
   await manager.steer("/root","worker","continue");await tick();drivers.get("/root/worker")!.finish();
   assert.equal((await manager.wait("/root","worker")).state,"completed");
@@ -96,7 +100,10 @@ test("duplicate concurrent spawn is rejected and concurrency/depth limits apply"
 test("save/restore retains definition snapshot and reopens JSONL on resume",async()=>{
   const first=fixture();await first.manager.spawn("/root",{path:"worker",type:"worker",task:"work",wait:false});await tick();
   const saved=first.manager.saved();await first.manager.shutdown();
-  const second=fixture();second.manager.restore(saved);
+  const second=fixture();
+  assert.throws(()=>second.manager.restore([{...saved[0],view:{...saved[0].view,parent:"/wrong"}}]),/Invalid saved parent/);
+  assert.deepEqual(second.manager.list(),[]); // Restore is atomic on corrupt registries.
+  second.manager.restore(saved);
   assert.equal(second.manager.get("worker").state,"paused");
   assert.match(second.manager.get("worker").status,/Interrupted/);
   await second.manager.steer("/root","worker","resume");await tick();

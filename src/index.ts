@@ -12,7 +12,6 @@ const REGISTRY_ENTRY = "pi-subagent:registry:v1";
 export default function piSubagent(pi: ExtensionAPI): void {
   let context: ExtensionContext | undefined;
   let store = new ConfigStore({cwd:process.cwd(),agentDir:getAgentDir(),includeProject:false});
-  store.reload();
   let manager: ThreadManager | undefined;
   let generation = 0;
   let persistenceSignature = "";
@@ -21,16 +20,15 @@ export default function piSubagent(pi: ExtensionAPI): void {
   const persist = () => {
     if (!manager) return;
     const threads = manager.saved();
-    // Token/tool activity updates the widget, not the durable registry. Persist lifecycle/identity only.
-    const signature = JSON.stringify(threads.map(({view,definition}) => ({...view,updatedAt:0,status:view.state === "running" ? "Working" : view.status,definition})));
-    if (signature !== persistenceSignature) { pi.appendEntry(REGISTRY_ENTRY,{version:1,threads}); persistenceSignature = signature; }
+    const signature = JSON.stringify(threads);
+    if (signature !== persistenceSignature) { pi.appendEntry(REGISTRY_ENTRY,{version:1,rootSessionId:requireContext().sessionManager.getSessionId(),threads}); persistenceSignature = signature; }
   };
   const delivery = (event: ThreadEvent) => {
     if (event.kind === "change") return;
     const thread = event.thread;
     const message = event.kind === "update" ? `Progress from ${thread.path}: ${event.message}` : thread.state === "completed" ? `Agent ${thread.path} completed. Final answer:\n${thread.output?.slice(0,16000) ?? "(no text)"}${(thread.output?.length ?? 0)>16000?"\n[Output truncated; use agent_output for more.]":""}` : `Agent ${thread.path} is ${thread.state}: ${thread.status}. ${thread.state === "paused"?"No answer handback; send input to resume the same session.":"Session retained for further input."}`;
     try {
-      if (event.recipient === "/root") pi.sendMessage({customType:"pi-subagent:update",content:message,display:true,details:{path:thread.path,state:thread.state}}, {triggerTurn:false,deliverAs:"nextTurn"});
+      if (event.recipient === "/root") pi.sendMessage({customType:"pi-subagent:update",content:message,display:true,details:{path:thread.path,state:thread.state}}, {triggerTurn:false});
       else requireManager().deliver(event.recipient,message);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -41,13 +39,12 @@ export default function piSubagent(pi: ExtensionAPI): void {
   for (const tool of agentTools(requireManager,"/root",()=>store.list())) pi.registerTool(tool);
   pi.on("before_agent_start",async event => ({systemPrompt:`${event.systemPrompt}\n\n## pi-subagent\nYou are /root. Thread paths determine context ancestry, independently of agent type. Children can pause WITHOUT handing back an answer; completed and paused sessions can both receive more work via agent_steer. Working child threads appear above the footer. Available types:\n${store.list().map(type=>`- ${type.name}: ${type.description}`).join("\n")}\nUse agent_status to inspect and agent_wait to wait. Detached notifications do not automatically resume your turn.`}));
 
-  pi.on("session_start",async (_event,ctx) => {
+  const attachSession = async (ctx: ExtensionContext) => {
     const token = ++generation;
     // session_start already belongs to the replacement session: never append the old registry here.
     if (manager) await manager.shutdown();
     context = ctx;
     store = new ConfigStore({cwd:ctx.cwd,agentDir:getAgentDir(),includeProject:ctx.isProjectTrusted()});
-    store.reload();
     persistenceSignature = "";
     const instance = new ThreadManager({
       createDriver:createDriverFactory(requireContext),
@@ -66,14 +63,29 @@ export default function piSubagent(pi: ExtensionAPI): void {
     const entry = [...entries].reverse().find(item=>item.type === "custom" && item.customType === REGISTRY_ENTRY);
     if (entry?.type === "custom") {
       try {
-        const data = entry.data as {version:number;threads:SavedThread[]};
+        const data = entry.data as {version:number;rootSessionId:string;threads:SavedThread[]};
         if (data.version !== 1 || !Array.isArray(data.threads)) throw new Error("Invalid registry format");
-        instance.restore(data.threads);
+        // Forked parents own a new registry; they must not share writable child transcripts.
+        if (data.rootSessionId === ctx.sessionManager.getSessionId()) instance.restore(data.threads);
+        else persist();
       } catch (error) { ctx.ui.notify(`Could not restore subagent registry: ${String(error)}`,"error"); }
     }
     updateWidget(ctx,requireManager().list());
     if (store.diagnostics.length) ctx.ui.notify(store.diagnostics.join("\n"),"warning");
-  });
+  };
+  pi.on("session_start",async (_event,ctx) => attachSession(ctx));
+  pi.on("session_tree",async (_event,ctx) => attachSession(ctx));
+  const stopWorkingThreads = async () => {
+    if (!manager) return;
+    for (const thread of manager.list()) {
+      const state = manager.get(thread.path).state;
+      if (state === "starting" || state === "running") await manager.stop("/root",thread.path);
+    }
+  };
+  // Finish old-thread cancellation while appendEntry still points to the old branch/session.
+  pi.on("session_before_tree",stopWorkingThreads);
+  pi.on("session_before_switch",stopWorkingThreads);
+  pi.on("session_before_fork",stopWorkingThreads);
   pi.on("session_shutdown",async () => { persist(); generation++; await manager?.shutdown(); manager=undefined;context=undefined; });
   pi.registerCommand("agents",{
     description:"Inspect/resume retained threads, edit agent types or reload configuration",

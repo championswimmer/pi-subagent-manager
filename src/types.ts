@@ -50,8 +50,14 @@ export interface DriverOptions {
   shouldPause(): boolean;
   parentPath: string | null;
   sessionFile?: string;
+  signal: AbortSignal;
 }
-export interface SavedThread { view: ThreadView; definition: AgentType }
+export interface SavedThread {
+  view: Omit<ThreadView, "updatedAt">;
+  definition: AgentType;
+  /** Reserved threads may not have a transcript yet; preserve their initial context. */
+  inherited?: AgentMessage[];
+}
 export type DriverFactory = (options: DriverOptions) => Promise<AgentDriver>;
 export type ThreadEvent =
   | { kind: "change"; thread: ThreadView }

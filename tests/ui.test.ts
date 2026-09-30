@@ -16,11 +16,17 @@ function thread(path: string, overrides: Partial<ThreadView> = {}): ThreadView {
 const plainTheme: Pick<Theme, "fg"> = { fg: (_color, text) => text };
 
 test("widget is compact, excludes current root, and reports hidden threads", () => {
-  const threads = [thread("/root"), ...Array.from({ length: 10 }, (_, i) => thread(`/worker${i}`))];
+  const threads = [thread("/root"), ...Array.from({ length: 10 }, (_, i) => thread(`/worker${i}`, { state: "completed", updatedAt: i })),
+    thread("/working", { updatedAt: 10 }), thread("/paused", { state: "paused", updatedAt: 12 }),
+    thread("/starting", { state: "starting", updatedAt: 11 })];
   const lines = renderThreads(threads, 80, plainTheme);
   assert.equal(lines.length, 8);
   assert.ok(!lines.some((line) => line.includes("/root")));
-  assert.match(lines.at(-1)!, /\+3 more threads/);
+  assert.match(lines[0]!, /\/starting/);
+  assert.match(lines[1]!, /\/working/);
+  assert.match(lines[2]!, /\/paused/);
+  assert.match(lines[3]!, /\/worker9/);
+  assert.match(lines.at(-1)!, /\+6 more threads/);
   assert.equal(renderThreads(threads.slice(1, 9), 80, plainTheme).length, 8);
 });
 
@@ -38,10 +44,11 @@ test("widget clears when empty and resolves theme dynamically at render", () => 
   let content: unknown;
   let options: unknown;
   let marker = "first";
+  const colors: string[] = [];
   const ctx = {
     hasUI: true,
     ui: {
-      get theme() { return { fg: (_color: string, text: string) => `${marker}:${text}` }; },
+      get theme() { return { fg: (color: string, text: string) => { colors.push(color); return `${marker}:${text}`; } }; },
       setWidget: (key: string, value: unknown, placement: unknown) => {
         assert.equal(key, "pi-subagent");
         content = value;
@@ -49,12 +56,13 @@ test("widget clears when empty and resolves theme dynamically at render", () => 
       },
     },
   } as unknown as ExtensionContext;
-  updateWidget(ctx, [thread("/worker")]);
+  updateWidget(ctx, [thread("/worker", { color: "success" }), thread("/fallback", { color: "\x1b[31m" })]);
   assert.deepEqual(options, { placement: "belowEditor" });
   const widget = (content as () => { render(width: number): string[] })();
   assert.match(widget.render(80)[0]!, /^first:/);
   marker = "second";
   assert.match(widget.render(80)[0]!, /^second:/);
+  assert.deepEqual(colors, ["success", "accent", "success", "accent"]);
   updateWidget(ctx, []);
   assert.equal(content, undefined);
   updateWidget(ctx, [thread("/root")]);
@@ -111,8 +119,10 @@ async function configFixture() {
 
 function editorContext(root: string, choices: (string | undefined)[], inputs: (string | undefined)[] = []) {
   const diagnostics: string[] = [];
+  const scopes: string[][] = [];
   const ctx = { hasUI: true, mode: "tui", cwd: root, ui: {
     select: async (_title: string, options: string[]) => {
+      if (_title === "Save scope") scopes.push(options);
       const choice = choices.shift();
       if (choice !== undefined) assert.ok(options.includes(choice), `Missing dialog option: ${choice}`);
       return choice;
@@ -121,7 +131,7 @@ function editorContext(root: string, choices: (string | undefined)[], inputs: (s
     notify: (message: string) => diagnostics.push(message),
     confirm: async () => false,
   } } as unknown as ExtensionCommandContext;
-  return { ctx, diagnostics };
+  return { ctx, diagnostics, scopes };
 }
 
 test("type field editor handles all YAML fields without changing Markdown", async () => {
@@ -146,15 +156,15 @@ test("type field editor handles all YAML fields without changing Markdown", asyn
 test("invalid field edits and untrusted project saves leave configuration unchanged", async () => {
   const { root, store, body } = await configFixture();
   try {
-    const { ctx, diagnostics } = editorContext(root, [
-      "worker", "name", "model", "tools.allow", "Enter exact tool names", "Save", "Trusted project", "Cancel", undefined,
+    const { ctx, diagnostics, scopes } = editorContext(root, [
+      "worker", "name", "model", "tools.allow", "Enter exact tool names", "Save", undefined, "Cancel", undefined,
     ], ["../escape", "missing-provider", "read, read"]);
     await editAgentTypes(ctx, store);
     assert.equal(store.get("worker").systemPrompt, body);
     assert.equal(store.get("worker").model, undefined);
     assert.equal(store.get("worker").tools, undefined);
-    assert.equal(diagnostics.length, 4);
-    assert.match(diagnostics.at(-1)!, /not enabled\/trusted/);
+    assert.equal(diagnostics.length, 3);
+    assert.deepEqual(scopes, [["Global"]]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -198,14 +208,6 @@ test("external invalid edit restores draft, reports diagnostics, and restarts TU
     if (editor === undefined) delete process.env.EDITOR; else process.env.EDITOR = editor;
     await rm(root, { recursive: true, force: true });
   }
-});
-
-test("configured semantic thread color is resolved on every render", () => {
-  const colors: string[] = [];
-  renderThreads([thread("/worker", { color: "success" }), thread("/fallback", { color: "\x1b[31m" })], 80, {
-    fg: (color, text) => { colors.push(color); return text; },
-  });
-  assert.deepEqual(colors, ["success", "accent"]);
 });
 
 test("frontmatter editor retries invalid YAML and preserves Markdown on save", async () => {

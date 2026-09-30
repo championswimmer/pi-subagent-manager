@@ -6,14 +6,26 @@ interface Record {
   view: ThreadView;
   definition: AgentType;
   inherited: AgentMessage[];
+  contextReady?: Promise<void>;
+  startup: AbortController;
   driver?: AgentDriver;
   initializing?: Promise<AgentDriver>;
   run?: Promise<void>;
   pauseRequested: boolean;
   stopRequested: boolean;
 }
-const active = (view: ThreadView) => view.state === "starting" || view.state === "running";
+const active = (view: Pick<ThreadView, "state">) => view.state === "starting" || view.state === "running";
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
+
+function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) { void work.catch(() => {}); return Promise.reject(signal.reason); }
+  return new Promise((resolve, reject) => {
+    const cancel = () => reject(signal.reason ?? new Error("Startup cancelled"));
+    signal.addEventListener("abort", cancel, {once:true});
+    work.then(value => { signal.removeEventListener("abort", cancel); resolve(value); },
+      error => { signal.removeEventListener("abort", cancel); reject(error); });
+  });
+}
 
 /** Runtime-neutral thread ownership, context inheritance, lifecycle and durable registry. */
 export class ThreadManager {
@@ -35,28 +47,35 @@ export class ThreadManager {
     return view.output ?? "";
   }
   saved(): SavedThread[] {
-    return [...this.records.values()].filter(record => record.driver?.sessionFile || record.view.sessionFile)
-      .map(record => ({view: this.view(record), definition: structuredClone(record.definition)}));
+    return [...this.records.values()].map(record => {
+      const {updatedAt: _activityTimestamp, ...view} = this.view(record);
+      if (active(view)) view.status = view.state === "running" ? "Working" : "Starting";
+      return {view, definition: structuredClone(record.definition),
+        ...(!view.sessionFile ? {inherited: structuredClone(record.inherited)} : {})};
+    });
   }
   restore(saved: SavedThread[]): void {
     if (this.records.size) throw new Error("Restore requires an empty thread registry");
+    const restored = new Map<string, Record>();
     for (const item of saved) {
       const path = canonicalPath(item.view.path);
-      if (path === "/root" || this.records.has(path) || !item.view.sessionFile) throw new Error("Invalid saved thread registry");
-      const view = structuredClone(item.view);
+      if (path === "/root" || restored.has(path) || !["starting", "running", "paused", "completed", "failed", "stopped"].includes(item.view.state)) throw new Error("Invalid saved thread registry");
+      const view: ThreadView = {...structuredClone(item.view), updatedAt: Date.now()};
       if (view.parent !== parentPath(path)) throw new Error(`Invalid saved parent for ${path}`);
       if (active(view)) { view.state = "paused"; view.status = "Interrupted by reload; send input to resume"; delete view.output; }
-      this.records.set(path, {view, definition: structuredClone(item.definition), inherited: [], pauseRequested: false, stopRequested: false});
+      restored.set(path, {view, definition: structuredClone(item.definition), inherited: structuredClone(item.inherited ?? []), startup: new AbortController(), pauseRequested: false, stopRequested: false});
     }
-    for (const record of this.records.values()) {
-      if (record.view.parent && record.view.parent !== "/root" && !this.records.has(record.view.parent)) throw new Error(`Missing saved parent ${record.view.parent}`);
+    for (const record of restored.values()) {
+      if (record.view.parent && record.view.parent !== "/root" && !restored.has(record.view.parent)) throw new Error(`Missing saved parent ${record.view.parent}`);
     }
+    this.records = restored;
   }
 
   async spawn(caller: string, args: {path: string; type: string; task: string; wait?: boolean}, signal?: AbortSignal): Promise<ThreadView> {
     this.assertLive();
     caller = canonicalPath(caller);
-    if (caller !== "/root") this.record(caller);
+    if (caller !== "/root" && (!active(this.record(caller).view) || this.record(caller).stopRequested)) throw new Error("Only a working agent may spawn children");
+    signal?.throwIfAborted();
     const path = canonicalPath(args.path, caller);
     this.assertAccess(caller, path);
     if (path === "/root" || this.records.has(path)) throw new Error(`Thread ${path} already exists; use agent_steer to resume it`);
@@ -69,18 +88,17 @@ export class ThreadManager {
     this.assertCapacity();
     const type = structuredClone(this.options.getType(args.type));
     const parentRecord = parent && parent !== "/root" ? this.record(parent) : undefined;
-    // Model defaults may inherit, but history always comes from the lexical parent, never the caller.
-    type.model ??= parentRecord?.definition.model;
-    type.thinkingLevel ??= parentRecord?.definition.thinkingLevel;
-    const inherited = parent === "/root" ? this.options.rootSnapshot() : parentRecord ? (await this.ensureDriver(parentRecord)).snapshot() : [];
-    // Recheck after a lazily restored parent's driver is created: concurrent spawns reserve synchronously.
-    this.assertLive();
-    if (this.records.has(path)) throw new Error(`Thread ${path} already exists`);
-    this.assertCapacity();
-    if (this.records.size >= (this.options.maxThreads ?? 64)) throw new Error("Total thread limit reached");
+    if (parentRecord?.stopRequested) throw new Error("Cannot spawn under a stopping/stopped parent; resume it first");
+    // Reservation is synchronous: subtree cancellation sees children even during lazy parent reopen.
+    const inherited = parent === "/root" ? inheritContext(this.options.rootSnapshot()) : parentRecord?.driver ? inheritContext(parentRecord.driver.snapshot()) : [];
     const now = Date.now();
-    const record: Record = {view: {path, parent, owner: parent ?? caller, type: type.name, color: type.color, state: "starting", task: args.task, status: "Starting", createdAt: now, updatedAt: now}, definition: type, inherited: inheritContext(inherited), pauseRequested: false, stopRequested: false};
+    const record: Record = {view: {path, parent, owner: parent ?? caller, type: type.name, color: type.color, state: "starting", task: args.task, status: "Starting", createdAt: now, updatedAt: now}, definition: type, inherited, startup: new AbortController(), pauseRequested: false, stopRequested: false};
     this.records.set(path, record);
+    if (parentRecord && !parentRecord.driver) {
+      record.contextReady = this.ensureDriver(parentRecord).then(driver => { record.inherited = inheritContext(driver.snapshot()); this.touch(record); });
+      // start() awaits this promise; handle immediate rejection before its microtask begins.
+      void record.contextReady.catch(() => {});
+    }
     this.start(record, args.task);
     return args.wait === false ? this.view(record) : this.wait(caller, path, undefined, signal);
   }
@@ -91,7 +109,9 @@ export class ThreadManager {
     this.assertAccess(caller, path);
     if (!message.trim()) throw new Error("Steering message must not be empty");
     const record = this.record(path);
+    if (caller !== "/root" && this.record(caller).stopRequested) throw new Error("Stopping agents may not steer descendants");
     if (active(record.view)) {
+      if (record.contextReady) await abortable(record.contextReady, record.startup.signal);
       const driver = await this.ensureDriver(record);
       this.assertLive();
       if (record.stopRequested) throw new Error("Thread is stopping; wait for stopped state before resuming");
@@ -140,8 +160,8 @@ export class ThreadManager {
     path = canonicalPath(path, caller);
     this.assertAccess(caller, path);
     const record = this.record(path);
-    const targets = [...this.records.values()].filter(item => item === record || isDescendant(item.view.path, path));
-    for (const item of targets) item.stopRequested = true;
+    const targets = [...this.records.values()].filter(item => item === record || (isDescendant(item.view.path, path) && active(item.view)));
+    for (const item of targets) { item.stopRequested = true; item.startup.abort(); }
     await Promise.all(targets.map(async item => {
       if (item.driver) await item.driver.abort();
       await item.run;
@@ -161,17 +181,25 @@ export class ThreadManager {
     this.disposed = true;
     this.epoch++;
     const records = [...this.records.values()];
-    for (const record of records) record.stopRequested = true;
-    await Promise.all(records.map(async record => { await record.driver?.abort(); await record.run; record.driver?.dispose(); }));
+    for (const record of records) { record.stopRequested = true; record.startup.abort(); }
+    await Promise.all(records.map(async record => {
+      await record.driver?.abort();
+      await record.initializing?.catch(() => {});
+      await record.run;
+      record.driver?.dispose();
+    }));
   }
 
   private start(record: Record, message: string): void {
     record.pauseRequested = false; record.stopRequested = false;
-    record.view.state = "starting"; record.view.status = "Starting"; record.view.task = message;
+    record.startup = new AbortController();
+    record.view.state = "starting"; record.view.status = "Starting";
     delete record.view.output; delete record.view.error;
     const epoch = this.epoch;
     record.run = Promise.resolve().then(async () => {
       try {
+        if (record.contextReady) await abortable(record.contextReady, record.startup.signal);
+        record.startup.signal.throwIfAborted();
         const driver = await this.ensureDriver(record);
         if (record.stopRequested || this.disposed) { record.view.state = "stopped"; return; }
         record.view.state = "running"; record.view.status = "Working"; this.touch(record);
@@ -190,16 +218,22 @@ export class ThreadManager {
     this.touch(record);
   }
   private ensureDriver(record: Record): Promise<AgentDriver> {
+    this.assertLive();
     if (record.driver) return Promise.resolve(record.driver);
     if (!record.initializing) {
-      record.initializing = this.options.createDriver({path:record.view.path,type:record.definition,inherited:record.inherited,tools:this.options.toolsFor(record.view.path),parentPath:record.view.parent,sessionFile:record.view.sessionFile,shouldPause:() => record.pauseRequested,onEvent:event => {
+      const signal = record.startup.signal;
+      const creation = this.options.createDriver({path:record.view.path,type:record.definition,inherited:record.inherited,tools:this.options.toolsFor(record.view.path),parentPath:record.view.parent,sessionFile:record.view.sessionFile,signal,shouldPause:() => record.pauseRequested,onEvent:event => {
         if (active(record.view) && !record.pauseRequested) { record.view.status = event.text; this.touch(record); }
-      }}).then(driver => {record.driver = driver; record.view.sessionFile = driver.sessionFile; return driver;}).catch(error => {record.initializing = undefined; throw error;});
+      }}).then(async driver => {
+        if (this.disposed || signal.aborted) { await driver.abort(); driver.dispose(); throw new Error("Driver startup cancelled"); }
+        record.driver = driver; record.view.sessionFile = driver.sessionFile; return driver;
+      });
+      record.initializing = abortable(creation, signal).catch(error => {record.initializing = undefined; throw error;});
     }
     return record.initializing;
   }
   private touch(record: Record): void { record.view.updatedAt = Date.now(); if (!this.disposed) this.options.onEvent?.({kind:"change",thread:this.view(record)}); }
-  private view(record: Record): ThreadView { return structuredClone({...record.view, sessionFile:record.driver?.sessionFile ?? record.view.sessionFile}); }
+  private view(record: Record): ThreadView { return structuredClone({...record.view, sessionFile:record.driver ? record.driver.sessionFile : record.view.sessionFile}); }
   private record(path: string): Record { const record = this.records.get(path); if (!record) throw new Error(`Unknown thread ${path}`); return record; }
   private assertLive(): void { if (this.disposed) throw new Error("Thread manager has shut down"); }
   private assertCapacity(): void { if ([...this.records.values()].filter(record => active(record.view)).length >= (this.options.maxConcurrent ?? 16)) throw new Error("Concurrent thread limit reached; wait for a thread to settle"); }

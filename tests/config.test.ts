@@ -82,6 +82,20 @@ test("precedence, source, filePath, trust switch and defensive copies", (t) => {
   assert.equal(store.get("example").description, "project");
   assert.equal(new ConfigStore({ ...f, includeProject: false }).get("example").source, "user");
   assert.throws(() => store.get("missing"), /Unknown or invalid/);
+
+  writeFileSync(join(f.bundledDir, "worker.md"), markdown("", "worker"));
+  for (const file of ["worker-a.md", "worker-b.md"]) writeFileSync(join(f.user, file), markdown("", "worker"));
+  store.reload();
+  assert.throws(() => store.get("worker"), /Unknown or invalid/);
+  assert.equal(store.diagnostics.length, 1);
+  assert.match(store.diagnostics[0], /Duplicate agent name.*worker/);
+  writeFileSync(join(f.user, "worker-c.md"), markdown("", "worker"));
+  store.reload();
+  assert.throws(() => store.get("worker"), /Unknown or invalid/);
+  writeFileSync(join(f.project, "worker.md"), markdown("", "worker"));
+  store.reload();
+  assert.equal(store.get("worker").source, "project");
+  assert.throws(() => new ConfigStore({ ...f, includeProject: false }).get("worker"), /Unknown or invalid/);
 });
 
 test("malformed overrides block both filename and declared name while other files load", (t) => {
@@ -96,6 +110,10 @@ test("malformed overrides block both filename and declared name while other file
   assert.equal(store.get("good").source, "project");
   assert.equal(store.diagnostics.length, 1);
   assert.match(store.diagnostics[0], /Unknown frontmatter field/);
+  writeFileSync(join(f.project, "z-other.md"), markdown("", "other"));
+  store.reload();
+  assert.throws(() => store.get("other"));
+  rmSync(join(f.project, "z-other.md"));
   rmSync(join(f.project, "example.md"));
   store.reload();
   assert.equal(store.get("example").source, "bundled");
@@ -135,5 +153,19 @@ test("symlink definitions fail closed and symlink save destinations are rejected
   assert.throws(() => store.save(definition, "user"), /Unsafe agent destination/);
   rmSync(f.user, { recursive: true });
   symlinkSync(f.bundledDir, f.user);
+  store.reload();
+  assert.throws(() => store.get("example"));
+  assert.equal(store.diagnostics.length, 1);
+  assert.match(store.diagnostics[0], /Unsafe symlink path/);
   assert.throws(() => store.save(definition, "user"), /Unsafe symlink path/);
+
+  rmSync(f.user);
+  mkdirSync(f.user);
+  rmSync(f.project, { recursive: true });
+  symlinkSync(f.bundledDir, f.project);
+  const trusted = new ConfigStore({ ...f, includeProject: true });
+  assert.throws(() => trusted.get("example"));
+  assert.equal(trusted.diagnostics.length, 1);
+  assert.match(trusted.diagnostics[0], /Unsafe symlink path/);
+  assert.throws(() => trusted.save(definition, "project"), /Unsafe symlink path/);
 });

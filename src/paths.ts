@@ -25,7 +25,7 @@ export function inheritContext(messages: readonly AgentMessage[]): AgentMessage[
   const pending = new Set<string>();
   const matched = new Set<string>();
   for (const message of copy) {
-    if (message.role === "assistant") {
+    if (message.role === "assistant" && message.stopReason !== "error" && message.stopReason !== "aborted") {
       for (const block of message.content) if (block.type === "toolCall") pending.add(block.id);
     } else if (message.role === "toolResult" && pending.has(message.toolCallId)) {
       matched.add(message.toolCallId);
@@ -33,8 +33,8 @@ export function inheritContext(messages: readonly AgentMessage[]): AgentMessage[
     }
   }
   return copy.flatMap((message): AgentMessage[] => {
-    // System/extension-only messages carry parent prompt state; a child uses its own type prompt.
-    if (message.role === "system" || message.role === "custom" || message.role === "bashExecution") return [];
+    // Only the system prompt/loadout is replaced; custom and shell messages are real conversation context.
+    if (message.role === "system") return [];
     if (message.role === "assistant") {
       if (message.stopReason === "error" || message.stopReason === "aborted") return [];
       message.content = message.content.filter(block => block.type !== "toolCall" || matched.has(block.id));
