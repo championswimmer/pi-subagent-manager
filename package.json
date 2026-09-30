@@ -12,11 +12,11 @@
   "author": "Arnav Gupta",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/championswimmer/pi-subagent.git"
+    "url": "git+https://github.com/championswimmer/pi-subagent-manager.git"
   },
-  "homepage": "https://github.com/championswimmer/pi-subagent#readme",
+  "homepage": "https://github.com/championswimmer/pi-subagent-manager#readme",
   "bugs": {
-    "url": "https://github.com/championswimmer/pi-subagent/issues"
+    "url": "https://github.com/championswimmer/pi-subagent-manager/issues"
   },
   "publishConfig": {
     "access": "public"
