@@ -2,7 +2,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-export type ThinkingLevel = typeof THINKING_LEVELS[number];
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 export interface AgentType {
   name: string;
   description: string;
@@ -30,7 +30,10 @@ export interface ThreadView {
   updatedAt: number;
   sessionFile?: string;
 }
-export interface DriverEvent { kind: "activity" | "error"; text: string }
+export interface DriverEvent {
+  kind: "activity" | "error";
+  text: string;
+}
 export interface AgentDriver {
   prompt(message: string): Promise<void>;
   steer(message: string): Promise<void>;
@@ -52,11 +55,40 @@ export interface DriverOptions {
   sessionFile?: string;
   signal: AbortSignal;
 }
+export interface SavedThreadView {
+  path: string;
+  parent: string | null;
+  owner: string;
+  type: string;
+  color?: string;
+  state: ThreadState;
+  task: string;
+  status: string;
+  output?: string;
+  error?: string;
+  createdAt: number;
+  sessionFile?: string;
+}
 export interface SavedThread {
-  view: Omit<ThreadView, "updatedAt">;
+  view: SavedThreadView;
   definition: AgentType;
   /** Reserved threads may not have a transcript yet; preserve their initial context. */
   inherited?: AgentMessage[];
+}
+export interface ThreadService {
+  list(): ThreadView[];
+  get(path: string): ThreadView;
+  output(path: string): string;
+  transcript(path: string): Promise<string>;
+  spawn(
+    args: { path: string; type: string; task: string; wait?: boolean },
+    signal?: AbortSignal,
+  ): Promise<ThreadView>;
+  steer(path: string, message: string): Promise<ThreadView>;
+  wait(path: string, timeoutMs?: number, signal?: AbortSignal): Promise<ThreadView>;
+  update(message: string): ThreadView;
+  pause(reason: string): ThreadView;
+  stop(path: string): Promise<ThreadView>;
 }
 export type DriverFactory = (options: DriverOptions) => Promise<AgentDriver>;
 export type ThreadEvent =

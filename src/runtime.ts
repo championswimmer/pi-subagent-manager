@@ -1,7 +1,6 @@
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { mkdir, realpath } from "node:fs/promises";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   createAgentSession,
   DefaultResourceLoader,

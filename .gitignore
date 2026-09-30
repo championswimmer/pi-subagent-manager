@@ -2,3 +2,6 @@ node_modules/
 *.tgz
 .DS_Store
 coverage/
+
+# Local subagent harness settings (not agent type definitions)
+.pi/subagents.json
