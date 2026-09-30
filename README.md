@@ -38,11 +38,11 @@ There are two handback modes, with **one retained session**:
 
 A child can report progress with `agent_update` without ending its task. Pause is enforced at the turn boundary. Call it alone, rather than alongside unrelated tools.
 
-`agent_steer` queues input for a working child, or resumes a paused/completed/stopped child. `agent_stop` cancels a thread and its working descendants, retaining their sessions. Failure also retains the thread for inspection and retry.
+`agent_steer` queues input for a working child, or resumes a paused/completed/stopped child. `agent_stop` cancels a thread and its working descendants, retaining their sessions. Resume a stopped ancestor before continuing its descendants. Failure also retains the thread for inspection and retry.
 
 Child conversations use pi's JSONL session format under `<pi-agent-dir>/subagents/<parent-session-id>/`. The parent saves the thread registry in its own session. `/reload` or reopening that parent restores retained threads; interrupted work becomes paused, never automatically restarted. Pending steering and progress mailboxes are persisted too.
 
-A forked **main** session gets a fresh registry, so separate parents never write to the same child transcript. Parent tree navigation restores the selected branch's registry; child transcripts remain append-only, rather than rewinding with the parent tree. In-memory main sessions cannot survive process exit.
+A forked **main** session gets a fresh registry, so separate parents never write to the same child transcript. Parent tree navigation restores the selected branch's registry **and each child's saved transcript leaf**. Resuming from an older checkpoint creates another branch in the append-only child file; newer branches remain intact. Legacy registries without child leaf IDs reopen their latest transcript. In-memory main sessions cannot survive process exit.
 
 ## Agent types
 
@@ -124,16 +124,17 @@ npm test
 npm run format:check
 ```
 
-The suite is offline: meaningful lifecycle/policy tests plus scripted-provider SDK tests for pause, persistence and recovery. No live model credentials are required.
+The suite is offline: meaningful lifecycle/policy tests plus scripted-provider SDK tests for pause, persistence and recovery. Generated JSONL scenarios cover multilevel nested agents, unopened lexical parents, interrupted work, durable mailboxes, root forks and same-file tree navigation. No live model credentials are required.
 
 The code is deliberately layered:
 
 - `config.ts`: frontmatter validation, precedence and atomic saves.
 - `paths.ts`: canonical ancestry and safe context snapshots.
 - `manager.ts`: runtime-independent ownership, lifecycle and retained registry. `scope(caller)` exposes the same caller-bound `ThreadService` to tools and UI.
-- `runtime.ts`: isolated pi SDK sessions, providers and durable mailboxes.
+- `runtime.ts`: isolated pi SDK sessions, providers and safe turn boundaries.
+- `mailbox.ts`: accepted-input persistence, replay and transcript reconciliation.
 - `tools.ts`: caller-bound model tool surface.
 - `ui.ts`: configuration dialogs and activity/thread UI.
 - `index.ts`: parent-session lifecycle and extension wiring.
 
-Plans and review findings are kept in [`.agents/plans`](.agents/plans). Research came before implementation: [Claude](docs/research-claude.md) and [Codex](docs/research-codex.md).
+The initial design is kept in [`.agents/plans`](.agents/plans); superseded review snapshots have been removed. Research came before implementation: [Claude](docs/research-claude.md) and [Codex](docs/research-codex.md).

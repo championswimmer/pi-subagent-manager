@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { quote } from "shell-quote";
@@ -60,7 +60,11 @@ test("widget is compact, excludes current root, and reports hidden threads", () 
 });
 
 test("widget sanitizes untrusted text and fits narrow Unicode terminal widths", () => {
-  const threads = [thread("/作業", { status: "\x1b[31mred\x1b[0m\x1b]0;owned\x07\n\x00界界界" })];
+  const threads = [
+    thread("/作業", {
+      status: "\x1b[31mred\x1b[0m\x1b]0;owned\x07\n\x00界界界",
+    }),
+  ];
   for (const width of [0, 1, 5, 20, 80]) {
     const lines = renderThreads(threads, width, plainTheme);
     assert.ok(lines.every((line) => visibleWidth(line) <= width));
@@ -165,17 +169,26 @@ test("thread dialogs exclude root, discard viewer edits, and resume through stee
   assert.deepEqual(calls, ["/worker: continue please"]);
 });
 
-async function configFixture() {
+async function configFixture(fileName = "worker.md") {
   const root = await mkdtemp(join(tmpdir(), "pi-subagent-ui-test-"));
   const agentDir = join(root, "global");
   const bundledDir = join(root, "bundled");
   await mkdir(join(agentDir, "agents"), { recursive: true });
   const body = "# Instructions\n\nKeep **Markdown** and whitespace.\n\n";
   await writeFile(
-    join(agentDir, "agents", "worker.md"),
-    serializeAgentType({ name: "worker", description: "Worker", systemPrompt: body }),
+    join(agentDir, "agents", fileName),
+    serializeAgentType({
+      name: "worker",
+      description: "Worker",
+      systemPrompt: body,
+    }),
   );
-  const store = new ConfigStore({ cwd: root, agentDir, bundledDir, includeProject: false });
+  const store = new ConfigStore({
+    cwd: root,
+    agentDir,
+    bundledDir,
+    includeProject: false,
+  });
   return { root, agentDir, store, body };
 }
 
@@ -272,6 +285,26 @@ test("invalid field edits and untrusted project saves leave configuration unchan
     assert.equal(store.get("worker").tools, undefined);
     assert.equal(diagnostics.length, 3);
     assert.deepEqual(scopes, [["Global"]]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("editing a noncanonical filename keeps the original file and stays loadable", async () => {
+  const { root, store, agentDir, body } = await configFixture("custom.md");
+  try {
+    const { ctx } = editorContext(
+      root,
+      ["worker", "description", "Save", "Global", undefined],
+      ["Revised"],
+    );
+    await editAgentTypes(ctx, store);
+    assert.deepEqual(await readdir(join(agentDir, "agents")), ["custom.md"]);
+    const saved = store.get("worker");
+    assert.equal(saved.description, "Revised");
+    assert.equal(saved.filePath, join(agentDir, "agents", "custom.md"));
+    assert.equal(saved.systemPrompt, body);
+    assert.match(await readFile(saved.filePath!, "utf8"), /description: Revised/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

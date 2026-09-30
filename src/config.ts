@@ -1,5 +1,4 @@
 import {
-  existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
@@ -70,6 +69,39 @@ export const AGENT_COLORS = [
 const NAME = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
 const TOOL = /^[a-zA-Z0-9_-]+$/;
 const FIELDS = new Set(["name", "description", "model", "thinkingLevel", "color", "tools"]);
+
+type AgentScope = "user" | "project";
+type SaveOrigin = Pick<AgentType, "name" | "source" | "filePath">;
+
+function errorCode(error: unknown): string | undefined {
+  return typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code?: unknown }).code)
+    : undefined;
+}
+
+function lstatIfPresent(path: string): ReturnType<typeof lstatSync> | undefined {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+function assertNotSymlinkPath(path: string): ReturnType<typeof lstatSync> | undefined {
+  const stat = lstatIfPresent(path);
+  if (stat?.isSymbolicLink()) throw new Error(`Unsafe symlink path: ${path}`);
+  return stat;
+}
+
+function validatePreservedDestination(filePath: string, directory: string): string {
+  const resolved = resolve(filePath);
+  if (dirname(resolved) !== directory || !resolved.endsWith(".md"))
+    throw new Error(`Unsafe agent destination: ${resolved}`);
+  const stat = lstatIfPresent(resolved);
+  if (!stat?.isFile()) throw new Error(`Unsafe agent destination: ${resolved}`);
+  return resolved;
+}
 
 function frontmatter(content: string): { yaml: string; body: string } {
   const match = /^(?:\uFEFF)?---\r?\n([\s\S]*?)^---[ \t]*(?:\r?\n|$)/m.exec(content);
@@ -149,7 +181,10 @@ export function parseAgentType(content: string, filePath?: string): AgentType {
 
 export function serializeAgentType(type: AgentType): string {
   if (typeof type.systemPrompt !== "string") throw new Error("systemPrompt must be a string");
-  const data: Record<string, unknown> = { name: type.name, description: type.description };
+  const data: Record<string, unknown> = {
+    name: type.name,
+    description: type.description,
+  };
   for (const key of ["model", "thinkingLevel", "color", "tools"] as const)
     if (type[key] !== undefined) data[key] = type[key];
   const content = `---\n${stringify(data)}---\n${type.systemPrompt}`;
@@ -195,11 +230,12 @@ export class ConfigStore {
     if (this.options.includeProject)
       layers.push([join(this.options.cwd, ".pi", "agents"), "project"]);
     for (const [directory, source] of layers) {
-      if (!existsSync(directory)) continue;
       let files: string[];
       try {
-        if (lstatSync(directory).isSymbolicLink())
-          throw new Error(`Unsafe symlink path: ${directory}`);
+        const stat = assertNotSymlinkPath(directory);
+        if (!stat) continue;
+        if (!stat.isDirectory())
+          throw new Error(`Agent directory must be a directory: ${directory}`);
         files = readdirSync(directory)
           .filter((file) => file.endsWith(".md"))
           .sort();
@@ -267,38 +303,51 @@ export class ConfigStore {
     return this.options.includeProject;
   }
 
-  destination(name: string, scope: "user" | "project"): string {
-    if (!NAME.test(name)) throw new Error("Unsafe agent name");
+  private scopeDirectory(scope: AgentScope): string {
     if (scope !== "user" && scope !== "project") throw new Error("Invalid agent scope");
     if (scope === "project" && !this.options.includeProject)
       throw new Error("Project agents are not enabled/trusted");
     return scope === "user"
-      ? resolve(this.options.agentDir, "agents", `${name}.md`)
-      : resolve(this.options.cwd, ".pi", "agents", `${name}.md`);
+      ? resolve(this.options.agentDir, "agents")
+      : resolve(this.options.cwd, ".pi", "agents");
   }
 
-  save(type: AgentType, scope: "user" | "project"): AgentType {
+  private destinationBasePaths(scope: AgentScope, directory: string): string[] {
+    const base = resolve(scope === "user" ? this.options.agentDir : this.options.cwd);
+    return scope === "user" ? [base, directory] : [base, join(base, ".pi"), directory];
+  }
+
+  destination(name: string, scope: AgentScope, original?: SaveOrigin): string {
+    if (!NAME.test(name)) throw new Error("Unsafe agent name");
+    const directory = this.scopeDirectory(scope);
+    if (
+      original?.name === name &&
+      original.source === scope &&
+      typeof original.filePath === "string"
+    ) {
+      return validatePreservedDestination(original.filePath, directory);
+    }
+    return resolve(directory, `${name}.md`);
+  }
+
+  save(type: AgentType, scope: AgentScope, original?: SaveOrigin): AgentType {
     const content = serializeAgentType(type);
     const validated = parseAgentType(content);
-    const base = resolve(scope === "user" ? this.options.agentDir : this.options.cwd);
-    const filePath = this.destination(validated.name, scope);
+    const filePath = this.destination(validated.name, scope, original);
     const directory = dirname(filePath);
     // Reject redirected destination directories and files before writing.
-    for (const path of scope === "user"
-      ? [base, directory]
-      : [base, join(base, ".pi"), directory]) {
-      if (existsSync(path) && lstatSync(path).isSymbolicLink())
-        throw new Error(`Unsafe symlink path: ${path}`);
+    for (const path of [...this.destinationBasePaths(scope, directory), filePath]) {
+      const stat = assertNotSymlinkPath(path);
+      if (path === filePath && stat && !stat.isFile())
+        throw new Error(`Unsafe agent destination: ${filePath}`);
     }
     mkdirSync(directory, { recursive: true });
-    if (existsSync(filePath) && !lstatSync(filePath).isFile())
-      throw new Error(`Unsafe agent destination: ${filePath}`);
     const temporary = join(dirname(filePath), `.${validated.name}.${randomUUID()}.tmp`);
     try {
       writeFileSync(temporary, content, { flag: "wx", mode: 0o600 });
       renameSync(temporary, filePath);
     } finally {
-      if (existsSync(temporary)) unlinkSync(temporary);
+      if (lstatIfPresent(temporary)) unlinkSync(temporary);
     }
     this.reload();
     return { ...validated, filePath, source: scope };

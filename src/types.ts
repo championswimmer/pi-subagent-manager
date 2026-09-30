@@ -30,10 +30,14 @@ export interface ThreadView {
   updatedAt: number;
   sessionFile?: string;
 }
-export interface DriverEvent {
-  kind: "activity" | "error";
-  text: string;
-}
+export type DriverEvent =
+  | { kind: "activity" | "error"; text: string }
+  | {
+      kind: "checkpoint";
+      text: string;
+      sessionFile?: string;
+      sessionLeafId?: string | null;
+    };
 export interface AgentDriver {
   prompt(message: string): Promise<void>;
   steer(message: string): Promise<void>;
@@ -41,8 +45,9 @@ export interface AgentDriver {
   output(): string;
   abort(): Promise<void>;
   dispose(): void;
-  sendUpdate(content: string): void;
+  sendUpdate(content: string): Promise<void> | void;
   sessionFile?: string;
+  sessionLeafId?: string | null;
 }
 export interface DriverOptions {
   path: string;
@@ -53,6 +58,7 @@ export interface DriverOptions {
   shouldPause(): boolean;
   parentPath: string | null;
   sessionFile?: string;
+  sessionLeafId?: string | null;
   signal: AbortSignal;
 }
 export interface SavedThreadView {
@@ -68,6 +74,7 @@ export interface SavedThreadView {
   error?: string;
   createdAt: number;
   sessionFile?: string;
+  sessionLeafId?: string | null;
 }
 export interface SavedThread {
   view: SavedThreadView;

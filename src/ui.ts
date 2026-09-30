@@ -182,7 +182,10 @@ async function externalEdit(ctx: ExtensionCommandContext, text: string): Promise
     await ctx.ui.custom<void>((tui, _theme, _keys, done) => {
       tui.stop();
       try {
-        const result = spawnSync(command!, [...args, file], { stdio: "inherit", env: process.env });
+        const result = spawnSync(command!, [...args, file], {
+          stdio: "inherit",
+          env: process.env,
+        });
         if (result.error) throw result.error;
         if (result.status !== 0)
           throw new Error(`Editor exited with status ${result.status ?? result.signal}.`);
@@ -249,7 +252,11 @@ async function editDocument(
         if (yaml === undefined) return;
         text = `---\n${yaml.replace(/\n?$/, "\n")}---\n${type.systemPrompt}`;
       }
-      return { ...parseAgentType(text), filePath: type.filePath, source: type.source };
+      return {
+        ...parseAgentType(text),
+        filePath: type.filePath,
+        source: type.source,
+      };
     } catch (error) {
       const diagnostic = sanitizeText(error instanceof Error ? error.message : String(error));
       ctx.ui.notify(`Edit not accepted: ${diagnostic}. Original definition is unchanged.`, "error");
@@ -276,7 +283,7 @@ function assertSaveDestination(
   if (sameName && (!original || type.name !== original.name)) {
     throw new Error(`Agent type ${type.name} already exists; choose a different name.`);
   }
-  const destination = store.destination(type.name, scope);
+  const destination = store.destination(type.name, scope, original);
   if (
     existsSync(destination) &&
     (!original?.filePath || resolve(original.filePath) !== destination)
@@ -327,7 +334,7 @@ export async function editAgentTypes(
           if (!scopeChoice) continue;
           const scope = scopeChoice === "Global" ? "user" : "project";
           assertSaveDestination(store, validated, original, scope);
-          const saved = store.save(validated, scope);
+          const saved = store.save(validated, scope, original);
           ctx.ui.notify(
             `Saved ${sanitizeText(saved.filePath ?? saved.name)}${original && original.name !== saved.name ? " (original file retained)" : ""}.`,
             "info",

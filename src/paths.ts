@@ -25,37 +25,49 @@ export function isDescendant(path: string, ancestor: string): boolean {
 /** Snapshot conversation, not the parent's prompt/loadout; retain only matched tool exchanges. */
 export function inheritContext(messages: readonly AgentMessage[]): AgentMessage[] {
   const copy = structuredClone(messages);
-  const pending = new Set<string>();
-  const matched = new Set<string>();
-  for (const message of copy) {
-    if (
-      message.role === "assistant" &&
-      message.stopReason !== "error" &&
-      message.stopReason !== "aborted"
-    ) {
-      for (const block of message.content) if (block.type === "toolCall") pending.add(block.id);
-    } else if (message.role === "toolResult" && pending.has(message.toolCallId)) {
-      matched.add(message.toolCallId);
-      pending.delete(message.toolCallId);
+  const matchedCalls = new Set<string>();
+  const matchedResults = new Set<number>();
+  const pending = new Map<string, { messageIndex: number; blockIndex: number }[]>();
+
+  for (const [messageIndex, message] of copy.entries()) {
+    if (message.role === "assistant") {
+      if (message.stopReason === "error" || message.stopReason === "aborted") continue;
+      for (const [blockIndex, block] of message.content.entries()) {
+        if (block.type !== "toolCall") continue;
+        const queue = pending.get(block.id);
+        const occurrence = { messageIndex, blockIndex };
+        if (queue) queue.push(occurrence);
+        else pending.set(block.id, [occurrence]);
+      }
+      continue;
     }
+    if (message.role !== "toolResult") continue;
+    const queue = pending.get(message.toolCallId);
+    const occurrence = queue?.shift();
+    if (!occurrence) continue;
+    matchedCalls.add(`${occurrence.messageIndex}:${occurrence.blockIndex}`);
+    matchedResults.add(messageIndex);
+    if (queue && !queue.length) pending.delete(message.toolCallId);
   }
-  return copy.flatMap((message): AgentMessage[] => {
+
+  return copy.flatMap((message, messageIndex): AgentMessage[] => {
     // Only the system prompt/loadout is replaced; custom and shell messages are real conversation context.
     if (message.role === "system") return [];
     if (message.role === "assistant") {
       if (message.stopReason === "error" || message.stopReason === "aborted") return [];
       message.content = message.content.filter(
-        (block) => block.type !== "toolCall" || matched.has(block.id),
+        (block, blockIndex) =>
+          block.type !== "toolCall" || matchedCalls.has(`${messageIndex}:${blockIndex}`),
       );
       if (!message.content.length) return [];
       // A tools-only assistant without remaining calls should not claim a toolUse stop.
       if (
-        !message.content.some((block) => block.type === "toolCall") &&
-        message.stopReason === "toolUse"
+        message.stopReason === "toolUse" &&
+        !message.content.some((block) => block.type === "toolCall")
       )
         message.stopReason = "stop";
     }
-    if (message.role === "toolResult" && !matched.has(message.toolCallId)) return [];
+    if (message.role === "toolResult" && !matchedResults.has(messageIndex)) return [];
     return [message];
   });
 }

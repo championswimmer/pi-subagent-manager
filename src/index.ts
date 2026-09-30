@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { buildSessionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ConfigStore } from "./config.ts";
@@ -8,6 +9,12 @@ import { editAgentTypes, showThreads, updateWidget } from "./ui.ts";
 import type { SavedThread, ThreadEvent } from "./types.ts";
 
 const REGISTRY_ENTRY = "pi-subagent:registry:v1";
+const ROOT_MAILBOX_ENTRY = "pi-subagent:root-mailbox:v1";
+type RootNotification = {
+  rootSessionId: string;
+  content: string;
+  details: { mailboxId: string; path: string; state: string };
+};
 
 export default function piSubagent(pi: ExtensionAPI): void {
   let context: ExtensionContext | undefined;
@@ -44,6 +51,39 @@ export default function piSubagent(pi: ExtensionAPI): void {
     const message = error instanceof Error ? error.message : String(error);
     context?.ui.notify(`Subagent delivery failed: ${message}`, "warning");
   };
+  const sendRootNotification = (notification: RootNotification) =>
+    pi.sendMessage(
+      {
+        customType: "pi-subagent:update",
+        content: notification.content,
+        display: true,
+        details: notification.details,
+      },
+      { triggerTurn: false },
+    );
+  const restoreRootMailbox = (ctx: ExtensionContext) => {
+    const entries = ctx.sessionManager.getBranch();
+    const delivered = new Set(
+      entries.flatMap((entry) => {
+        if (entry.type !== "custom_message" || entry.customType !== "pi-subagent:update") return [];
+        const id = (entry.details as { mailboxId?: unknown } | undefined)?.mailboxId;
+        return typeof id === "string" ? [id] : [];
+      }),
+    );
+    for (const entry of entries) {
+      if (entry.type !== "custom" || entry.customType !== ROOT_MAILBOX_ENTRY) continue;
+      const notification = entry.data as RootNotification | undefined;
+      if (
+        notification?.rootSessionId === ctx.sessionManager.getSessionId() &&
+        typeof notification.content === "string" &&
+        typeof notification.details?.mailboxId === "string" &&
+        !delivered.has(notification.details.mailboxId)
+      ) {
+        sendRootNotification(notification);
+        delivered.add(notification.details.mailboxId);
+      }
+    }
+  };
   const delivery = (event: ThreadEvent) => {
     if (event.kind === "change") return;
     const thread = event.thread;
@@ -54,17 +94,17 @@ export default function piSubagent(pi: ExtensionAPI): void {
           ? `Agent ${thread.path} completed. Final answer:\n${thread.output?.slice(0, 16000) ?? "(no text)"}${(thread.output?.length ?? 0) > 16000 ? "\n[Output truncated; use agent_output for more.]" : ""}`
           : `Agent ${thread.path} is ${thread.state}: ${thread.status}. ${thread.state === "paused" ? "No answer handback; send input to resume the same session." : "Session retained for further input."}`;
     try {
-      if (event.recipient === "/root")
-        pi.sendMessage(
-          {
-            customType: "pi-subagent:update",
-            content: message,
-            display: true,
-            details: { path: thread.path, state: thread.state },
-          },
-          { triggerTurn: false },
-        );
-      else void requireManager().deliver(event.recipient, message).catch(warnDelivery);
+      if (event.recipient === "/root") {
+        const notification: RootNotification = {
+          rootSessionId: requireContext().sessionManager.getSessionId(),
+          content: message,
+          details: { mailboxId: randomUUID(), path: thread.path, state: thread.state },
+        };
+        // Root sendMessage can defer while streaming too. Accept durably before queueing;
+        // the eventual transcript message carries its ID for branch-local recovery.
+        pi.appendEntry(ROOT_MAILBOX_ENTRY, notification);
+        sendRootNotification(notification);
+      } else void requireManager().deliver(event.recipient, message).catch(warnDelivery);
     } catch (error) {
       warnDelivery(error);
     }
@@ -125,6 +165,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
         ctx.ui.notify(`Could not restore subagent registry: ${String(error)}`, "error");
       }
     }
+    restoreRootMailbox(ctx);
     updateWidget(ctx, requireManager().list());
     if (store.diagnostics.length) ctx.ui.notify(store.diagnostics.join("\n"), "warning");
   };

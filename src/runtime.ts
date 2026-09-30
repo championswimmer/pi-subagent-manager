@@ -10,6 +10,13 @@ import {
   SettingsManager,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import {
+  BOOTSTRAP_MESSAGE,
+  buildBootstrapMessage,
+  buildQueuedUserMessage,
+  buildUpdateDetails,
+  DurableMailbox,
+} from "./mailbox.ts";
 import { selectTools } from "./config.ts";
 import { THINKING_LEVELS, type DriverFactory, type ThinkingLevel } from "./types.ts";
 
@@ -50,6 +57,10 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
         );
       }
       sessionManager = SessionManager.open(path.resolve(options.sessionFile), sessionDir, ctx.cwd);
+      if (options.sessionLeafId !== undefined) {
+        if (options.sessionLeafId === null) sessionManager.resetLeaf();
+        else sessionManager.branch(options.sessionLeafId);
+      }
     } else {
       sessionManager = SessionManager.create(ctx.cwd, sessionDir);
       for (const message of options.inherited) {
@@ -197,41 +208,60 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
       session.dispose();
       throw error;
     }
+    const mailbox = new DurableMailbox(sessionManager);
+    const emitCheckpoint = () =>
+      options.onEvent({
+        kind: "checkpoint",
+        text: "",
+        sessionFile: session.sessionFile,
+        sessionLeafId: sessionManager.getLeafId(),
+      });
+    const restoreAppends = mailbox.wrapAppends(emitCheckpoint);
+    const ensurePersistedSession = () => {
+      if (session.sessionFile && existsSync(session.sessionFile)) return;
+      sessionManager.appendMessage(buildBootstrapMessage());
+      emit("activity", BOOTSTRAP_MESSAGE);
+    };
+    const queueAccepted = async (kind: "steer" | "followUp", content: string) => {
+      ensurePersistedSession();
+      const accepted = mailbox.accept(kind, content);
+      emitCheckpoint();
+      if (kind === "followUp") session.agent.followUp(buildQueuedUserMessage(accepted));
+      else session.agent.steer(buildQueuedUserMessage(accepted));
+      mailbox.markEnqueued(accepted.id);
+    };
+    const resumePending = async () => {
+      for (const accepted of mailbox.replayablePending()) {
+        if (accepted.kind === "update") {
+          await session.sendCustomMessage(
+            {
+              customType: "subagent-update",
+              content: accepted.content,
+              display: true,
+              details: buildUpdateDetails(accepted),
+            },
+            { triggerTurn: false },
+          );
+          mailbox.markEnqueued(accepted.id);
+          continue;
+        }
+        if (accepted.kind === "followUp") session.agent.followUp(buildQueuedUserMessage(accepted));
+        else session.agent.steer(buildQueuedUserMessage(accepted));
+        mailbox.markEnqueued(accepted.id);
+      }
+    };
+    const clearPromptQueues = () => {
+      session.clearQueue();
+      mailbox.clearQueuedInputs();
+    };
     // In 0.99.2 a boundary's continue:false only declines EXTRA continuation;
     // the public core hook is needed to stop automatic tool/steering continuation.
-    const queueType = "pi-subagent:queue:v1";
-    const parked: { steering: string[]; followUp: string[] } = { steering: [], followUp: [] };
-    const savedQueue = sessionManager
-      .getBranch()
-      .reverse()
-      .find((entry) => entry.type === "custom" && entry.customType === queueType);
-    if (savedQueue?.type === "custom") {
-      const data = savedQueue.data as { steering?: unknown; followUp?: unknown } | null;
-      if (
-        Array.isArray(data?.steering) &&
-        data.steering.every((text) => typeof text === "string") &&
-        Array.isArray(data.followUp) &&
-        data.followUp.every((text) => typeof text === "string")
-      ) {
-        parked.steering.push(...data.steering);
-        parked.followUp.push(...data.followUp);
-      }
-    }
-    parkQueue = () => {
-      const queue = session.clearQueue();
-      if (!queue.steering.length && !queue.followUp.length) return;
-      parked.steering.push(...queue.steering);
-      parked.followUp.push(...queue.followUp);
-      sessionManager.appendCustomEntry(queueType, {
-        steering: [...parked.steering],
-        followUp: [...parked.followUp],
-      });
-    };
+    parkQueue = clearPromptQueues;
     const finishTurn = session.agent.finishTurn;
     session.agent.finishTurn = async (turn, signal) => {
       const decision = await finishTurn?.(turn, signal);
       if (options.shouldPause()) {
-        parkQueue();
+        clearPromptQueues();
         return { action: "end" };
       }
       return decision || undefined;
@@ -272,6 +302,9 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
         const file = session.sessionFile;
         return file && existsSync(file) ? file : undefined;
       },
+      get sessionLeafId() {
+        return sessionManager.getLeafId();
+      },
       async prompt(message) {
         assertOpen();
         if (running) throw new Error("Subagent is already running; use steer instead");
@@ -280,13 +313,7 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
         baseline = session.messages.length;
         finalOutput = "";
         try {
-          const steering = parked.steering.splice(0);
-          const followUp = parked.followUp.splice(0);
-          if (steering.length || followUp.length) {
-            sessionManager.appendCustomEntry(queueType, { steering: [], followUp: [] });
-          }
-          for (const text of steering) await session.steer(text);
-          for (const text of followUp) await session.followUp(text);
+          await resumePending();
           await session.prompt(message, { expandPromptTemplates: false });
           await session.waitForIdle();
           const last = session.messages
@@ -310,7 +337,7 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
       },
       async steer(message) {
         assertOpen();
-        await session.steer(message);
+        await queueAccepted("steer", message);
       },
       snapshot() {
         return structuredClone(session.messages);
@@ -321,6 +348,7 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
       async abort() {
         if (disposed) return;
         if (running) aborted = true;
+        clearPromptQueues();
         if (!abortPromise)
           abortPromise = session.abort().finally(() => {
             abortPromise = undefined;
@@ -331,18 +359,31 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
         if (disposed) return;
         disposed = true;
         aborted = true;
+        restoreAppends();
         unsubscribe();
         session.dispose();
       },
-      sendUpdate(content) {
+      async sendUpdate(content) {
         assertOpen();
-        // SDK session method is sendCustomMessage (ExtensionAPI calls it sendMessage).
-        void session
-          .sendCustomMessage(
-            { customType: "subagent-update", content, display: true },
+        try {
+          ensurePersistedSession();
+          const accepted = mailbox.accept("update", content);
+          emitCheckpoint();
+          // SDK session method is sendCustomMessage (ExtensionAPI calls it sendMessage).
+          await session.sendCustomMessage(
+            {
+              customType: "subagent-update",
+              content,
+              display: true,
+              details: buildUpdateDetails(accepted),
+            },
             { triggerTurn: false },
-          )
-          .catch((error) => emit("error", String(error)));
+          );
+          mailbox.markEnqueued(accepted.id);
+        } catch (error) {
+          emit("error", error instanceof Error ? error.message : String(error));
+          throw error;
+        }
       },
     };
   };

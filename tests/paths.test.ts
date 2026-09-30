@@ -25,7 +25,10 @@ test("canonical ancestry is structural, not prefix matching or URL normalization
 });
 
 test("context snapshots strip unfinished/orphaned tool exchanges and clone messages", () => {
-  const assistant = (content: any[]): AgentMessage => ({
+  const assistant = (
+    content: any[],
+    stopReason: "toolUse" | "error" = "toolUse",
+  ): AgentMessage => ({
     role: "assistant",
     content,
     api: "openai-responses",
@@ -39,21 +42,46 @@ test("context snapshots strip unfinished/orphaned tool exchanges and clone messa
       totalTokens: 2,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
-    stopReason: "toolUse",
+    stopReason,
     timestamp: 1,
   });
   const messages: AgentMessage[] = [
+    { role: "system", content: "parent prompt", timestamp: 1 },
     { role: "user", content: "parent context", timestamp: 1 },
+    {
+      role: "custom",
+      customType: "parent-note",
+      content: "keep custom context",
+      display: false,
+      timestamp: 1,
+    } as unknown as AgentMessage,
+    {
+      role: "bashExecution",
+      command: "echo inherited",
+      output: "keep shell context",
+      exitCode: 0,
+      cancelled: false,
+      truncated: false,
+      timestamp: 1,
+    } as unknown as AgentMessage,
     assistant([
       { type: "text", text: "Checking" },
-      { type: "toolCall", id: "done", name: "read", arguments: { path: "x" } },
+      { type: "toolCall", id: "repeat", name: "read", arguments: { path: "first" } },
       { type: "toolCall", id: "pending", name: "agent_spawn", arguments: {} },
     ]),
     {
       role: "toolResult",
-      toolCallId: "done",
+      toolCallId: "repeat",
       toolName: "read",
-      content: [{ type: "text", text: "contents" }],
+      content: [{ type: "text", text: "first result" }],
+      isError: false,
+      timestamp: 1,
+    },
+    {
+      role: "toolResult",
+      toolCallId: "repeat",
+      toolName: "read",
+      content: [{ type: "text", text: "duplicate orphan result" }],
       isError: false,
       timestamp: 1,
     },
@@ -65,13 +93,80 @@ test("context snapshots strip unfinished/orphaned tool exchanges and clone messa
       isError: false,
       timestamp: 1,
     },
+    assistant([
+      { type: "text", text: "Retrying" },
+      { type: "toolCall", id: "repeat", name: "read", arguments: { path: "second" } },
+    ]),
+    {
+      role: "toolResult",
+      toolCallId: "repeat",
+      toolName: "read",
+      content: [{ type: "text", text: "second result" }],
+      isError: false,
+      timestamp: 1,
+    },
+    assistant([
+      { type: "text", text: "Still waiting" },
+      { type: "toolCall", id: "repeat", name: "read", arguments: { path: "third" } },
+    ]),
+    assistant(
+      [
+        { type: "text", text: "Broken" },
+        { type: "toolCall", id: "ignored", name: "read", arguments: { path: "broken" } },
+      ],
+      "error",
+    ),
+    {
+      role: "toolResult",
+      toolCallId: "ignored",
+      toolName: "read",
+      content: [{ type: "text", text: "ignored result" }],
+      isError: false,
+      timestamp: 1,
+    },
   ];
   const inherited = inheritContext(messages);
-  assert.equal(inherited.length, 3);
   assert.deepEqual(
-    (inherited[1] as any).content.map((block: any) => block.id ?? block.text),
-    ["Checking", "done"],
+    inherited.map((message) => message.role),
+    [
+      "user",
+      "custom",
+      "bashExecution",
+      "assistant",
+      "toolResult",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ],
   );
-  (inherited[0] as any).content = "child mutation";
-  assert.equal((messages[0] as any).content, "parent context");
+  assert.deepEqual(
+    (inherited[3] as any).content.map((block: any) => block.id ?? block.text),
+    ["Checking", "repeat"],
+  );
+  assert.equal((inherited[3] as any).stopReason, "toolUse");
+  assert.equal(((inherited[4] as any).content[0] as any).text, "first result");
+  assert.deepEqual(
+    (inherited[5] as any).content.map((block: any) => block.id ?? block.text),
+    ["Retrying", "repeat"],
+  );
+  assert.equal(((inherited[6] as any).content[0] as any).text, "second result");
+  assert.deepEqual(
+    (inherited[7] as any).content.map((block: any) => block.id ?? block.text),
+    ["Still waiting"],
+  );
+  assert.equal((inherited[7] as any).stopReason, "stop");
+  assert.deepEqual(
+    inherited.flatMap((message: any) =>
+      message.role === "assistant"
+        ? message.content
+            .filter((block: any) => block.type === "toolCall")
+            .map((block: any) => block.id)
+        : [],
+    ),
+    ["repeat", "repeat"],
+  );
+  (inherited[1] as any).content = "child mutation";
+  assert.equal((messages[2] as any).content, "keep custom context");
+  ((inherited[3] as any).content[0] as any).text = "changed";
+  assert.equal(((messages[4] as any).content[0] as any).text, "Checking");
 });

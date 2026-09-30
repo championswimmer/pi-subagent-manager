@@ -9,6 +9,18 @@
     "subagents"
   ],
   "license": "MIT",
+  "author": "Arnav Gupta",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/championswimmer/pi-subagent.git"
+  },
+  "homepage": "https://github.com/championswimmer/pi-subagent#readme",
+  "bugs": {
+    "url": "https://github.com/championswimmer/pi-subagent/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
     "src",
     "agents",

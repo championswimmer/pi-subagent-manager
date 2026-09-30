@@ -2,6 +2,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type {
   AgentDriver,
   AgentType,
+  DriverOptions,
   ManagerOptions,
   SavedThread,
   SavedThreadView,
@@ -15,11 +16,13 @@ interface Record {
   definition: AgentType;
   inherited: AgentMessage[];
   contextReady?: Promise<void>;
+  contextPending?: boolean;
   startup: AbortController;
   driver?: AgentDriver;
   initializing?: Promise<AgentDriver>;
   run?: Promise<void>;
   started?: Promise<void>;
+  sessionLeafId?: string | null;
   pauseRequested: boolean;
   stopRequested: boolean;
 }
@@ -119,11 +122,15 @@ export class ThreadManager {
         createdAt: current.createdAt,
         sessionFile: current.sessionFile,
       };
+      const sessionLeafId = this.sessionLeafId(record);
+      if (sessionLeafId !== undefined) view.sessionLeafId = sessionLeafId;
       if (active(view)) view.status = view.state === "running" ? "Working" : "Starting";
       return {
         view,
         definition: structuredClone(record.definition),
-        ...(!view.sessionFile ? { inherited: structuredClone(record.inherited) } : {}),
+        ...(!view.sessionFile && !record.contextPending
+          ? { inherited: structuredClone(record.inherited) }
+          : {}),
       };
     });
   }
@@ -131,16 +138,18 @@ export class ThreadManager {
     if (this.records.size) throw new Error("Restore requires an empty thread registry");
     const restored = new Map<string, Record>();
     for (const item of saved) {
-      const path = canonicalPath(item.view.path);
+      const savedView = structuredClone(item.view);
+      const path = canonicalPath(savedView.path);
       if (
         path === "/root" ||
         restored.has(path) ||
         !["starting", "running", "paused", "completed", "failed", "stopped"].includes(
-          item.view.state,
+          savedView.state,
         )
       )
         throw new Error("Invalid saved thread registry");
-      const view: ThreadView = { ...structuredClone(item.view), updatedAt: Date.now() };
+      const { sessionLeafId, ...storedView } = savedView;
+      const view: ThreadView = { ...storedView, updatedAt: Date.now() };
       if (view.parent !== parentPath(path)) throw new Error(`Invalid saved parent for ${path}`);
       if (active(view)) {
         view.state = "paused";
@@ -151,7 +160,12 @@ export class ThreadManager {
         view,
         definition: structuredClone(item.definition),
         inherited: structuredClone(item.inherited ?? []),
+        // A reservation saved before its lexical parent opened has no snapshot yet.
+        contextPending: !view.sessionFile && item.inherited === undefined && view.parent !== null,
         startup: new AbortController(),
+        ...(Object.prototype.hasOwnProperty.call(savedView, "sessionLeafId")
+          ? { sessionLeafId }
+          : {}),
         pauseRequested: false,
         stopRequested: false,
       });
@@ -192,11 +206,7 @@ export class ThreadManager {
     this.assertCapacity();
     const type = structuredClone(this.options.getType(args.type));
     const parentRecord = parent && parent !== "/root" ? this.record(parent) : undefined;
-    for (let ancestor = parent; ancestor && ancestor !== "/root"; ancestor = parentPath(ancestor)) {
-      if (this.record(ancestor).stopRequested || this.record(ancestor).view.state === "stopped") {
-        throw new Error(`Cannot spawn under stopped ancestor ${ancestor}; resume it first`);
-      }
-    }
+    this.assertStartableAncestors(path);
     // Reservation is synchronous: subtree cancellation sees children even during lazy parent reopen.
     const inherited =
       parent === "/root"
@@ -220,45 +230,45 @@ export class ThreadManager {
       },
       definition: type,
       inherited,
+      contextPending: !!(parentRecord && !parentRecord.driver),
       startup: new AbortController(),
       pauseRequested: false,
       stopRequested: false,
     };
     this.records.set(path, record);
-    if (parentRecord && !parentRecord.driver) {
-      record.contextReady = this.ensureDriver(parentRecord).then((driver) => {
-        record.inherited = inheritContext(driver.snapshot());
-        this.touch(record);
-      });
-      // start() awaits this promise; handle immediate rejection before its microtask begins.
-      void record.contextReady.catch(() => {});
-    }
+    if (record.contextPending) this.prepareInheritedContext(record);
     this.start(record, args.task);
     return args.wait === false ? this.view(record) : this.wait(caller, path, undefined, signal);
   }
 
   async steer(caller: string, path: string, message: string): Promise<ThreadView> {
     this.assertLive();
+    caller = canonicalPath(caller);
     path = canonicalPath(path, caller);
     this.assertAccess(caller, path);
     if (!message.trim()) throw new Error("Steering message must not be empty");
     const record = this.record(path);
-    if (caller !== "/root" && this.record(caller).stopRequested)
-      throw new Error("Stopping agents may not steer descendants");
-    // A detached spawn reserves immediately, but its original task must reach prompt() before steering.
-    const wasStarting = record.view.state === "starting";
-    if (wasStarting) await record.started;
-    this.assertLive();
-    if (record.stopRequested && (wasStarting || active(record.view)))
-      throw new Error("Thread is stopping; wait for stopped state before resuming");
-    if (record.view.state === "running") {
-      await record.driver!.steer(message);
-      this.touch(record);
+    for (;;) {
+      this.assertLive();
+      this.assertCallerMaySteer(caller);
+      if (!active(record.view)) this.assertStartableAncestors(path);
+      // A detached spawn reserves immediately, but its original task must reach prompt() before steering.
+      if (record.view.state === "starting") {
+        if (!record.started) throw new Error("Thread start invariant violated");
+        await record.started;
+        continue;
+      }
+      if (record.stopRequested && active(record.view))
+        throw new Error("Thread is stopping; wait for stopped state before resuming");
+      if (record.view.state === "running") {
+        await record.driver!.steer(message);
+        this.touch(record);
+        return this.view(record);
+      }
+      this.assertCapacity();
+      this.start(record, message);
       return this.view(record);
     }
-    this.assertCapacity();
-    this.start(record, message);
-    return this.view(record);
   }
   async wait(
     caller: string,
@@ -343,13 +353,13 @@ export class ThreadManager {
   async transcript(caller: string, path: string): Promise<string> {
     path = canonicalPath(path, caller);
     this.assertAccess(caller, path, true);
-    const driver = await this.ensureDriver(this.record(path));
+    const driver = await this.ensureDriver(this.record(path), true);
     return JSON.stringify(driver.snapshot(), null, 2);
   }
   async deliver(path: string, content: string): Promise<void> {
     // Restored parents may be idle and unopened; reports still belong in their retained transcript.
-    const driver = await this.ensureDriver(this.record(path));
-    driver.sendUpdate(content);
+    const driver = await this.ensureDriver(this.record(path), true);
+    await driver.sendUpdate(content);
   }
   async shutdown(): Promise<void> {
     this.disposed = true;
@@ -384,7 +394,8 @@ export class ThreadManager {
     });
     record.run = Promise.resolve().then(async () => {
       try {
-        if (record.contextReady) await abortable(record.contextReady, record.startup.signal);
+        const contextReady = this.prepareInheritedContext(record);
+        if (contextReady) await abortable(contextReady, record.startup.signal);
         record.startup.signal.throwIfAborted();
         const driver = await this.ensureDriver(record);
         if (record.stopRequested || this.disposed) {
@@ -424,27 +435,43 @@ export class ThreadManager {
     });
     this.touch(record);
   }
-  private ensureDriver(record: Record): Promise<AgentDriver> {
+  private ensureDriver(record: Record, readOnly = false): Promise<AgentDriver> {
     this.assertLive();
     if (record.driver) return Promise.resolve(record.driver);
     if (!record.initializing) {
-      const signal = record.startup.signal;
-      const creation = this.options
-        .createDriver({
-          path: record.view.path,
-          type: record.definition,
-          inherited: record.inherited,
-          tools: this.options.toolsFor(record.view.path),
-          parentPath: record.view.parent,
-          sessionFile: record.view.sessionFile,
-          signal,
-          shouldPause: () => record.pauseRequested,
-          onEvent: (event) => {
-            if (active(record.view) && !record.pauseRequested) {
-              record.view.status = event.text;
-              this.touch(record);
-            }
-          },
+      const signal =
+        readOnly && !active(record.view) ? new AbortController().signal : record.startup.signal;
+      const creation = Promise.resolve()
+        .then(async () => {
+          // Inspection and delivery can initialize a reserved child before start().
+          const contextReady = this.prepareInheritedContext(record, readOnly);
+          if (contextReady) await abortable(contextReady, signal);
+          if (!record.view.sessionFile && record.view.parent && record.view.parent !== "/root") {
+            const parentRecord = this.record(record.view.parent);
+            if (!parentRecord.driver) await this.ensureDriver(parentRecord, readOnly);
+          }
+          const options: DriverOptions = {
+            path: record.view.path,
+            type: record.definition,
+            inherited: record.inherited,
+            tools: this.options.toolsFor(record.view.path),
+            parentPath: record.view.parent,
+            sessionFile: record.view.sessionFile,
+            signal,
+            shouldPause: () => record.pauseRequested,
+            onEvent: (event) => {
+              if (event.kind === "checkpoint") {
+                this.touch(record);
+                return;
+              }
+              if (active(record.view) && !record.pauseRequested) {
+                record.view.status = event.text;
+                this.touch(record);
+              }
+            },
+            ...(record.sessionLeafId !== undefined ? { sessionLeafId: record.sessionLeafId } : {}),
+          };
+          return this.options.createDriver(options);
         })
         .then(async (driver) => {
           if (this.disposed || signal.aborted) {
@@ -454,18 +481,51 @@ export class ThreadManager {
           }
           record.driver = driver;
           record.view.sessionFile = driver.sessionFile;
+          if (driver.sessionLeafId !== undefined) record.sessionLeafId = driver.sessionLeafId;
+          this.touch(record);
           return driver;
         });
-      record.initializing = abortable(creation, signal).catch((error) => {
-        record.initializing = undefined;
+      let initializing!: Promise<AgentDriver>;
+      initializing = abortable(creation, signal).catch((error) => {
+        if (record.initializing === initializing) record.initializing = undefined;
         throw error;
       });
+      record.initializing = initializing;
     }
     return record.initializing;
   }
   private touch(record: Record): void {
     record.view.updatedAt = Date.now();
     if (!this.disposed) this.options.onEvent?.({ kind: "change", thread: this.view(record) });
+  }
+  private prepareInheritedContext(record: Record, readOnly = false): Promise<void> | undefined {
+    if (!record.contextPending) return record.contextReady;
+    if (record.contextReady) return record.contextReady;
+    if (!record.view.parent || record.view.parent === "/root") {
+      record.inherited = inheritContext(this.options.rootSnapshot());
+      record.contextPending = false;
+      return undefined;
+    }
+    const parentRecord = this.record(record.view.parent);
+    let ready!: Promise<void>;
+    ready = this.ensureDriver(parentRecord, readOnly)
+      .then((driver) => {
+        record.inherited = inheritContext(driver.snapshot());
+        record.contextPending = false;
+        if (record.contextReady === ready) record.contextReady = undefined;
+        this.touch(record);
+      })
+      .catch((error) => {
+        if (record.contextReady === ready) record.contextReady = undefined;
+        throw error;
+      });
+    record.contextReady = ready;
+    void ready.catch(() => {});
+    return ready;
+  }
+  private sessionLeafId(record: Record): string | null | undefined {
+    const leaf = record.driver?.sessionLeafId;
+    return leaf !== undefined ? leaf : record.sessionLeafId;
   }
   private view(record: Record): ThreadView {
     return structuredClone({
@@ -480,6 +540,22 @@ export class ThreadManager {
   }
   private assertLive(): void {
     if (this.disposed) throw new Error("Thread manager has shut down");
+  }
+  private assertCallerMaySteer(caller: string): void {
+    if (caller !== "/root" && this.record(caller).stopRequested)
+      throw new Error("Stopping agents may not steer descendants");
+  }
+  private assertStartableAncestors(path: string): void {
+    for (
+      let ancestor = parentPath(path);
+      ancestor && ancestor !== "/root";
+      ancestor = parentPath(ancestor)
+    ) {
+      const record = this.record(ancestor);
+      if (record.stopRequested || record.view.state === "stopped") {
+        throw new Error(`Cannot continue under stopped ancestor ${ancestor}; resume it first`);
+      }
+    }
   }
   private assertCapacity(): void {
     if (

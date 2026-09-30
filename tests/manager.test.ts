@@ -139,6 +139,161 @@ test("busy steering queues while progress stays nonfinal and goes to parent", as
   await manager.shutdown();
 });
 
+test("concurrent steer after failed startup reserves one restart and queues the next", async () => {
+  let rejectFirst!: (error: Error) => void;
+  let finish = () => {};
+  let attempts = 0;
+  const runs: string[] = [];
+  const steering: string[] = [];
+  const manager = new ThreadManager({
+    rootSnapshot: () => [],
+    getType: (name) => ({ name, description: "test", systemPrompt: "child prompt" }),
+    toolsFor: () => [],
+    createDriver: async () => {
+      attempts++;
+      if (attempts === 1) {
+        return new Promise<AgentDriver>((_resolve, reject) => {
+          rejectFirst = reject;
+        });
+      }
+      return {
+        prompt: async (message) => {
+          runs.push(message);
+          await new Promise<void>((resolve) => {
+            finish = resolve;
+          });
+        },
+        steer: async (message) => {
+          assert.ok(runs.length, "restart must prompt before queued steering");
+          steering.push(message);
+        },
+        snapshot: () => [],
+        output: () => `answer: ${runs.at(-1)}`,
+        abort: async () => {
+          finish();
+        },
+        dispose: () => {},
+        sendUpdate: () => {},
+      };
+    },
+  });
+
+  await manager.spawn("/root", { path: "worker", type: "worker", task: "first", wait: false });
+  await tick();
+  const first = manager.steer("/root", "worker", "retry");
+  const second = manager.steer("/root", "worker", "queued");
+  rejectFirst(new Error("bad model"));
+  await Promise.all([first, second]);
+  await tick();
+
+  assert.equal(attempts, 2);
+  assert.deepEqual(runs, ["retry"]);
+  assert.deepEqual(steering, ["queued"]);
+
+  finish();
+  assert.equal((await manager.wait("/root", "worker")).output, "answer: retry");
+  await manager.shutdown();
+});
+
+test("lazy child context retries after parent reopen and does not keep a rejected promise", async () => {
+  let rejectParentOpen!: (error: Error) => void;
+  let parentFinish = () => {};
+  let childFinish = () => {};
+  let parentAttempts = 0;
+  const parentMessages: AgentMessage[] = [];
+  const childInherited: AgentMessage[][] = [];
+  const manager = new ThreadManager({
+    rootSnapshot: () => [],
+    getType: (name) => ({ name, description: "test", systemPrompt: "child prompt" }),
+    toolsFor: () => [],
+    createDriver: async (options) => {
+      if (options.path === "/root/worker") {
+        parentAttempts++;
+        if (parentAttempts === 1) {
+          return new Promise<AgentDriver>((_resolve, reject) => {
+            rejectParentOpen = reject;
+          });
+        }
+        return {
+          sessionFile: "/tmp/worker.jsonl",
+          prompt: async (message) => {
+            parentMessages.push(user(message));
+            await new Promise<void>((resolve) => {
+              parentFinish = resolve;
+            });
+          },
+          steer: async () => {},
+          snapshot: () => structuredClone(parentMessages),
+          output: () => "parent output",
+          abort: async () => {
+            parentFinish();
+          },
+          dispose: () => {},
+          sendUpdate: () => {},
+        };
+      }
+      childInherited.push(structuredClone(options.inherited));
+      return {
+        prompt: async () => {
+          await new Promise<void>((resolve) => {
+            childFinish = resolve;
+          });
+        },
+        steer: async () => {},
+        snapshot: () => [],
+        output: () => "child output",
+        abort: async () => {
+          childFinish();
+        },
+        dispose: () => {},
+        sendUpdate: () => {},
+      };
+    },
+  });
+
+  manager.restore([
+    {
+      view: {
+        path: "/root/worker",
+        parent: "/root",
+        owner: "/root",
+        type: "worker",
+        state: "paused",
+        task: "parent",
+        status: "Paused",
+        createdAt: 0,
+        sessionFile: "/tmp/saved-parent.jsonl",
+      },
+      definition: { name: "worker", description: "test", systemPrompt: "child prompt" },
+    },
+  ]);
+
+  await manager.spawn("/root", {
+    path: "worker/child",
+    type: "worker",
+    task: "nested",
+    wait: false,
+  });
+  rejectParentOpen(new Error("parent unavailable"));
+  const failed = await manager.wait("/root", "worker/child");
+  assert.equal(failed.state, "failed");
+  assert.equal(childInherited.length, 0);
+
+  await manager.steer("/root", "worker", "resume parent");
+  await tick();
+  parentFinish();
+  await manager.wait("/root", "worker");
+
+  await manager.steer("/root", "worker/child", "resume child");
+  await tick();
+  assert.equal(parentAttempts, 2);
+  assert.deepEqual(childInherited, [structuredClone(parentMessages)]);
+
+  childFinish();
+  assert.equal((await manager.wait("/root", "worker/child")).state, "completed");
+  await manager.shutdown();
+});
+
 test("cancelling a wait or timing out does not stop detached child", async () => {
   const { manager, drivers } = fixture();
   await manager.spawn("/root", { path: "worker", type: "worker", task: "task", wait: false });
@@ -178,6 +333,10 @@ test("stop cascades but retains sessions, and children cannot wait on ancestors"
   assert.equal((await manager.stop("/root", "worker")).state, "stopped");
   assert.equal(manager.get("/root/worker/child").state, "stopped");
   assert.equal(manager.get("/root/worker/finished").state, "completed");
+  await assert.rejects(
+    manager.steer("/root", "worker/finished", "continue finished"),
+    /stopped ancestor/,
+  );
   await assert.rejects(
     manager.spawn("/root", {
       path: "worker/finished/new",
@@ -220,6 +379,7 @@ test("save/restore retains definition snapshot and reopens JSONL on resume", asy
   await tick();
   const saved = first.manager.saved();
   await first.manager.shutdown();
+
   const second = fixture();
   assert.throws(
     () => second.manager.restore([{ ...saved[0], view: { ...saved[0].view, parent: "/wrong" } }]),
@@ -229,15 +389,120 @@ test("save/restore retains definition snapshot and reopens JSONL on resume", asy
   second.manager.restore(saved);
   assert.equal(second.manager.get("worker").state, "paused");
   assert.match(second.manager.get("worker").status, /Interrupted/);
-  await second.manager.deliver("/root/worker", "child progress while parent is unopened");
-  assert.equal(second.drivers.get("/root/worker")!.messages.at(-1)?.role, "user");
-  assert.match(JSON.stringify(second.drivers.get("/root/worker")!.messages), /child progress/);
-  await second.manager.steer("/root", "worker", "resume");
-  await tick();
-  assert.equal(second.drivers.get("/root/worker")!.options.sessionFile, saved[0].view.sessionFile);
-  second.drivers.get("/root/worker")!.finish();
-  await second.manager.wait("/root", "worker");
+  await second.manager.spawn("/root", {
+    path: "worker/child",
+    type: "worker",
+    task: "nested",
+    wait: false,
+  });
+  const pending = second.manager.saved();
+  const pendingChild = pending.find((thread) => thread.view.path === "/root/worker/child");
+  assert.ok(pendingChild);
+  assert.equal(Object.prototype.hasOwnProperty.call(pendingChild, "inherited"), false);
   await second.manager.shutdown();
+
+  const third = fixture();
+  third.manager.restore(pending);
+  await third.manager.deliver("/root/worker", "child progress while parent is unopened");
+  assert.equal(third.drivers.get("/root/worker")!.messages.at(-1)?.role, "user");
+  assert.match(JSON.stringify(third.drivers.get("/root/worker")!.messages), /child progress/);
+  const inspected = JSON.parse(await third.manager.transcript("/root", "worker/child"));
+  assert.deepEqual(inspected, third.drivers.get("/root/worker")!.messages);
+  assert.deepEqual(third.drivers.get("/root/worker/child")!.options.inherited, inspected);
+  await third.manager.steer("/root", "worker", "resume");
+  await tick();
+  assert.equal(third.drivers.get("/root/worker")!.options.sessionFile, saved[0].view.sessionFile);
+  await third.manager.steer("/root", "worker/child", "resume child");
+  await tick();
+  assert.deepEqual(third.drivers.get("/root/worker/child")!.options.inherited, inspected);
+  third.drivers.get("/root/worker/child")!.finish();
+  await third.manager.wait("/root", "worker/child");
+  third.drivers.get("/root/worker")!.finish();
+  await third.manager.wait("/root", "worker");
+  await third.manager.shutdown();
+});
+
+test("restored nested child opens parent first but keeps its saved inherited snapshot", async () => {
+  const order: string[] = [];
+  const childInherited: AgentMessage[][] = [];
+  const savedChildSnapshot = [user("saved child snapshot")];
+  let childFinish = () => {};
+  const manager = new ThreadManager({
+    rootSnapshot: () => [],
+    getType: (name) => ({ name, description: "test", systemPrompt: "child prompt" }),
+    toolsFor: () => [],
+    createDriver: async (options) => {
+      order.push(options.path);
+      if (options.path === "/root/parent") {
+        return {
+          sessionFile: "/tmp/parent.jsonl",
+          prompt: async () => {},
+          steer: async () => {},
+          snapshot: () => [user("live parent snapshot")],
+          output: () => "parent output",
+          abort: async () => {},
+          dispose: () => {},
+          sendUpdate: () => {},
+        };
+      }
+      childInherited.push(structuredClone(options.inherited));
+      return {
+        prompt: async () => {
+          await new Promise<void>((resolve) => {
+            childFinish = resolve;
+          });
+        },
+        steer: async () => {},
+        snapshot: () => [],
+        output: () => "child output",
+        abort: async () => {
+          childFinish();
+        },
+        dispose: () => {},
+        sendUpdate: () => {},
+      };
+    },
+  });
+
+  manager.restore([
+    {
+      view: {
+        path: "/root/parent",
+        parent: "/root",
+        owner: "/root",
+        type: "worker",
+        state: "paused",
+        task: "parent",
+        status: "Paused",
+        createdAt: 0,
+        sessionFile: "/tmp/saved-parent.jsonl",
+      },
+      definition: { name: "worker", description: "test", systemPrompt: "child prompt" },
+    },
+    {
+      view: {
+        path: "/root/parent/child",
+        parent: "/root/parent",
+        owner: "/root/parent",
+        type: "worker",
+        state: "paused",
+        task: "child",
+        status: "Paused",
+        createdAt: 0,
+      },
+      definition: { name: "worker", description: "test", systemPrompt: "child prompt" },
+      inherited: savedChildSnapshot,
+    },
+  ]);
+
+  await manager.steer("/root", "parent/child", "resume child");
+  await tick();
+  assert.deepEqual(order, ["/root/parent", "/root/parent/child"]);
+  assert.deepEqual(childInherited, [savedChildSnapshot]);
+
+  childFinish();
+  assert.equal((await manager.wait("/root", "parent/child")).state, "completed");
+  await manager.shutdown();
 });
 
 test("startup failure returns a failed thread and does not reject detached spawn", async () => {

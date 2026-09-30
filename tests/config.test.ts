@@ -64,7 +64,10 @@ test("serializer excludes provenance and quotes YAML-sensitive strings", () => {
   };
   const content = serializeAgentType(type);
   assert.doesNotMatch(content, /source:|filePath:/);
-  assert.deepEqual(parseAgentType(content), { ...definition, description: type.description });
+  assert.deepEqual(parseAgentType(content), {
+    ...definition,
+    description: type.description,
+  });
 });
 
 test("reject malformed YAML, duplicate keys, unknown fields and unsupported Claude fields", () => {
@@ -247,9 +250,14 @@ test("symlink definitions fail closed and symlink save destinations are rejected
   symlinkSync(join(f.bundledDir, "example.md"), join(f.user, "example.md"));
   const store = new ConfigStore({ ...f, includeProject: false });
   assert.throws(() => store.get("example"));
-  assert.throws(() => store.save(definition, "user"), /Unsafe agent destination/);
+  assert.throws(() => store.save(definition, "user"), /Unsafe symlink path/);
+
+  rmSync(join(f.user, "example.md"));
+  symlinkSync(join(f.user, "missing.md"), join(f.user, "worker.md"));
+  assert.throws(() => store.save({ ...definition, name: "worker" }, "user"), /Unsafe symlink path/);
+
   rmSync(f.user, { recursive: true });
-  symlinkSync(f.bundledDir, f.user);
+  symlinkSync(join(f.agentDir, "missing-agents"), f.user);
   store.reload();
   assert.throws(() => store.get("example"));
   assert.equal(store.diagnostics.length, 1);
