@@ -1,5 +1,7 @@
 import type {
   ExtensionCommandContext,
+  ExtensionUIContext,
+  KeybindingsManager,
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -12,6 +14,8 @@ import {
   stripTerminalSequences,
   truncateToWidth,
   visibleWidth,
+  type Component,
+  type TUI,
 } from "@earendil-works/pi-tui";
 
 export interface DialogHost {
@@ -73,7 +77,11 @@ export function frameDialog(
       "─".repeat(Math.max(0, inner - visibleWidth(heading))) +
       "╮",
   );
-  const content = body.slice(0, height - 4).map(line);
+  // Pad to the full frame so centered overlays keep the same bounds between views.
+  const budget = height - 4;
+  const padded = body.slice(0, budget);
+  while (padded.length < budget) padded.push("");
+  const content = padded.map(line);
   return [
     top,
     ...content,
@@ -320,4 +328,302 @@ export async function dialogInput(
         ),
     };
   }, DIALOG_OPTIONS);
+}
+
+type DialogView = Component & {
+  dispose?(): void;
+  focused?: boolean;
+};
+
+type DialogFactory<T> = (
+  host: TUI,
+  theme: Theme,
+  keys: KeybindingsManager,
+  done: (result: T) => void,
+) => DialogView | Promise<DialogView>;
+
+interface PendingView {
+  generation: number;
+  settled: boolean;
+  resolve: (value: unknown) => void;
+}
+
+const dialogScopes = new WeakSet<ExtensionCommandContext>();
+
+function isPromise<T>(value: T | Promise<T>): value is Promise<T> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Promise<T>).then === "function"
+  );
+}
+
+function safeDispose(component: DialogView | undefined): void {
+  if (!component?.dispose) return;
+  try {
+    component.dispose();
+  } catch {
+    // A view that fails to dispose must not reject the session promise.
+  }
+}
+
+/** One overlay for a multi-step dialog. Child views swap without closing it. */
+export class DialogSession {
+  private child: DialogView | undefined;
+  private focusedState = false;
+  private inputLocked = true;
+  private closed = false;
+  private disposed = false;
+  private generation = 0;
+  private pending: PendingView | undefined;
+  private outerDone: ((result?: void) => void) | undefined;
+
+  constructor(
+    private host: TUI,
+    private theme: Theme,
+    private keys: KeybindingsManager,
+    done: (result?: void) => void,
+  ) {
+    this.outerDone = done;
+  }
+
+  /** Current or last held child. Tests drive the active editor through this. */
+  getComponent(): DialogView | undefined {
+    return this.child;
+  }
+
+  restoreFocus(): void {
+    if (this.closed) return;
+    // Non-overlay custom views restore Pi's normal editor when they finish.
+    this.host.setFocus(this);
+    this.host.requestRender();
+  }
+
+  get focused(): boolean {
+    return this.focusedState;
+  }
+
+  set focused(value: boolean) {
+    this.focusedState = value;
+    this.forwardFocus();
+  }
+
+  /**
+   * Mount an overlay factory into this session. The returned promise settles
+   * from the per-view done callback and does not complete the outer overlay.
+   */
+  mount<T>(factory: DialogFactory<T>): Promise<T> {
+    if (this.closed) return Promise.resolve(undefined as T);
+    const generation = ++this.generation;
+    this.inputLocked = true;
+    this.resolvePending();
+
+    return new Promise<T>((resolve, reject) => {
+      let settled = false;
+      const resolveOnce = (value: T) => {
+        if (settled) return;
+        settled = true;
+        if (this.pending?.generation === generation)
+          this.pending.settled = true;
+        resolve(value);
+      };
+      const rejectOnce = (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        this.inputLocked = true;
+        if (this.pending?.generation === generation)
+          this.pending.settled = true;
+        reject(error);
+      };
+      this.pending = {
+        generation,
+        settled: false,
+        resolve: (value) => resolveOnce(value as T),
+      };
+
+      const finish = (value: T) => {
+        if (this.closed || generation !== this.generation) return;
+        this.inputLocked = true;
+        resolveOnce(value);
+      };
+
+      const adopt = (component: DialogView) => {
+        try {
+          this.install(generation, component);
+        } catch (error) {
+          rejectOnce(error);
+        }
+      };
+
+      try {
+        const produced = factory(this.host, this.theme, this.keys, finish);
+        if (isPromise(produced)) {
+          void produced.then(
+            (component) => adopt(component),
+            (error: unknown) => {
+              if (settled || this.closed || generation !== this.generation)
+                return;
+              rejectOnce(error);
+            },
+          );
+        } else {
+          adopt(produced);
+        }
+      } catch (error) {
+        // done() may already have resolved; don't reject a settled view or leave a throw unhandled.
+        rejectOnce(error);
+      }
+    });
+  }
+
+  handleInput(data: string): void {
+    if (this.closed || this.inputLocked) return;
+    this.child?.handleInput?.(data);
+  }
+
+  invalidate(): void {
+    this.child?.invalidate();
+  }
+
+  render(width: number): string[] {
+    return this.child?.render(width) ?? [];
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.closed = true;
+    this.inputLocked = true;
+    const child = this.child;
+    this.child = undefined;
+    safeDispose(child);
+  }
+
+  /** Complete the outer overlay once. Safe to call after the host already closed. */
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.inputLocked = true;
+    this.resolvePending();
+    const done = this.outerDone;
+    this.outerDone = undefined;
+    try {
+      done?.();
+    } finally {
+      this.dispose();
+    }
+  }
+
+  private install(generation: number, component: DialogView): void {
+    if (this.closed || generation !== this.generation) {
+      safeDispose(component);
+      return;
+    }
+    this.replaceChild(component);
+    this.inputLocked =
+      this.pending?.generation === generation ? this.pending.settled : true;
+    this.host.requestRender();
+  }
+
+  private replaceChild(next: DialogView): void {
+    const previous = this.child;
+    this.child = next;
+    this.forwardFocus();
+    if (!previous || previous === next) return;
+    if ("focused" in previous) previous.focused = false;
+    safeDispose(previous);
+  }
+
+  private forwardFocus(): void {
+    const child = this.child;
+    if (!child || !("focused" in child)) return;
+    // Read the setter's latest value; the first view can mount before showOverlay focuses us.
+    child.focused = this.focused;
+  }
+
+  private resolvePending(): void {
+    const pending = this.pending;
+    if (!pending || pending.settled) return;
+    pending.settled = true;
+    pending.resolve(undefined);
+  }
+}
+
+function scopeDialogContext(
+  ctx: ExtensionCommandContext,
+  session: DialogSession,
+): ExtensionCommandContext {
+  const source = ctx.ui;
+  const originalCustom = source.custom.bind(source);
+  const ui = Object.create(source) as ExtensionUIContext;
+  ui.custom = ((factory, options) => {
+    if (options?.overlay) return session.mount(factory);
+    return originalCustom(factory, options).finally(() =>
+      session.restoreFocus(),
+    );
+  }) as ExtensionUIContext["custom"];
+  const scoped = Object.create(ctx) as ExtensionCommandContext;
+  scoped.ui = ui;
+  return scoped;
+}
+
+/**
+ * Run a dialog workflow inside one ctx.ui.custom overlay.
+ * Nested calls on the scoped context reuse that overlay instead of opening another.
+ */
+export async function withDialogSession(
+  ctx: ExtensionCommandContext,
+  run: (ctx: ExtensionCommandContext) => Promise<void>,
+): Promise<void> {
+  if (dialogScopes.has(ctx)) {
+    await run(ctx);
+    return;
+  }
+
+  let failure: unknown;
+  let failed = false;
+  let session: DialogSession | undefined;
+  try {
+    await ctx.ui.custom<void>((host, theme, keys, done) => {
+      session = new DialogSession(host, theme, keys, done);
+      const scoped = scopeDialogContext(ctx, session);
+      dialogScopes.add(scoped);
+      // Pi mounts the returned component in a Promise continuation. Defer the
+      // workflow so even an immediate return/throw closes after that mount.
+      const task = Promise.resolve().then(() => run(scoped));
+      void task.then(
+        () => {
+          try {
+            session?.close();
+          } catch (error) {
+            if (!failed) {
+              failed = true;
+              failure = error;
+            }
+          }
+        },
+        (error: unknown) => {
+          failed = true;
+          failure = error;
+          try {
+            session?.close();
+          } catch (closeError) {
+            failure ??= closeError;
+          }
+        },
+      );
+      return session;
+    }, DIALOG_OPTIONS);
+  } catch (error) {
+    try {
+      session?.close();
+    } catch {
+      // The original custom rejection is the one that must propagate.
+    }
+    if (!failed) {
+      failed = true;
+      failure = error;
+    }
+  }
+  if (failed) throw failure;
 }

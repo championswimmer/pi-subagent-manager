@@ -14,6 +14,7 @@ import { quote } from "shell-quote";
 import {
   colorToRgb,
   foregroundAnsi,
+  CURSOR_MARKER,
   rgbColor,
   stripTerminalSequences,
   styleText,
@@ -27,7 +28,14 @@ import {
   type ThemeColor,
 } from "@earendil-works/pi-coding-agent";
 import type { ThreadView } from "../src/types.ts";
-import { DialogMenu, DialogEditor } from "../src/dialog.ts";
+import { DialogEditor, DialogMenu, dialogHeight } from "../src/dialog.ts";
+import { configureAgents } from "../src/settings-ui.ts";
+import { DEFAULT_MANAGER_SETTINGS } from "../src/settings.ts";
+import {
+  bindDialogDriver,
+  createDialogDriver,
+  dialogDriverFor,
+} from "./helpers/dialogDriver.ts";
 import {
   AGENT_COLORS,
   ConfigStore,
@@ -478,6 +486,28 @@ function editorContext(
   const frames: string[][] = [];
   const editors: { title: string; prefill?: string }[] = [];
   const colorPickerTheme = darkTheme;
+  const driver = createDialogDriver({
+    theme: colorPickerTheme,
+    width: 100,
+    choices,
+    inputs,
+    menuLabels: (menu) =>
+      menu.rows.map((row) =>
+        EDIT_FIELD_ACTIONS.has(row.id) ? `${row.id}: ${row.value}` : row.id,
+      ),
+    resolveChoice: scriptedEditChoice,
+    onMenu(menu, labels) {
+      menus.push({ title: menu.title, options: labels });
+      if (menu.title === "Save scope") scopes.push(labels);
+    },
+    onEditor(editor) {
+      editors.push({ title: editor.title, prefill: editor.prefill });
+    },
+    onFrame(component, lines) {
+      if (component instanceof DialogMenu)
+        frames.push(lines.map(stripTerminalSequences));
+    },
+  });
   const availableModels = options.availableModels ?? [];
   const scopedModels = (options.scopedModels ?? []).map((identity) => {
     const [provider, ...rest] = identity.split("/");
@@ -507,69 +537,7 @@ function editorContext(
         );
         return resolved;
       },
-      custom: async (factory: Function) => {
-        return new Promise<any>((resolve, reject) => {
-          Promise.resolve(
-            factory(
-              { requestRender: () => {} },
-              colorPickerTheme,
-              {},
-              (result: unknown) => resolve(result),
-            ),
-          )
-            .then((component: any) => {
-              if (component instanceof DialogMenu) {
-                frames.push(component.render(100).map(stripTerminalSequences));
-                const labels = component.rows.map((row) =>
-                  EDIT_FIELD_ACTIONS.has(row.id)
-                    ? `${row.id}: ${row.value}`
-                    : row.id,
-                );
-                menus.push({ title: component.title, options: labels });
-                if (component.title === "Save scope") scopes.push(labels);
-                const choice = choices.shift();
-                if (choice === undefined) return resolve(undefined);
-                const resolved = scriptedEditChoice(
-                  component.title,
-                  labels,
-                  choice,
-                );
-                assert.ok(
-                  labels.includes(resolved),
-                  `Missing dialog option: ${choice}`,
-                );
-                return resolve(component.rows[labels.indexOf(resolved)]!.id);
-              }
-              if (component instanceof DialogEditor) {
-                editors.push({
-                  title: component.title,
-                  prefill: component.prefill,
-                });
-                const value = inputs.shift();
-                if (value === undefined) component.handleInput("\x1b");
-                else {
-                  component.getEditor().setText(value);
-                  component.handleInput("\x13");
-                }
-                return;
-              }
-              const items = component.getItems?.();
-              assert.ok(items, "expected color picker items");
-              const choice = choices.shift();
-              if (choice === undefined) {
-                component.getSelectList?.().onCancel?.();
-                return;
-              }
-              const item = items.find(
-                (entry: { value: string }) => entry.value === choice,
-              );
-              assert.ok(item, `Missing color picker option: ${choice}`);
-              component.getSelectList?.().onSelectionChange?.(item);
-              component.getSelectList?.().onSelect?.(item);
-            })
-            .catch(reject);
-        });
-      },
+      custom: driver.custom,
       input: async () => {
         throw new Error("Agent fields must use the bordered dialog editor");
       },
@@ -580,7 +548,8 @@ function editorContext(
       confirm: async () => false,
     },
   } as unknown as ExtensionCommandContext;
-  return { ctx, diagnostics, scopes, menus, editors, frames };
+  bindDialogDriver(ctx, driver);
+  return { ctx, diagnostics, scopes, menus, editors, frames, driver };
 }
 
 test("agent editor is a bordered two-column form and edits the prompt body in a dialog", async () => {
@@ -686,7 +655,7 @@ test("legacy scalar model opens the ordered picker and cancel keeps the saved de
       legacyScalarDefinition,
     );
     store.reload();
-    const { ctx } = editorContext(
+    const { ctx, driver } = editorContext(
       root,
       ["worker", "models", "Cancel", undefined],
       [],
@@ -703,32 +672,15 @@ test("legacy scalar model opens the ordered picker and cancel keeps the saved de
       },
     );
     const observed = { mode: "", label: "", description: "" };
-    const theme = {
-      fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
-    } as unknown as Theme;
-    const baseCustom = ctx.ui.custom;
-    ctx.ui.custom = (async (factory: Function) => {
-      return new Promise<any>((resolve, reject) => {
-        Promise.resolve(
-          factory({ requestRender: () => {} }, theme, {}, (result: unknown) =>
-            resolve(result),
-          ),
-        )
-          .then((component: any) => {
-            if (
-              component instanceof DialogMenu ||
-              component instanceof DialogEditor
-            )
-              return baseCustom(factory as any).then(resolve, reject);
-            observed.mode = component.getMode();
-            observed.label = component.getCurrentItems()[0]?.label ?? "";
-            observed.description =
-              component.getCurrentItems()[0]?.description ?? "";
-            component.handleInput("\u001B");
-          })
-          .catch(reject);
-      });
-    }) as typeof ctx.ui.custom;
+    driver.onChild = (component) => {
+      if (typeof component.getMode !== "function") return false;
+      observed.mode = component.getMode();
+      observed.label = component.getCurrentItems()[0]?.label ?? "";
+      observed.description =
+        component.getCurrentItems()[0]?.description ?? "";
+      component.handleInput("\u001B");
+      return true;
+    };
     await editAgentTypes(ctx, store);
     assert.equal(observed.mode, "menu");
     assert.equal(observed.label, "1. openai/gpt-4.1");
@@ -749,7 +701,7 @@ test("legacy scalar model opens the ordered picker and cancel keeps the saved de
 test("saving model preferences stores canonical ordered models after add and reorder", async () => {
   const { root, store, body } = await configFixture();
   try {
-    const { ctx } = editorContext(
+    const { ctx, driver } = editorContext(
       root,
       ["worker", "models", "Save", "Global", undefined],
       [],
@@ -766,40 +718,23 @@ test("saving model preferences stores canonical ordered models after add and reo
         scopedModels: ["openai/gpt-4.1", "anthropic/claude-3.7-sonnet"],
       },
     );
-    const baseCustom = ctx.ui.custom;
-    ctx.ui.custom = (async (factory: Function) => {
-      return new Promise<any>((resolve, reject) => {
-        Promise.resolve(
-          factory(
-            { requestRender: () => {} },
-            { fg: (_color: string, text: string) => text },
-            {},
-            (result: unknown) => resolve(result),
-          ),
-        )
-          .then((component: any) => {
-            if (
-              component instanceof DialogMenu ||
-              component instanceof DialogEditor
-            )
-              return baseCustom(factory as any).then(resolve, reject);
-            const selectValue = (value: string) => {
-              const item = component
-                .getCurrentItems()
-                .find((entry: { value: string }) => entry.value === value);
-              assert.ok(item, `Missing model picker option: ${value}`);
-              component.getSelectList().onSelect?.(item);
-            };
-            selectValue("openai/gpt-4.1");
-            selectValue("action:add");
-            selectValue("anthropic/claude-3.7-sonnet");
-            selectValue("entry:1");
-            selectValue("action:earlier");
-            selectValue("action:done");
-          })
-          .catch(reject);
-      });
-    }) as typeof ctx.ui.custom;
+    driver.onChild = (component) => {
+      if (typeof component.getMode !== "function") return false;
+      const selectValue = (value: string) => {
+        const item = component
+          .getCurrentItems()
+          .find((entry: { value: string }) => entry.value === value);
+        assert.ok(item, `Missing model picker option: ${value}`);
+        component.getSelectList().onSelect?.(item);
+      };
+      selectValue("openai/gpt-4.1");
+      selectValue("action:add");
+      selectValue("anthropic/claude-3.7-sonnet");
+      selectValue("entry:1");
+      selectValue("action:earlier");
+      selectValue("action:done");
+      return true;
+    };
     await editAgentTypes(ctx, store);
     const saved = store.get("worker");
     assert.deepEqual(saved.models, [
@@ -841,27 +776,23 @@ function driveColorPicker(
   drive: (component: any) => void,
 ) {
   let pickerError: unknown;
-  const baseCustom = ctx.ui.custom;
-  ctx.ui.custom = (async (factory: Function) => {
-    return new Promise((resolve, reject) => {
-      Promise.resolve(factory({ requestRender: () => {} }, theme, {}, resolve))
-        .then((component) => {
-          if (
-            component instanceof DialogMenu ||
-            component instanceof DialogEditor
-          )
-            return baseCustom<any>(factory as any).then(resolve, reject);
-          try {
-            drive(component);
-          } catch (error) {
-            pickerError = error;
-            component.getSelectList?.().onCancel?.();
-            resolve(undefined as never);
-          }
-        })
-        .catch(reject);
-    });
-  }) as typeof ctx.ui.custom;
+  const driver = dialogDriverFor(ctx);
+  driver.theme = theme;
+  driver.onChild = (component) => {
+    if (
+      component instanceof DialogMenu ||
+      component instanceof DialogEditor ||
+      !component.getItems
+    )
+      return false;
+    try {
+      drive(component);
+    } catch (error) {
+      pickerError = error;
+      component.getSelectList?.().onCancel?.();
+    }
+    return true;
+  };
   return () => {
     if (pickerError) throw pickerError;
   };
@@ -1425,7 +1356,7 @@ test("external invalid edit restores draft, reports diagnostics, and restarts TU
     ]);
     const file = join(agentDir, "agents", "worker.md");
     const original = await readFile(file, "utf8");
-    const { ctx, diagnostics } = editorContext(root, [
+    const { ctx, diagnostics, driver } = editorContext(root, [
       "worker",
       "External editor (entire Markdown)",
       "Cancel",
@@ -1434,11 +1365,10 @@ test("external invalid edit restores draft, reports diagnostics, and restarts TU
       undefined,
     ]);
     const terminalEvents: string[] = [];
-    const baseCustom = ctx.ui.custom;
-    ctx.ui.custom = (async (factory: Function) => {
-      return new Promise((done, reject) => {
+    driver.onPassthrough = (factory) =>
+      new Promise((done, reject) => {
         try {
-          const component = factory(
+          factory(
             {
               stop: () => terminalEvents.push("stop"),
               start: () => terminalEvents.push("start"),
@@ -1448,16 +1378,10 @@ test("external invalid edit restores draft, reports diagnostics, and restarts TU
             {},
             done,
           );
-          if (
-            component instanceof DialogMenu ||
-            component instanceof DialogEditor
-          )
-            baseCustom<any>(factory as any).then(done, reject);
         } catch (error) {
           reject(error);
         }
       });
-    }) as typeof ctx.ui.custom;
     await editAgentTypes(ctx, store);
     assert.deepEqual(terminalEvents, ["stop", "start", "render"]);
     assert.match(diagnostics[0]!, /Edit not accepted.*model/);
@@ -1812,6 +1736,130 @@ test("description editor prefills safe text and unchanged submits keep the origi
     assert.ok(changedMenus[1]!.options.includes("description: Revised notes"));
     assert.equal(store.get("worker").description, "Revised notes");
     assert.equal(store.get("worker").systemPrompt, body);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+function assertOneOverlay(
+  driver: {
+    stats: {
+      outerOpens: number;
+      outerCompletions: number;
+      forcedRenders: number;
+      frameHeights: number[];
+    };
+  },
+  label: string,
+) {
+  assert.equal(
+    driver.stats.outerOpens,
+    1,
+    `${label} opened ${driver.stats.outerOpens} custom overlays`,
+  );
+  assert.equal(
+    driver.stats.outerCompletions,
+    1,
+    `${label} completed ${driver.stats.outerCompletions} custom overlays`,
+  );
+  assert.equal(
+    driver.stats.forcedRenders,
+    0,
+    `${label} issued ${driver.stats.forcedRenders} forced render requests`,
+  );
+}
+
+test("agent definition edits including model, color, and text use one overlay", async () => {
+  const { root, store } = await configFixture();
+  try {
+    const prompt = "Be brief.";
+    const { ctx, driver } = editorContext(
+      root,
+      [
+        "worker",
+        "name",
+        "description",
+        "color",
+        "success",
+        "models",
+        "systemPrompt",
+        "Save",
+        "Global",
+        undefined,
+      ],
+      ["scout", "Field notes", prompt],
+      {
+        availableModels: [
+          { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
+          {
+            provider: "anthropic",
+            id: "claude-3.7-sonnet",
+            name: "Claude 3.7 Sonnet",
+          },
+        ],
+      },
+    );
+    driver.onChild = (component) => {
+      if (driver.session && component instanceof DialogEditor) {
+        driver.session.focused = true;
+        assert.equal(component.focused, true);
+        const rendered = driver.session.render(100);
+        assert.ok(
+          rendered.some((line: string) => line.includes(CURSOR_MARKER)),
+        );
+      }
+      if (typeof component.getMode !== "function") return false;
+      const selectValue = (value: string) => {
+        const item = component
+          .getCurrentItems()
+          .find((entry: { value: string }) => entry.value === value);
+        assert.ok(item, `Missing model picker option: ${value}`);
+        component.getSelectList().onSelect?.(item);
+      };
+      selectValue("openai/gpt-4.1");
+      selectValue("action:done");
+      return true;
+    };
+    await editAgentTypes(ctx, store);
+    const saved = store.get("scout");
+    assert.equal(saved.description, "Field notes");
+    assert.equal(saved.systemPrompt, prompt);
+    assert.equal(saved.color, "success");
+    assert.deepEqual(saved.models, ["openai/gpt-4.1"]);
+    assertOneOverlay(driver, "agent definition edits");
+    const height = dialogHeight({
+      requestRender() {},
+      terminal: { rows: 24 },
+    });
+    assert.ok(driver.stats.frameHeights.length >= 3);
+    assert.ok(driver.stats.frameHeights.every((lines) => lines === height));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("nested definition editor from settings uses one overlay", async () => {
+  const { root, agentDir, store } = await configFixture();
+  try {
+    const before = store.get("worker").description;
+    const { ctx, driver } = editorContext(
+      root,
+      ["types", "worker", "description", "Cancel", undefined, "cancel"],
+      ["Nested edit"],
+    );
+    ctx.isProjectTrusted = () => false;
+    let applied = 0;
+    await configureAgents(ctx, {
+      store,
+      agentDir,
+      settings: { ...DEFAULT_MANAGER_SETTINGS },
+      apply: () => {
+        applied++;
+      },
+    });
+    assert.equal(applied, 0);
+    assert.equal(store.get("worker").description, before);
+    assertOneOverlay(driver, "nested definition editor");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

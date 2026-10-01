@@ -8,8 +8,10 @@ import {
   type ExtensionAPI,
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import piSubagent from "../src/index.ts";
 import { loadManagerSettings } from "../src/settings.ts";
+import { createDialogDriver } from "./helpers/dialogDriver.ts";
 
 async function withCommands(
   body: (fixture: {
@@ -30,6 +32,18 @@ async function withCommands(
   const renders: string[][] = [];
   const replies: (string | undefined)[] = [];
   const notifications: string[] = [];
+  const driver = createDialogDriver({
+    theme: { fg: (_token: string, text: string) => text } as Theme,
+    width: 100,
+    choices: replies,
+    unified: true,
+    onOpen(options) {
+      assert.equal((options as { overlay?: boolean } | undefined)?.overlay, true);
+    },
+    onFrame(_component, lines) {
+      renders.push(lines);
+    },
+  });
   let command: any;
   const pi = {
     registerTool() {},
@@ -51,19 +65,7 @@ async function withCommands(
     ui: {
       setWidget() {},
       notify: (text: string) => notifications.push(text),
-      custom: async (factory: Function, options: any) => {
-        assert.equal(options.overlay, true);
-        return new Promise((resolve) => {
-          const component = factory(
-            { requestRender() {}, terminal: { rows: 24 } },
-            { fg: (_token: string, text: string) => text },
-            {},
-            resolve,
-          );
-          renders.push(component.render(100));
-          resolve(replies.shift());
-        });
-      },
+      custom: driver.custom,
     },
   } as unknown as ExtensionCommandContext;
   try {

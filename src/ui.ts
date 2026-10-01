@@ -35,6 +35,7 @@ import {
   dialogHeight,
   frameDialog,
   DIALOG_OPTIONS,
+  withDialogSession,
 } from "./dialog.ts";
 import { getModelPreferences } from "./models.ts";
 import {
@@ -774,6 +775,13 @@ export async function editAgentTypes(
   store: ConfigStore,
 ): Promise<void> {
   if (!canOpenDialog(ctx)) return;
+  await withDialogSession(ctx, (scoped) => editAgentTypesDialog(scoped, store));
+}
+
+async function editAgentTypesDialog(
+  ctx: ExtensionCommandContext,
+  store: ConfigStore,
+): Promise<void> {
   while (true) {
     const types = store.list();
     const selection = await dialogMenu(ctx, "Agent types", [

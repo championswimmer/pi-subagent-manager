@@ -24,6 +24,10 @@ import {
   DEFAULT_MANAGER_SETTINGS,
   loadManagerSettings,
 } from "../src/settings.ts";
+import {
+  bindDialogDriver,
+  createDialogDriver,
+} from "./helpers/dialogDriver.ts";
 
 const theme = { fg: (_color: string, text: string) => text } as Theme;
 
@@ -178,6 +182,22 @@ function context(
 ) {
   const notifications: string[] = [];
   const titles: string[] = [];
+  const driver = createDialogDriver({
+    theme,
+    width: 80,
+    choices: actions,
+    unified: true,
+    assertBorder: true,
+    onOpen(options) {
+      assert.equal(
+        (options as { overlay?: boolean } | undefined)?.overlay,
+        true,
+      );
+    },
+    onFrame(_component, lines) {
+      titles.push(lines[0] ?? "");
+    },
+  });
   const ctx = {
     cwd: root,
     hasUI: true,
@@ -185,24 +205,11 @@ function context(
     isProjectTrusted: () => trusted,
     ui: {
       notify: (message: string) => notifications.push(message),
-      custom: async (factory: Function, options: any) => {
-        assert.equal(options.overlay, true);
-        return new Promise((resolve) => {
-          const component = factory(
-            { requestRender() {}, terminal: { rows: 24 } },
-            theme,
-            {},
-            resolve,
-          );
-          const rendered = component.render(80);
-          assert.match(rendered.at(-1), /^╰.*╯$/);
-          titles.push(rendered[0]);
-          resolve(actions.shift());
-        });
-      },
+      custom: driver.custom,
     },
   } as unknown as ExtensionCommandContext;
-  return { ctx, notifications, titles };
+  bindDialogDriver(ctx, driver);
+  return { ctx, notifications, titles, driver };
 }
 
 test("settings save applies once, validates numbers and writes to selected scope", async (t) => {
@@ -257,5 +264,153 @@ test("settings cancel discards draft and project scope requires trust", async (t
   );
   assert.ok(
     notifications.some((message) => message.includes("trusted project")),
+  );
+});
+
+function assertOneOverlay(
+  driver: {
+    stats: {
+      outerOpens: number;
+      outerCompletions: number;
+      forcedRenders: number;
+    };
+  },
+  label: string,
+) {
+  assert.equal(
+    driver.stats.outerOpens,
+    1,
+    `${label} opened ${driver.stats.outerOpens} custom overlays`,
+  );
+  assert.equal(
+    driver.stats.outerCompletions,
+    1,
+    `${label} completed ${driver.stats.outerCompletions} custom overlays`,
+  );
+  assert.equal(
+    driver.stats.forcedRenders,
+    0,
+    `${label} issued ${driver.stats.forcedRenders} forced render requests`,
+  );
+}
+
+test("frameDialog pads every bounded view to the same height", () => {
+  const height = dialogHeight({
+    requestRender() {},
+    terminal: { rows: 24 },
+  });
+  const short = frameDialog(theme, 80, height, "Title", ["only"], "Esc");
+  const tall = frameDialog(
+    theme,
+    80,
+    height,
+    "Title",
+    Array.from({ length: 40 }, () => "row"),
+    "Esc",
+  );
+  assert.equal(short.length, height);
+  assert.equal(tall.length, height);
+  assert.match(short.at(-1) ?? "", /^╰.*╯$/);
+  assert.equal(short.at(-1), tall.at(-1));
+});
+
+test("manager numeric edits use one outer custom overlay", async (t) => {
+  const { root, store } = fixture(t);
+  const { ctx, driver } = context(root, ["maxLevels", "4", "save"]);
+  let applied = 0;
+  await configureAgents(ctx, {
+    store,
+    agentDir: root,
+    settings: { ...DEFAULT_MANAGER_SETTINGS },
+    apply: () => {
+      applied++;
+    },
+  });
+  assert.equal(applied, 1);
+  assert.equal(
+    loadManagerSettings({ cwd: root, agentDir: root, includeProject: false })
+      .settings.maxLevels,
+    4,
+  );
+  assertOneOverlay(driver, "numeric edits");
+  assert.ok(driver.stats.frameHeights.length >= 2);
+});
+
+test("invalid then valid manager edits stay inside one overlay", async (t) => {
+  const { root, store } = fixture(t);
+  const { ctx, notifications, driver } = context(root, [
+    "maxLevels",
+    "33",
+    "maxLevels",
+    "5",
+    "save",
+  ]);
+  await configureAgents(ctx, {
+    store,
+    agentDir: root,
+    settings: { ...DEFAULT_MANAGER_SETTINGS },
+    apply: () => {},
+  });
+  assert.ok(notifications.some((message) => message.includes("at most 32")));
+  assert.equal(
+    loadManagerSettings({ cwd: root, agentDir: root, includeProject: false })
+      .settings.maxLevels,
+    5,
+  );
+  assertOneOverlay(driver, "invalid then valid");
+});
+
+test("scope, defaults, and cancel stay inside one overlay", async (t) => {
+  const { root, store } = fixture(t);
+  const { ctx, notifications, driver } = context(
+    root,
+    ["scope", "defaults", "maxThreads", "9", undefined],
+    true,
+  );
+  let applied = 0;
+  await configureAgents(ctx, {
+    store,
+    agentDir: root,
+    settings: { ...DEFAULT_MANAGER_SETTINGS, maxThreads: 4 },
+    apply: () => {
+      applied++;
+    },
+  });
+  assert.equal(applied, 0);
+  assert.equal(
+    loadManagerSettings({ cwd: root, agentDir: root, includeProject: true })
+      .settings.maxThreads,
+    DEFAULT_MANAGER_SETTINGS.maxThreads,
+  );
+  assert.equal(
+    notifications.some((message) => message.includes("trusted project")),
+    false,
+  );
+  assertOneOverlay(driver, "scope, defaults, and cancel");
+});
+
+test("settings views keep one fixed frame height", async (t) => {
+  const { root, store } = fixture(t);
+  const { ctx, driver } = context(root, [
+    "maxLevels",
+    "6",
+    "maxConcurrent",
+    "2",
+    "cancel",
+  ]);
+  await configureAgents(ctx, {
+    store,
+    agentDir: root,
+    settings: { ...DEFAULT_MANAGER_SETTINGS },
+    apply: () => {},
+  });
+  const height = dialogHeight({
+    requestRender() {},
+    terminal: { rows: 24 },
+  });
+  assert.ok(driver.stats.frameHeights.length >= 3);
+  assert.deepEqual(
+    driver.stats.frameHeights,
+    driver.stats.frameHeights.map(() => height),
   );
 });

@@ -1,6 +1,11 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { ConfigStore } from "./config.ts";
-import { canOpenDialog, dialogInput, dialogMenu } from "./dialog.ts";
+import {
+  canOpenDialog,
+  dialogInput,
+  dialogMenu,
+  withDialogSession,
+} from "./dialog.ts";
 import {
   DEFAULT_MANAGER_SETTINGS,
   saveManagerSettings,
@@ -36,6 +41,20 @@ export async function configureAgents(
   },
 ): Promise<void> {
   if (!canOpenDialog(ctx)) return;
+  await withDialogSession(ctx, (scoped) =>
+    configureAgentsDialog(scoped, options),
+  );
+}
+
+async function configureAgentsDialog(
+  ctx: ExtensionCommandContext,
+  options: {
+    store: ConfigStore;
+    settings: ManagerSettings;
+    agentDir: string;
+    apply(): void;
+  },
+): Promise<void> {
   let draft = { ...options.settings };
   let scope: "user" | "project" = ctx.isProjectTrusted() ? "project" : "user";
   let selectedId: string | undefined;
