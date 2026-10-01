@@ -20,6 +20,7 @@ import {
   rgbColor,
   stripTerminalSequences,
   truncateToWidth,
+  visibleWidth,
 } from "@earendil-works/pi-tui";
 import { AGENT_COLORS, ConfigStore, parseAgentType, serializeAgentType } from "./config.ts";
 import { editModelPreferences, MODEL_EDITOR_CANCEL } from "./model-picker.ts";
@@ -38,12 +39,16 @@ export function sanitizeText(text: string): string {
 
 type AgentBadgeTheme = Pick<Theme, "fg" | "colors" | "style">;
 
-/** Use the theme's concrete token color as a background, with readable text. */
-function agentNameBadge(name: string, color: string | undefined, theme: AgentBadgeTheme): string {
-  const token: ThemeColor = AGENT_COLORS.includes(color as (typeof AGENT_COLORS)[number])
+/** Selected type token, or accent when unset or unknown. Shared by the pill and path. */
+function agentColorToken(color: string | undefined): ThemeColor {
+  return AGENT_COLORS.includes(color as (typeof AGENT_COLORS)[number])
     ? (color as ThemeColor)
     : "accent";
-  const background = theme.colors[token];
+}
+
+/** Background pill with bold contrasting text. Label is sanitized; caller supplies brackets. */
+function contrastPill(label: string, color: string | undefined, theme: AgentBadgeTheme): string {
+  const background = theme.colors[agentColorToken(color)];
   const { r, g, b } = colorToRgb(background);
   const linear = (channel: number) => {
     const value = channel / 255;
@@ -52,11 +57,75 @@ function agentNameBadge(name: string, color: string | undefined, theme: AgentBad
   const luminance = 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
   // Pick whichever of black/white has the higher WCAG contrast ratio.
   const foreground = luminance > Math.sqrt(0.0525) - 0.05 ? 0 : 255;
-  return theme.style(` ${sanitizeText(name)} `, {
+  return theme.style(` ${sanitizeText(label)} `, {
     bg: background,
     fg: rgbColor(foreground, foreground, foreground),
     bold: true,
   });
+}
+
+function agentTypeBadge(type: string, color: string | undefined, theme: AgentBadgeTheme): string {
+  return contrastPill(`[${type}]`, color, theme);
+}
+
+function agentPath(path: string, color: string | undefined, theme: AgentBadgeTheme): string {
+  return theme.fg(agentColorToken(color), sanitizeText(path));
+}
+
+function metricCount(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+}
+
+/** Settled active time plus the current live run, only while starting or running. */
+function elapsedTotal(thread: ThreadView, now = Date.now()): number {
+  const live =
+    typeof thread.startedAt === "number" &&
+    Number.isFinite(thread.startedAt) &&
+    (thread.state === "starting" || thread.state === "running")
+      ? now - thread.startedAt
+      : 0;
+  const total = metricCount(thread.elapsedMs) + live;
+  return Number.isFinite(total) ? total : 0;
+}
+
+function formatDuration(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const seconds = total % 60;
+  const minutes = Math.floor(total / 60) % 60;
+  const hours = Math.floor(total / 3600) % 24;
+  const days = Math.floor(total / 86400);
+  if (days > 0) return `${days}d${hours}h`;
+  if (hours > 0) return `${hours}h${minutes}m`;
+  if (minutes > 0) return `${minutes}m${seconds}s`;
+  return `${seconds}s`;
+}
+
+const compactCount = new Intl.NumberFormat("en", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+
+function formatCount(value: number | undefined): string {
+  // Intl emits uppercase units (`1.2K`); the widget uses lowercase.
+  return compactCount.format(metricCount(value)).toLowerCase();
+}
+
+function counterLabel(thread: ThreadView, now = Date.now()): string {
+  return `${formatDuration(elapsedTotal(thread, now))} ↑${formatCount(thread.inputTokens)} ↓${formatCount(thread.outputTokens)}`;
+}
+
+/** Keep the right-hand counters intact; truncate the left side to the remaining columns. */
+function fitLine(left: string, right: string, width: number): string {
+  if (width <= 0) return "";
+  const rightWidth = visibleWidth(right);
+  if (rightWidth >= width) return truncateToWidth(right, width, "");
+  const fitted = truncateToWidth(left, width - rightWidth - 1);
+  const pad = width - visibleWidth(fitted) - rightWidth;
+  return fitted + " ".repeat(Math.max(0, pad)) + right;
+}
+
+function isLive(thread: ThreadView): boolean {
+  return thread.path !== "/root" && (thread.state === "starting" || thread.state === "running");
 }
 
 export function renderThreads(
@@ -79,12 +148,11 @@ export function renderThreads(
   const lines = visible.slice(0, limit).map((thread) => {
     const stateColor =
       thread.state === "failed" ? "error" : thread.state === "paused" ? "warning" : "accent";
-    const badge = agentNameBadge(thread.path, thread.color, theme);
+    const badge = agentTypeBadge(thread.type, thread.color, theme);
+    const path = agentPath(thread.path, thread.color, theme);
     const state = theme.fg(stateColor, `[${sanitizeText(thread.state)}]`);
-    return truncateToWidth(
-      `${badge} ${state} ${sanitizeText(thread.status || thread.task)}`,
-      Math.max(0, width),
-    );
+    const left = `${badge} ${path} ${state} ${sanitizeText(thread.status || thread.task)}`;
+    return fitLine(left, theme.fg("muted", counterLabel(thread)), Math.max(0, width));
   });
   if (visible.length > limit) {
     lines.push(
@@ -103,12 +171,24 @@ export function updateWidget(ctx: ExtensionContext, threads: ThreadView[]): void
     ctx.ui.setWidget("pi-subagent", undefined, { placement: "belowEditor" });
     return;
   }
+  const snapshot = threads.map((thread) => ({ ...thread }));
   ctx.ui.setWidget(
     "pi-subagent",
-    () => ({
-      render: (width) => renderThreads(threads, width, ctx.ui.theme),
-      invalidate: () => {},
-    }),
+    (tui) => {
+      let timer: ReturnType<typeof setInterval> | undefined;
+      if (snapshot.some(isLive)) {
+        timer = setInterval(() => tui.requestRender(), 1000);
+        timer.unref();
+      }
+      return {
+        render: (width) => renderThreads(snapshot, width, ctx.ui.theme),
+        invalidate: () => {},
+        dispose: () => {
+          if (timer) clearInterval(timer);
+          timer = undefined;
+        },
+      };
+    },
     { placement: "belowEditor" },
   );
 }
@@ -286,12 +366,12 @@ class AgentColorPickerComponent extends Container {
       {
         value: AGENT_COLOR_DEFAULT,
         label: "Default (inherit)",
-        description: "Use the default accent background for the agent name",
+        description: "Use the default accent background for the type pill",
       },
       ...AGENT_COLORS.map((color) => ({
         value: color,
-        label: agentNameBadge(color, color, theme),
-        description: `Agent name background: ${color}`,
+        label: contrastPill(color, color, theme),
+        description: `Type pill background: ${color}`,
       })),
     ];
     this.preview = new Text();
@@ -334,12 +414,12 @@ class AgentColorPickerComponent extends Container {
   }
 
   private updatePreview(tui: { requestRender(force?: boolean): void }, value: string): void {
-    const badge = agentNameBadge(
-      `/${this.agentName}`,
-      value === AGENT_COLOR_DEFAULT ? undefined : value,
-      this.theme,
+    const color = value === AGENT_COLOR_DEFAULT ? undefined : value;
+    const badge = agentTypeBadge(this.agentName, color, this.theme);
+    const path = agentPath("/root/example-task", color, this.theme);
+    this.preview.setText(
+      `Preview: ${badge} ${path} ${this.theme.fg("accent", "[running]")} Working`,
     );
-    this.preview.setText(`Preview: ${badge} ${this.theme.fg("accent", "[running]")} Working`);
     tui.requestRender();
   }
 }

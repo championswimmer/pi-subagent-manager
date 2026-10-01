@@ -520,3 +520,198 @@ test("startup failure returns a failed thread and does not reject detached spawn
   assert.equal(result.error, "bad model");
   await manager.shutdown();
 });
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test("elapsed freezes across runs and usage deltas do not persist partials", async () => {
+  let run = 0;
+  let releasePartial = () => {};
+  let releaseFinal = () => {};
+  const { manager, events } = fixture({
+    createDriver: async (options) => ({
+      sessionFile: "/tmp/metrics.jsonl",
+      prompt: async () => {
+        run++;
+        if (run === 1) {
+          options.onEvent({ kind: "usage", inputTokens: 9, outputTokens: 1, partial: true });
+          options.onEvent({ kind: "usage", inputTokens: 11, outputTokens: 2, partial: true });
+          await new Promise<void>((resolve) => {
+            releasePartial = resolve;
+          });
+          options.onEvent({ kind: "usage", inputTokens: 15, outputTokens: 4 });
+          options.onEvent({ kind: "usage", inputTokens: 15, outputTokens: 4 });
+          await new Promise<void>((resolve) => {
+            releaseFinal = resolve;
+          });
+          return;
+        }
+        options.onEvent({ kind: "usage", inputTokens: 18, outputTokens: 5, partial: true });
+        options.onEvent({ kind: "usage", inputTokens: 21, outputTokens: 7 });
+      },
+      steer: async () => {},
+      snapshot: () => [],
+      output: () => "answer",
+      abort: async () => {
+        releasePartial();
+        releaseFinal();
+      },
+      dispose: () => {},
+      sendUpdate: () => {},
+    }),
+  });
+
+  await manager.spawn("/root", { path: "worker", type: "worker", task: "work", wait: false });
+  await tick();
+  const live = manager.get("worker");
+  assert.equal(live.state, "running");
+  assert.equal(typeof live.startedAt, "number");
+  assert.equal(live.inputTokens, 11);
+  assert.equal(live.outputTokens, 2);
+  assert.equal(live.elapsedMs, 0);
+  assert.equal(
+    events.some((event) => event.kind === "metrics" && event.thread.inputTokens === 11),
+    true,
+  );
+  const stable = JSON.stringify(manager.saved());
+  assert.equal(JSON.parse(stable)[0].view.inputTokens, 0);
+  assert.equal(JSON.parse(stable)[0].view.outputTokens, 0);
+  assert.equal(Object.hasOwn(JSON.parse(stable)[0].view, "startedAt"), false);
+  await delay(30);
+  assert.equal(JSON.stringify(manager.saved()), stable);
+
+  releasePartial();
+  await tick();
+  assert.equal(manager.get("worker").inputTokens, 15);
+  assert.equal(manager.get("worker").outputTokens, 4);
+  assert.equal(manager.saved()[0]?.view.inputTokens, 15);
+  assert.equal(manager.saved()[0]?.view.outputTokens, 4);
+  assert.equal(manager.get("worker").startedAt !== undefined, true);
+  const settledBeforeFreeze = JSON.stringify(manager.saved());
+  await delay(20);
+  assert.equal(JSON.stringify(manager.saved()), settledBeforeFreeze);
+
+  releaseFinal();
+  const completed = await manager.wait("/root", "worker");
+  assert.equal(completed.state, "completed");
+  assert.equal(completed.startedAt, undefined);
+  assert.equal(completed.inputTokens, 15);
+  assert.equal(completed.outputTokens, 4);
+  assert.ok((completed.elapsedMs ?? 0) >= 20);
+  assert.equal(Object.hasOwn(manager.saved()[0]!.view, "startedAt"), false);
+  const frozen = completed.elapsedMs!;
+  await delay(30);
+  assert.equal(manager.get("worker").elapsedMs, frozen);
+
+  await manager.steer("/root", "worker", "continue");
+  await tick();
+  const resumed = await manager.wait("/root", "worker");
+  assert.equal(resumed.inputTokens, 21);
+  assert.equal(resumed.outputTokens, 7);
+  assert.ok((resumed.elapsedMs ?? 0) >= frozen);
+  assert.equal(resumed.startedAt, undefined);
+
+  const saved = manager.saved();
+  await manager.shutdown();
+  await delay(40);
+  const restored = fixture();
+  restored.manager.restore(saved);
+  assert.equal(restored.manager.get("worker").elapsedMs, saved[0]?.view.elapsedMs);
+  assert.equal(restored.manager.get("worker").inputTokens, 21);
+  assert.equal(restored.manager.get("worker").outputTokens, 7);
+  assert.equal(restored.manager.get("worker").startedAt, undefined);
+  await delay(30);
+  assert.equal(restored.manager.get("worker").elapsedMs, saved[0]?.view.elapsedMs);
+  await restored.manager.shutdown();
+});
+
+test("legacy restore defaults missing metrics to zero and resumes add driver deltas", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 1000 });
+  let emitUsage: ((input: number, output: number) => void) | undefined;
+  const { manager } = fixture({
+    createDriver: async (options) => ({
+      sessionFile: "/tmp/legacy.jsonl",
+      prompt: async () => {
+        emitUsage = (input, output) =>
+          options.onEvent({ kind: "usage", inputTokens: input, outputTokens: output });
+      },
+      steer: async () => {},
+      snapshot: () => [],
+      output: () => "answer",
+      abort: async () => {},
+      dispose: () => {},
+      sendUpdate: () => {},
+    }),
+  });
+  manager.restore([
+    {
+      view: {
+        path: "/root/worker",
+        parent: "/root",
+        owner: "/root",
+        type: "worker",
+        state: "completed",
+        task: "old",
+        status: "Completed",
+        createdAt: 1,
+        sessionFile: "/tmp/legacy.jsonl",
+      },
+      definition: { name: "worker", description: "test", systemPrompt: "child prompt" },
+    },
+  ]);
+  assert.equal(manager.get("worker").elapsedMs, 0);
+  assert.equal(manager.get("worker").inputTokens, 0);
+  assert.equal(manager.get("worker").outputTokens, 0);
+  assert.equal(manager.get("worker").startedAt, undefined);
+
+  await manager.steer("/root", "worker", "resume");
+  await tick();
+  emitUsage!(4, 2);
+  assert.equal(manager.get("worker").inputTokens, 4);
+  assert.equal(manager.get("worker").outputTokens, 2);
+  assert.equal(manager.saved()[0]?.view.inputTokens, 4);
+  await manager.shutdown();
+
+  let resumedEmit: ((input: number, output: number) => void) | undefined;
+  const resumed = fixture({
+    createDriver: async (options) => ({
+      sessionFile: "/tmp/legacy.jsonl",
+      prompt: async () => {
+        resumedEmit = (input, output) =>
+          options.onEvent({ kind: "usage", inputTokens: input, outputTokens: output });
+      },
+      steer: async () => {},
+      snapshot: () => [],
+      output: () => "answer",
+      abort: async () => {},
+      dispose: () => {},
+      sendUpdate: () => {},
+    }),
+  });
+  resumed.manager.restore([
+    {
+      view: {
+        path: "/root/worker",
+        parent: "/root",
+        owner: "/root",
+        type: "worker",
+        state: "paused",
+        task: "old",
+        status: "Paused",
+        createdAt: 1,
+        sessionFile: "/tmp/legacy.jsonl",
+        elapsedMs: 80,
+        inputTokens: 10,
+        outputTokens: 3,
+      },
+      definition: { name: "worker", description: "test", systemPrompt: "child prompt" },
+    },
+  ]);
+  await resumed.manager.steer("/root", "worker", "again");
+  await tick();
+  resumedEmit!(5, 1);
+  assert.equal(resumed.manager.get("worker").inputTokens, 15);
+  assert.equal(resumed.manager.get("worker").outputTokens, 4);
+  assert.equal(resumed.manager.get("worker").elapsedMs, 80);
+  assert.equal(resumed.manager.saved()[0]?.view.inputTokens, 15);
+  await resumed.manager.shutdown();
+});

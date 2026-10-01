@@ -24,6 +24,11 @@ interface Record {
   run?: Promise<void>;
   started?: Promise<void>;
   sessionLeafId?: string | null;
+  /** Last authoritative cumulative usage applied from the current driver. */
+  usageCursor?: { input: number; output: number };
+  /** In-progress message usage. Shown live, never persisted. */
+  liveInputTokens?: number;
+  liveOutputTokens?: number;
   pauseRequested: boolean;
   stopRequested: boolean;
 }
@@ -127,6 +132,10 @@ export class ThreadManager {
         error: current.error,
         createdAt: current.createdAt,
         sessionFile: current.sessionFile,
+        // Settled totals only. startedAt and partial usage must not churn persistence.
+        elapsedMs: record.view.elapsedMs ?? 0,
+        inputTokens: record.view.inputTokens ?? 0,
+        outputTokens: record.view.outputTokens ?? 0,
       };
       const sessionLeafId = this.sessionLeafId(record);
       if (sessionLeafId !== undefined) view.sessionLeafId = sessionLeafId;
@@ -155,7 +164,14 @@ export class ThreadManager {
       )
         throw new Error("Invalid saved thread registry");
       const { sessionLeafId, ...storedView } = savedView;
-      const view: ThreadView = { ...storedView, updatedAt: Date.now() };
+      const view: ThreadView = {
+        ...storedView,
+        updatedAt: Date.now(),
+        elapsedMs: storedView.elapsedMs ?? 0,
+        inputTokens: storedView.inputTokens ?? 0,
+        outputTokens: storedView.outputTokens ?? 0,
+      };
+      delete view.startedAt;
       if (view.parent !== parentPath(path)) throw new Error(`Invalid saved parent for ${path}`);
       if (active(view)) {
         view.state = "paused";
@@ -241,6 +257,9 @@ export class ThreadManager {
         status: "Starting",
         createdAt: now,
         updatedAt: now,
+        elapsedMs: 0,
+        inputTokens: 0,
+        outputTokens: 0,
       },
       definition: type,
       inherited,
@@ -394,11 +413,13 @@ export class ThreadManager {
   }
 
   private start(record: Record, message: string): void {
+    this.freezeElapsed(record);
     record.pauseRequested = false;
     record.stopRequested = false;
     record.startup = new AbortController();
     record.view.state = "starting";
     record.view.status = "Starting";
+    record.view.startedAt = Date.now();
     delete record.view.output;
     delete record.view.error;
     const epoch = this.epoch;
@@ -437,6 +458,9 @@ export class ThreadManager {
         record.view.error = errorText(error);
         record.view.status = record.stopRequested ? "Stopped; session retained" : record.view.error;
       } finally {
+        this.freezeElapsed(record);
+        record.liveInputTokens = 0;
+        record.liveOutputTokens = 0;
         markStarted(); // Failed/cancelled initialization must also release callers waiting to steer.
         this.touch(record);
         if (!this.disposed && epoch === this.epoch)
@@ -475,6 +499,10 @@ export class ThreadManager {
             signal,
             shouldPause: () => record.pauseRequested,
             onEvent: (event) => {
+              if (event.kind === "usage") {
+                this.applyUsage(record, event);
+                return;
+              }
               if (event.kind === "checkpoint") {
                 this.touch(record);
                 return;
@@ -496,6 +524,9 @@ export class ThreadManager {
             throw new Error("Driver startup cancelled");
           }
           record.driver = driver;
+          record.usageCursor = { input: 0, output: 0 };
+          record.liveInputTokens = 0;
+          record.liveOutputTokens = 0;
           record.view.sessionFile = driver.sessionFile;
           if (driver.sessionLeafId !== undefined) record.sessionLeafId = driver.sessionLeafId;
           this.touch(record);
@@ -513,6 +544,36 @@ export class ThreadManager {
   private touch(record: Record): void {
     record.view.updatedAt = Date.now();
     if (!this.disposed) this.options.onEvent?.({ kind: "change", thread: this.view(record) });
+  }
+  /** Fold driver-cumulative usage into persisted totals. Partials only refresh the live view. */
+  private applyUsage(
+    record: Record,
+    event: { inputTokens: number; outputTokens: number; partial?: boolean },
+  ): void {
+    const cursor = record.usageCursor ?? { input: 0, output: 0 };
+    if (event.partial) {
+      const input = Math.max(0, event.inputTokens - cursor.input);
+      const output = Math.max(0, event.outputTokens - cursor.output);
+      if (input === record.liveInputTokens && output === record.liveOutputTokens) return;
+      record.liveInputTokens = input;
+      record.liveOutputTokens = output;
+      if (!this.disposed) this.options.onEvent?.({ kind: "metrics", thread: this.view(record) });
+      return;
+    }
+    record.view.inputTokens =
+      (record.view.inputTokens ?? 0) + Math.max(0, event.inputTokens - cursor.input);
+    record.view.outputTokens =
+      (record.view.outputTokens ?? 0) + Math.max(0, event.outputTokens - cursor.output);
+    record.usageCursor = { input: event.inputTokens, output: event.outputTokens };
+    record.liveInputTokens = 0;
+    record.liveOutputTokens = 0;
+    this.touch(record);
+  }
+  private freezeElapsed(record: Record): void {
+    const startedAt = record.view.startedAt;
+    if (startedAt === undefined) return;
+    record.view.elapsedMs = (record.view.elapsedMs ?? 0) + Math.max(0, Date.now() - startedAt);
+    delete record.view.startedAt;
   }
   private prepareInheritedContext(record: Record, readOnly = false): Promise<void> | undefined {
     if (!record.contextPending) return record.contextReady;
@@ -552,10 +613,14 @@ export class ThreadManager {
     return parentRecord.driver?.sessionFile ?? parentRecord.view.sessionFile;
   }
   private view(record: Record): ThreadView {
-    return structuredClone({
+    const view = structuredClone({
       ...record.view,
       sessionFile: record.driver ? record.driver.sessionFile : record.view.sessionFile,
     });
+    if (record.liveInputTokens) view.inputTokens = (view.inputTokens ?? 0) + record.liveInputTokens;
+    if (record.liveOutputTokens)
+      view.outputTokens = (view.outputTokens ?? 0) + record.liveOutputTokens;
+    return view;
   }
   private record(path: string): Record {
     const record = this.records.get(path);

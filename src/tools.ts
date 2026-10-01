@@ -56,7 +56,15 @@ export function agentTools(
     make(
       "agent_spawn",
       "Spawn a named child. The lexical parent, NOT the caller, supplies a context snapshot. /root is the main thread; independent roots have no inherited context. Foreground waits by default; wait:false runs detached. For parallel work, spawn every independent sibling with wait:false before calling agent_wait; child agents with delegation tools should do the same. Existing paths are retained and can be resumed with agent_steer. Use agent_types to discover current types.",
-      Type.Object({ path, type: text, task: text, wait: Type.Optional(Type.Boolean()) }),
+      Type.Object({
+        path: Type.String({
+          description:
+            "Task-based kebab-case path, not the agent type (e.g. /root/controller-security-research), or a task name relative to the caller",
+        }),
+        type: text,
+        task: text,
+        wait: Type.Optional(Type.Boolean()),
+      }),
       async (params, signal) => result(compact(await threads().spawn(params, signal))),
     ),
     make(

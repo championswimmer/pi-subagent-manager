@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, realpath } from "node:fs/promises";
 import {
@@ -309,6 +310,7 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
         "When finished, give your final answer normally so it can be handed back. To retain unfinished work without a final answer, call agent_pause (if available), then stop; resume only when instructed.",
         ...(allowed.has("agent_spawn") && allowed.has("agent_wait")
           ? [
+              "Name child paths with concise task-based kebab-case slugs (e.g. /root/controller-security-research), independent of type.",
               "For independent parallel work, launch all siblings with agent_spawn wait:false before calling agent_wait. Children share the main conversation's depth and concurrency limits; waiting parents count as active. Do not delegate work beyond your assigned scope.",
             ]
           : []),
@@ -480,10 +482,22 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
     let running = false;
     let aborted = false;
     let baseline = session.messages.length;
+    // Subscribe after inherited/restored history is loaded; only new assistant events are counted.
+    let settledInput = 0;
+    let settledOutput = 0;
+    const countedUsage = new WeakSet<object>();
     let finalOutput = "";
     let abortPromise: Promise<void> | undefined;
     const emit = (kind: "activity" | "error", text: string) =>
       options.onEvent({ kind, text: text.slice(0, 1000) });
+    const assistantUsage = (message: AssistantMessage) => {
+      const usage = message.usage;
+      const input = usage.input + usage.cacheRead + usage.cacheWrite;
+      const output = usage.output;
+      if (!Number.isFinite(input) || !Number.isFinite(output)) return;
+      return { input, output, reported: input + output + usage.totalTokens > 0 };
+    };
+
     const unsubscribe = session.subscribe((event) => {
       if (event.type === "tool_execution_start") emit("activity", `Tool: ${event.toolName}`);
       if (event.type === "tool_execution_end")
@@ -491,12 +505,37 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
           event.isError ? "error" : "activity",
           `Tool ${event.toolName}: ${event.isError ? "failed" : "finished"}`,
         );
-      if (event.type === "message_end" && event.message.role === "assistant") {
-        const text = event.message.content
-          .filter((block) => block.type === "text")
-          .map((block) => block.text)
-          .join("");
-        if (text) emit("activity", text);
+      if (
+        (event.type === "message_update" || event.type === "message_end") &&
+        event.message.role === "assistant" &&
+        !countedUsage.has(event.message)
+      ) {
+        const usage = assistantUsage(event.message);
+        if (event.type === "message_update") {
+          if (usage?.reported)
+            options.onEvent({
+              kind: "usage",
+              inputTokens: settledInput + usage.input,
+              outputTokens: settledOutput + usage.output,
+              partial: true,
+            });
+        } else {
+          countedUsage.add(event.message);
+          if (usage) {
+            settledInput += usage.input;
+            settledOutput += usage.output;
+          }
+          options.onEvent({
+            kind: "usage",
+            inputTokens: settledInput,
+            outputTokens: settledOutput,
+          });
+          const text = event.message.content
+            .filter((block) => block.type === "text")
+            .map((block) => block.text)
+            .join("");
+          if (text) emit("activity", text);
+        }
       }
     });
     const assertOpen = () => {

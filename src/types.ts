@@ -10,7 +10,7 @@ export interface AgentType {
   /** @deprecated Use ordered models instead. */
   model?: string;
   thinkingLevel?: ThinkingLevel;
-  /** Pi semantic token used as the agent name pill's background. */
+  /** Pi semantic token for the type pill background and task path foreground. */
   color?: string;
   tools?: { allow?: string[]; block?: string[] };
   systemPrompt: string;
@@ -32,6 +32,14 @@ export interface ThreadView {
   createdAt: number;
   updatedAt: number;
   sessionFile?: string;
+  /** Frozen active time. Renderer adds `Date.now() - startedAt` while a run is active. */
+  elapsedMs?: number;
+  /** Current run start. Live only; omitted from saved views so reloads do not count offline time. */
+  startedAt?: number;
+  /** Cumulative input tokens, including cache read/write. Live views include the in-progress message. */
+  inputTokens?: number;
+  /** Cumulative output tokens. Live views include the in-progress message. */
+  outputTokens?: number;
 }
 export type DriverEvent =
   | { kind: "activity" | "error"; text: string }
@@ -40,6 +48,14 @@ export type DriverEvent =
       text: string;
       sessionFile?: string;
       sessionLeafId?: string | null;
+    }
+  | {
+      kind: "usage";
+      /** Cumulative own-assistant tokens for this driver instance, excluding inherited history. */
+      inputTokens: number;
+      outputTokens: number;
+      /** Streaming message_update snapshot. Omit for authoritative message_end. */
+      partial?: boolean;
     };
 export interface AgentDriver {
   prompt(message: string): Promise<void>;
@@ -80,6 +96,10 @@ export interface SavedThreadView {
   createdAt: number;
   sessionFile?: string;
   sessionLeafId?: string | null;
+  /** Frozen cumulative active time. `startedAt` is intentionally not persisted. */
+  elapsedMs?: number;
+  inputTokens?: number;
+  outputTokens?: number;
 }
 export interface SavedThread {
   view: SavedThreadView;
@@ -105,6 +125,7 @@ export interface ThreadService {
 export type DriverFactory = (options: DriverOptions) => Promise<AgentDriver>;
 export type ThreadEvent =
   | { kind: "change"; thread: ThreadView }
+  | { kind: "metrics"; thread: ThreadView }
   | { kind: "update"; thread: ThreadView; message: string; recipient: string }
   | { kind: "settled"; thread: ThreadView; recipient: string };
 export interface ManagerOptions {

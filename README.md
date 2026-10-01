@@ -79,7 +79,7 @@ The Markdown body is the agent's system prompt. `name` and `description` are req
 - **models:** an ordered YAML list of exact `provider/model-id` preferences. Model IDs may contain additional slashes. The first entry that exists in `/scoped-models` wins; the scan follows the list order, not the scoped-model order.
 - **model:** deprecated compatibility alias for a single preference. Existing definitions still parse, but saving normalizes them to `models:` and does not write `model:` back out.
 - **thinkingLevel:** `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. The SDK applies the selected model's supported levels.
-- **color:** a pi semantic color, such as `accent`, `success`, `warning`, `error`, `muted` or `dim`, used as the background of the agent's name pill. Text is bold and automatically contrasts with the background. The color picker previews the pill; colors follow theme changes. Unset uses `accent`.
+- **color:** a pi semantic color, such as `accent`, `success`, `warning`, `error`, `muted` or `dim`, used as the background of the agent's type pill (e.g. `[researcher]`) and the foreground of its task-based path. Pill text is bold and automatically contrasts with the background. The color picker previews both; colors follow theme changes. Unset uses `accent`.
 - **tools:** exact-name `allow` and/or `block` lists. Block wins. An empty allow list means **no tools**; omission allows supported tools. Unavailable names fail clearly, rather than widening access.
 
 If `models`/`model` is omitted, the agent inherits the effective parent/default model. Matching is strict: preferences are matched verbatim against `/scoped-models`, and if none match — including when `/scoped-models` is empty — spawn fails with an actionable error instead of falling back to the registry.
@@ -97,9 +97,9 @@ Project types override global types. Malformed definitions and same-scope duplic
 - `/agents types`: create/edit agent types. Field dialogs edit YAML defaults while preserving the prompt. Model preferences use an ordered picker: add available models (scoped entries are marked), remove entries, and move them up/down to control preference order. The YAML editor edits the header together; **Open in external editor** edits the whole Markdown file using `$VISUAL`, `$EDITOR`, or `vi`.
 - `/agents reload`: reload definitions and show diagnostics.
 - `/agents`: pick a thread, inspect its output/transcript, send input/resume, or stop it.
-- `/agents thread /root/coding-researcher`: open one thread directly.
+- `/agents thread /root/controller-security-research`: open one thread directly.
 
-A compact, themed activity widget appears **below the editor, above pi's footer/status area**. Working threads are prioritized; excess rows are counted instead of taking over the screen. The existing footer is unchanged.
+A compact, themed activity widget appears **below the editor, above pi's footer/status area**. Working threads are prioritized; excess rows are counted instead of taking over the screen. Each row shows a colored type pill and a matching foreground-only task path, with elapsed active time and cumulative input `↑` / output `↓` token counts on the right. Time refreshes every second while running; tokens refresh as the provider reports usage. Pauses freeze time; resuming accumulates it. The existing footer is unchanged.
 
 ## Model-facing tools
 
@@ -116,10 +116,10 @@ A compact, themed activity widget appears **below the editor, above pi's footer/
 | `agent_output` | Page through final text using character offsets     |
 
 ```json
-{ "path": "coding-researcher", "type": "researcher", "task": "Investigate this API", "wait": false }
+{ "path": "controller-security-research", "type": "researcher", "task": "Investigate controller security", "wait": false }
 ```
 
-Then use `agent_wait` or `agent_status` on `/root/coding-researcher`.
+Choose concise kebab-case paths describing the task, independently of the type. Then use `agent_wait` or `agent_status` on `/root/controller-security-research`.
 
 ### Parallel and nested work
 

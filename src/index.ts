@@ -96,7 +96,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
     }
   };
   const delivery = (event: ThreadEvent) => {
-    if (event.kind === "change") return;
+    if (event.kind === "change" || event.kind === "metrics") return;
     const thread = event.thread;
     const message =
       event.kind === "update"
@@ -123,7 +123,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
 
   for (const tool of agentTools(requireManager, "/root", () => store.list())) pi.registerTool(tool);
   pi.on("before_agent_start", async (event) => ({
-    systemPrompt: `${event.systemPrompt}\n\n## pi-subagent\nYou are /root. Thread paths determine context ancestry, independently of agent type. Children can pause WITHOUT handing back an answer; completed and paused sessions can both receive more work via agent_steer. Working child threads appear above the footer. The main conversation is L1; the maximum is ${limits.maxLevels} levels including L1. For independent work, spawn all siblings with wait:false before calling agent_wait; the same pattern applies inside child agents that have delegation tools. Waiting parents count toward the shared ${limits.maxConcurrent}-thread concurrency limit. Available types:\n${store
+    systemPrompt: `${event.systemPrompt}\n\n## pi-subagent\nYou are /root. Thread paths determine context ancestry, independently of agent type. Name children with concise task-based kebab-case paths (e.g. /root/controller-security-research), not their type name. Children can pause WITHOUT handing back an answer; completed and paused sessions can both receive more work via agent_steer. Working child threads appear above the footer. The main conversation is L1; the maximum is ${limits.maxLevels} levels including L1. For independent work, spawn all siblings with wait:false before calling agent_wait; the same pattern applies inside child agents that have delegation tools. Waiting parents count toward the shared ${limits.maxConcurrent}-thread concurrency limit. Available types:\n${store
       .list()
       .map((type) => `- ${type.name}: ${type.description}`)
       .join(
@@ -152,7 +152,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
       onEvent: (event) => {
         if (token !== generation) return;
         updateWidget(requireContext(), requireManager().list());
-        persist();
+        if (event.kind !== "metrics") persist();
         delivery(event);
       },
     });
@@ -197,9 +197,10 @@ export default function piSubagent(pi: ExtensionAPI): void {
   pi.on("session_before_switch", stopWorkingThreads);
   pi.on("session_before_fork", stopWorkingThreads);
   pi.on("session_shutdown", async () => {
-    persist();
     generation++;
     await manager?.shutdown();
+    persist();
+    if (context?.hasUI) context.ui.setWidget("pi-subagent", undefined);
     manager = undefined;
     context = undefined;
   });

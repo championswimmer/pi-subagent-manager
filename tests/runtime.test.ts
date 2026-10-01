@@ -23,7 +23,7 @@ import {
   MAILBOX_FIELD,
 } from "../src/mailbox.ts";
 import { createDriverFactory } from "../src/runtime.ts";
-import type { DriverOptions, AgentDriver } from "../src/types.ts";
+import type { AgentDriver, DriverEvent, DriverOptions } from "../src/types.ts";
 
 const answer = (text: string): AssistantMessage => ({
   role: "assistant",
@@ -91,6 +91,8 @@ test("isolated real SDK driver without credentials", async (t) => {
     let calls = 0;
     let next = answer("child answer");
     let beforeDone: Promise<void> | undefined;
+    let scripted:
+      ((stream: ReturnType<typeof createAssistantMessageEventStream>) => void) | undefined;
     const requests: { system: string; model: Model<any>; messages: unknown[]; apiKey?: string }[] =
       [];
     const registerProvider = (provider: string, ids: string[]) =>
@@ -115,6 +117,12 @@ test("isolated real SDK driver without credentials", async (t) => {
             apiKey: streamOptions?.apiKey,
           });
           const stream = createAssistantMessageEventStream();
+          if (scripted) {
+            const run = scripted;
+            scripted = undefined;
+            run(stream);
+            return stream;
+          }
           const reply = {
             ...structuredClone(next),
             provider: model.provider,
@@ -169,7 +177,7 @@ test("isolated real SDK driver without credentials", async (t) => {
       ctx.model = registry.find(identity.slice(0, slash), identity.slice(slash + 1))!;
     };
     const factory = createDriverFactory(() => ctx);
-    const events: { kind: string; text: string }[] = [];
+    const events: DriverEvent[] = [];
     let pause = false;
     const options = (overrides: Partial<DriverOptions> = {}): DriverOptions => ({
       path: "/root/child",
@@ -893,7 +901,12 @@ test("isolated real SDK driver without credentials", async (t) => {
       await driver.abort();
       await assert.rejects(driver.prompt("closed"), /disposed/);
       assert.ok(events.some((event) => event.kind === "error"));
-      assert.ok(events.every((event) => event.text.length <= 1000));
+      assert.ok(
+        events.every(
+          (event) =>
+            event.kind === "usage" || event.kind === "checkpoint" || event.text.length <= 1000,
+        ),
+      );
     });
 
     await t.test("abort interrupts an active tool without blocking cleanup", async () => {
@@ -1001,6 +1014,124 @@ test("isolated real SDK driver without credentials", async (t) => {
         assert.equal(driver.sessionFile, legacy.getSessionFile());
       },
     );
+
+    await t.test("usage counts only this agent's assistant messages", async () => {
+      const usage = (
+        input: number,
+        output: number,
+        cacheRead = 0,
+        cacheWrite = 0,
+      ): AssistantMessage["usage"] => ({
+        input,
+        output,
+        cacheRead,
+        cacheWrite,
+        totalTokens: input + output + cacheRead + cacheWrite,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      });
+      const assistant = (
+        text: string,
+        tokens: AssistantMessage["usage"],
+        stopReason: AssistantMessage["stopReason"] = "stop",
+      ): AssistantMessage => ({
+        ...answer(text),
+        stopReason,
+        usage: tokens,
+        errorMessage: stopReason === "error" ? "model failed" : undefined,
+      });
+      const usageEvents: Extract<DriverEvent, { kind: "usage" }>[] = [];
+      const driver = await create(
+        options({
+          path: "/root/metrics",
+          inherited: [assistant("inherited answer", usage(500, 500, 20, 20))],
+          onEvent: (event) => {
+            events.push(event);
+            if (event.kind === "usage") usageEvents.push(event);
+          },
+        }),
+      );
+      const partial = assistant("partial", usage(4, 1, 1, 0), "pending");
+      const grown = assistant("partial grown", usage(4, 2, 1, 2), "pending");
+      const finalMessage = assistant("final", usage(6, 4, 2, 3));
+      scripted = (stream) => {
+        void (async () => {
+          await Promise.resolve();
+          stream.push({ type: "start", partial });
+          stream.push({ type: "text_delta", contentIndex: 0, delta: "x", partial });
+          stream.push({ type: "text_delta", contentIndex: 0, delta: "y", partial: grown });
+          stream.push({ type: "done", reason: "stop", message: finalMessage });
+          stream.end(finalMessage);
+        })();
+      };
+      await driver.prompt("count me");
+      assert.deepEqual(
+        usageEvents.map((event) => [event.inputTokens, event.outputTokens, event.partial ?? false]),
+        [
+          [5, 1, true],
+          [7, 2, true],
+          [11, 4, false],
+        ],
+      );
+
+      usageEvents.length = 0;
+      const second = assistant("second", usage(1, 1));
+      scripted = (stream) => {
+        void (async () => {
+          await Promise.resolve();
+          stream.push({ type: "start", partial: { ...second, usage: usage(0, 0) } });
+          stream.push({ type: "done", reason: "stop", message: second });
+          stream.end(second);
+        })();
+      };
+      await driver.prompt("again");
+      assert.deepEqual(
+        usageEvents.map((event) => [event.inputTokens, event.outputTokens, event.partial ?? false]),
+        [[12, 5, false]],
+      );
+
+      usageEvents.length = 0;
+      const failed = assistant("failed", usage(2, 1, 1, 0), "error");
+      scripted = (stream) => {
+        void (async () => {
+          await Promise.resolve();
+          stream.push({ type: "error", reason: "error", error: failed });
+          stream.end(failed);
+        })();
+      };
+      await assert.rejects(driver.prompt("fail"), /model failed/);
+      assert.deepEqual(
+        usageEvents.map((event) => [event.inputTokens, event.outputTokens, event.partial ?? false]),
+        [[15, 6, false]],
+      );
+
+      const file = driver.sessionFile!;
+      driver.dispose();
+      usageEvents.length = 0;
+      const reopened = await create(
+        options({
+          path: "/root/metrics",
+          sessionFile: file,
+          inherited: [],
+          onEvent: (event) => {
+            events.push(event);
+            if (event.kind === "usage") usageEvents.push(event);
+          },
+        }),
+      );
+      const resumed = assistant("resumed", usage(3, 2));
+      scripted = (stream) => {
+        void (async () => {
+          await Promise.resolve();
+          stream.push({ type: "done", reason: "stop", message: resumed });
+          stream.end(resumed);
+        })();
+      };
+      await reopened.prompt("resume");
+      assert.deepEqual(
+        usageEvents.map((event) => [event.inputTokens, event.outputTokens, event.partial ?? false]),
+        [[3, 2, false]],
+      );
+    });
 
     await t.test("invalid model/tool/storage policies fail closed", async () => {
       await assert.rejects(

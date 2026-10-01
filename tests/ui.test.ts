@@ -21,7 +21,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { ThreadView } from "../src/types.ts";
 import { AGENT_COLORS, ConfigStore, parseAgentType, serializeAgentType } from "../src/config.ts";
-import { canonicalPath } from "../src/paths.ts";
 import {
   editAgentTypes,
   editorArguments,
@@ -46,7 +45,10 @@ function thread(path: string, overrides: Partial<ThreadView> = {}): ThreadView {
     ...overrides,
   };
 }
-function testTheme(appearance: "dark" | "light"): Theme {
+function testTheme(
+  appearance: "dark" | "light",
+  mode: "truecolor" | "256color" = "truecolor",
+): Theme {
   // Deterministic fixtures use the public API, independent of terminal color detection.
   const foreground = appearance === "dark" ? "#eeeeee" : "#111111";
   const background = appearance === "dark" ? "#111111" : "#eeeeee";
@@ -68,7 +70,7 @@ function testTheme(appearance: "dark" | "light"): Theme {
       "toolErrorBg",
     ].map((token) => [token, background]),
   ) as ConstructorParameters<typeof Theme>[1];
-  return new Theme(colors, backgrounds, "truecolor", { appearance });
+  return new Theme(colors, backgrounds, mode, { appearance });
 }
 
 const darkTheme = testTheme("dark");
@@ -101,14 +103,26 @@ function expectedBadge(theme: Theme, name: string, color: string | undefined): s
   );
 }
 
+function expectedTypeBadge(theme: Theme, type: string, color: string | undefined): string {
+  return expectedBadge(theme, `[${type}]`, color);
+}
+
+function expectedPath(theme: Theme, path: string, color: string | undefined): string {
+  return theme.fg(badgeToken(color), sanitizeText(path));
+}
+
 function stateToken(state: ThreadView["state"]): "error" | "warning" | "accent" {
   return state === "failed" ? "error" : state === "paused" ? "warning" : "accent";
 }
 
-function expectedThreadLine(theme: Theme, view: ThreadView): string {
-  const badge = expectedBadge(theme, view.path, view.color);
+/** Zero-metric fixtures only. Counters are the literal unset label, padded, not truncated. */
+function expectedThreadLine(theme: Theme, view: ThreadView, width = 80): string {
+  const badge = expectedTypeBadge(theme, view.type, view.color);
+  const path = expectedPath(theme, view.path, view.color);
   const state = theme.fg(stateToken(view.state), `[${sanitizeText(view.state)}]`);
-  return `${badge} ${state} ${sanitizeText(view.status || view.task)}`;
+  const left = `${badge} ${path} ${state} ${sanitizeText(view.status || view.task)}`;
+  const right = theme.fg("muted", "0s ↑0 ↓0");
+  return left + " ".repeat(width - visibleWidth(left) - visibleWidth(right)) + right;
 }
 
 /** Visible text inside each background-color span. Resets are not part of the span. */
@@ -200,25 +214,30 @@ test("widget clears when empty and resolves theme dynamically at render", () => 
     },
   } as unknown as ExtensionContext;
   updateWidget(ctx, [
-    thread("/worker", { color: "success", status: "Working" }),
-    thread("/fallback", { color: "\x1b[31m", status: "Working" }),
+    thread("/worker", { type: "worker", color: "success", status: "Working" }),
+    thread("/fallback", { type: "fallback", color: "\x1b[31m", status: "Working" }),
   ]);
   assert.deepEqual(options, { placement: "belowEditor" });
-  const widget = (content as () => { render(width: number): string[] })();
-  const first = widget.render(120);
+  const tui = { requestRender() {} };
+  const widget = (
+    content as (injected: typeof tui) => { render(width: number): string[]; dispose(): void }
+  )(tui);
+  const first = widget.render(200);
   assert.match(first[0]!, /^first<bg:/);
-  assert.match(first[0]!, /first<fg:accent>\[running\]<\/fg> Working$/);
-  assert.doesNotMatch(first[0]!, /<fg:success>/);
+  assert.match(first[0]!, /first<fg:success>\/worker<\/fg>/);
+  assert.match(first[0]!, /first<fg:accent>\[running\]<\/fg> Working/);
+  assert.match(first[0]!, /first<fg:muted>0s ↑0 ↓0<\/fg>$/);
   marker = "second";
-  const second = widget.render(120);
+  const second = widget.render(200);
   assert.match(second[0]!, /^second<bg:/);
   assert.match(
     second[1]!,
-    /second<bg:1> \/fallback <\/bg> second<fg:accent>\[running\]<\/fg> Working$/,
+    /second<bg:1> \[fallback\] <\/bg> second<fg:accent>\/fallback<\/fg> second<fg:accent>\[running\]<\/fg> Working/,
   );
+  assert.match(second[1]!, /second<fg:muted>0s ↑0 ↓0<\/fg>$/);
   assert.deepEqual(
     styleCalls.map((call) => call.text),
-    [" /worker ", " /fallback ", " /worker ", " /fallback "],
+    [" [worker] ", " [fallback] ", " [worker] ", " [fallback] "],
   );
   assert.deepEqual(
     styleCalls.map((call) => call.marker),
@@ -242,12 +261,21 @@ test("widget clears when empty and resolves theme dynamically at render", () => 
   assert.deepEqual(
     fgCalls.map((call) => ({ color: call.color, text: call.text })),
     [
+      { color: "success", text: "/worker" },
       { color: "accent", text: "[running]" },
+      { color: "muted", text: "0s ↑0 ↓0" },
+      { color: "accent", text: "/fallback" },
       { color: "accent", text: "[running]" },
+      { color: "muted", text: "0s ↑0 ↓0" },
+      { color: "success", text: "/worker" },
       { color: "accent", text: "[running]" },
+      { color: "muted", text: "0s ↑0 ↓0" },
+      { color: "accent", text: "/fallback" },
       { color: "accent", text: "[running]" },
+      { color: "muted", text: "0s ↑0 ↓0" },
     ],
   );
+  widget.dispose();
   updateWidget(ctx, []);
   assert.equal(content, undefined);
   updateWidget(ctx, [thread("/root")]);
@@ -618,44 +646,59 @@ function previewText(component: { getPreview(): { render(width: number): string[
   return component.getPreview().render(160).join("\n");
 }
 
-function assertPreviewMatchesSpawned(
+function assertColorPreview(
   preview: string,
   theme: Theme,
   agentName: string,
   color: string | undefined,
 ) {
-  // Absolute spawn paths keep the leading slash; the preview uses that thread name, not /root/name.
-  const spawned = canonicalPath(`/${agentName}`);
-  assert.equal(spawned, `/${agentName}`);
-  const widget = renderThreads(
-    [thread(spawned, { color, state: "running", status: "Working" })],
-    160,
-    theme,
-  )[0]!;
-  const badge = expectedBadge(theme, spawned, color);
-  const running = `${badge} ${theme.fg("accent", "[running]")} Working`;
-  assert.equal(widget, running);
-  assert.ok(preview.includes(`Preview: ${running}`));
-  assert.deepEqual(backgroundCoveredText(preview), [` ${spawned} `]);
+  // Preview paints the type pill and a sample task path, matching the widget — not a path pill.
+  const taskPath = "/root/example-task";
+  const view = thread(taskPath, { type: agentName, color, state: "running", status: "Working" });
+  const widget = renderThreads([view], 160, theme)[0]!;
+  const badge = expectedTypeBadge(theme, agentName, color);
+  const path = expectedPath(theme, taskPath, color);
+  const head = `${badge} ${path} ${theme.fg("accent", "[running]")} Working`;
+  assert.ok(widget.startsWith(head));
+  assert.ok(preview.includes(`Preview: ${head}`));
+  assert.deepEqual(backgroundCoveredText(preview), [` [${agentName}] `]);
+  assert.ok(preview.includes(path));
+  assert.doesNotMatch(path, /\x1b\[48;/);
 }
 
-test("thread badges paint only the name, with bold contrast on dark and light backgrounds", () => {
+test("thread type pills and paths use the selected color independently of state", () => {
   const channels = new Set<0 | 255>();
-  for (const theme of [darkTheme, lightTheme]) {
+  for (const theme of [
+    darkTheme,
+    lightTheme,
+    testTheme("dark", "256color"),
+    testTheme("light", "256color"),
+  ]) {
     for (const color of ["accent", "success", "warning", "text", "error"] as const) {
-      const view = thread("/worker", { color, state: "running", status: "Working" });
-      const line = renderThreads([view], 80, theme)[0]!;
-      const badge = expectedBadge(theme, view.path, color);
+      const view = thread("/root/controller-security-research", {
+        type: "researcher",
+        color,
+        state: "running",
+        status: "Working",
+      });
+      const line = renderThreads([view], 120, theme)[0]!;
+      const badge = expectedTypeBadge(theme, view.type, color);
+      const path = expectedPath(theme, view.path, color);
       const channel = contrastChannel(theme.colors[color]);
       channels.add(channel);
-      assert.equal(line, expectedThreadLine(theme, view));
-      assert.deepEqual(backgroundCoveredText(line), [" /worker "]);
+      assert.equal(line, expectedThreadLine(theme, view, 120));
+      assert.deepEqual(backgroundCoveredText(line), [" [researcher] "]);
+      assert.ok(line.includes(path));
+      assert.doesNotMatch(path, /\x1b\[48;/);
+      assert.notEqual(badge, path);
       assert.match(badge, /\x1b\[1m/);
       assert.ok(
         badge.includes(foregroundAnsi(rgbColor(channel, channel, channel), theme.getColorMode())),
       );
       assert.doesNotMatch(line.slice(badge.length), /\x1b\[48;/);
       assert.doesNotMatch(line.slice(badge.length), /\x1b\[1m/);
+      if (theme.getColorMode() === "256color") assert.match(path, /\x1b\[38;5;/);
+      else assert.match(path, /\x1b\[38;2;/);
     }
   }
   assert.ok(channels.has(0), "a light background must use black text");
@@ -668,37 +711,205 @@ test("thread badges paint only the name, with bold contrast on dark and light ba
     ["completed", "accent"],
     ["stopped", "accent"],
   ] as const) {
-    const view = thread("/worker", { state, color: "success", status: "Busy", task: "Ignored" });
+    const view = thread("/worker", {
+      type: "researcher",
+      state,
+      color: "success",
+      status: "Busy",
+      task: "Ignored",
+    });
     const line = renderThreads([view], 80, darkTheme)[0]!;
     assert.equal(line, expectedThreadLine(darkTheme, view));
     assert.ok(line.includes(darkTheme.fg(token, `[${state}]`)));
-    assert.ok(line.endsWith(" Busy"));
-    assert.deepEqual(backgroundCoveredText(line), [" /worker "]);
+    assert.ok(line.includes(darkTheme.fg("success", "/worker")));
+    assert.match(stripTerminalSequences(line), / Busy +/);
+    assert.deepEqual(backgroundCoveredText(line), [" [researcher] "]);
   }
 
   const invalid = thread("/owned\x1b[31m", {
+    type: "bad\x1b[31m",
     color: "\x1b[31mnot-a-token",
     state: "failed",
     status: "",
     task: "Recover",
   });
-  const fallback = renderThreads([invalid], 80, darkTheme)[0]!;
-  assert.equal(fallback, expectedThreadLine(darkTheme, invalid));
+  const fallback = renderThreads([invalid], 100, darkTheme)[0]!;
+  assert.equal(fallback, expectedThreadLine(darkTheme, invalid, 100));
   assert.equal(
-    expectedBadge(darkTheme, invalid.path, invalid.color),
-    expectedBadge(darkTheme, invalid.path, "accent"),
+    expectedTypeBadge(darkTheme, invalid.type, invalid.color),
+    expectedTypeBadge(darkTheme, invalid.type, "accent"),
   );
-  assert.deepEqual(backgroundCoveredText(fallback), [` ${sanitizeText(invalid.path)} `]);
-  assert.ok(fallback.endsWith(" Recover"));
-  // Badge padding plus the separator before [state] is two spaces; controls are stripped, not shown.
   assert.equal(
-    stripTerminalSequences(fallback),
-    ` ${sanitizeText(invalid.path)}  [failed] Recover`,
+    expectedPath(darkTheme, invalid.path, invalid.color),
+    expectedPath(darkTheme, invalid.path, "accent"),
   );
+  assert.deepEqual(backgroundCoveredText(fallback), [` [${sanitizeText(invalid.type)}] `]);
+  assert.ok(stripTerminalSequences(fallback).includes("Recover"));
   assert.ok(!/[\x00-\x1f\x7f-\x9f]/.test(stripTerminalSequences(fallback)));
 });
 
-test("color picker badges are backgrounds, preview the renamed path, and cancel keeps success", async () => {
+test("widget keeps counters right-aligned when the left side is long or hostile", () => {
+  const hostile = "\x1b[31mred\x1b[0m\x1b]0;owned\x07\n\x00" + "界".repeat(30);
+  const view = thread("/root/" + "p".repeat(180), {
+    type: "researcher" + hostile,
+    status: hostile,
+    task: hostile,
+    color: "success",
+    elapsedMs: 65_000,
+    inputTokens: 1_200,
+    outputTokens: 34,
+  });
+  const counters = "1m5s ↑1.2k ↓34";
+  const styled = darkTheme.fg("muted", counters);
+  for (const width of [0, 1, 4, 8, 16, 40, 80]) {
+    const line = renderThreads([view], width, darkTheme)[0]!;
+    assert.ok(visibleWidth(line) <= width);
+    assert.ok(!/[\x00-\x1f\x7f-\x9f]/.test(stripTerminalSequences(line)));
+    if (width >= visibleWidth(styled)) {
+      assert.ok(line.endsWith(styled));
+      assert.equal(visibleWidth(line), width);
+      assert.ok(!stripTerminalSequences(line).includes("p".repeat(40)));
+    }
+  }
+  const short = renderThreads([thread("/a", { type: "worker", status: "ok" })], 60, darkTheme)[0]!;
+  const plain = stripTerminalSequences(short);
+  const countersAt = plain.lastIndexOf("0s ↑0 ↓0");
+  assert.equal(visibleWidth(short), 60);
+  assert.ok(short.endsWith(darkTheme.fg("muted", "0s ↑0 ↓0")));
+  assert.ok(countersAt > 0);
+  assert.equal(plain[countersAt - 1], " ");
+});
+
+test("widget counter literals cover duration steps and count boundaries", () => {
+  const cases = [
+    { elapsedMs: 65_000, inputTokens: 999, outputTokens: 1_000, counters: "1m5s ↑999 ↓1k" },
+    {
+      elapsedMs: 3_600_000,
+      inputTokens: 1_200,
+      outputTokens: 999_999,
+      counters: "1h0m ↑1.2k ↓1m",
+    },
+    {
+      elapsedMs: 86_400_000,
+      inputTokens: 1_000_000,
+      outputTokens: 1_500_000,
+      counters: "1d0h ↑1m ↓1.5m",
+    },
+    { elapsedMs: -5, inputTokens: Number.NaN, outputTokens: -1, counters: "0s ↑0 ↓0" },
+  ];
+  for (const { counters, ...metrics } of cases) {
+    const line = stripTerminalSequences(
+      renderThreads([thread("/job", { state: "completed", ...metrics })], 80, darkTheme)[0]!,
+    );
+    assert.ok(line.endsWith(` ${counters}`), line);
+  }
+});
+
+test("widget timer rerenders live elapsed and does not run when settled or headless", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 1_000_000 });
+  const intervals = globalThis.setInterval;
+  let unrefs = 0;
+  globalThis.setInterval = ((fn: TimerHandler, ms?: number, ...args: unknown[]) => {
+    const timer = intervals(fn, ms as number, ...args) as unknown as NodeJS.Timeout;
+    const unref = timer.unref.bind(timer);
+    timer.unref = () => {
+      unrefs += 1;
+      return unref();
+    };
+    return timer;
+  }) as unknown as typeof setInterval;
+  try {
+    let renders = 0;
+    let component: { render(width: number): string[]; dispose(): void } | undefined;
+    const tui = {
+      requestRender: () => {
+        renders += 1;
+      },
+    };
+    const ctx = {
+      hasUI: true,
+      ui: {
+        theme: darkTheme,
+        setWidget: (_key: string, factory: unknown) => {
+          component?.dispose();
+          component =
+            typeof factory === "function"
+              ? (factory(tui) as { render(width: number): string[]; dispose(): void })
+              : undefined;
+        },
+      },
+    } as unknown as ExtensionContext;
+    const line = () => stripTerminalSequences(component!.render(100)[0]!);
+
+    updateWidget(ctx, [
+      thread("/root/job", {
+        type: "researcher",
+        state: "running",
+        startedAt: 995_000,
+        elapsedMs: 2_000,
+        inputTokens: 10,
+        outputTokens: 3,
+      }),
+    ]);
+    assert.equal(unrefs, 1);
+    assert.match(line(), /7s ↑10 ↓3$/);
+    t.mock.timers.tick(1000);
+    assert.equal(renders, 1);
+    assert.match(line(), /8s ↑10 ↓3$/);
+
+    renders = 0;
+    const previous = component!;
+    updateWidget(ctx, [
+      thread("/root/job", {
+        type: "researcher",
+        state: "running",
+        startedAt: Date.now(),
+        elapsedMs: 65_000,
+        inputTokens: 1_200,
+        outputTokens: 34,
+      }),
+    ]);
+    assert.notEqual(component, previous);
+    assert.equal(unrefs, 2);
+    assert.match(line(), /1m5s ↑1.2k ↓34$/);
+    t.mock.timers.tick(1000);
+    assert.equal(renders, 1, "replacing a live widget must dispose the previous timer");
+    assert.match(line(), /1m6s ↑1.2k ↓34$/);
+
+    renders = 0;
+    updateWidget(ctx, [
+      thread("/done", {
+        state: "completed",
+        startedAt: 1,
+        elapsedMs: 9_000,
+        inputTokens: 1_500_000,
+      }),
+    ]);
+    assert.match(line(), /9s ↑1.5m ↓0$/);
+    t.mock.timers.tick(5000);
+    assert.equal(renders, 0);
+    assert.equal(unrefs, 2);
+
+    updateWidget(
+      {
+        hasUI: false,
+        ui: {
+          setWidget() {
+            throw new Error("no ui");
+          },
+        },
+      } as unknown as ExtensionContext,
+      [thread("/hidden", { state: "running", startedAt: 1_000_000 })],
+    );
+    t.mock.timers.tick(2000);
+    assert.equal(renders, 0);
+  } finally {
+    globalThis.setInterval = intervals;
+    t.mock.timers.reset();
+  }
+});
+
+test("color picker badges are backgrounds, preview the example task path, and cancel keeps success", async () => {
   const { root, store, agentDir } = await workerWithSuccess();
   const theme = darkTheme;
   try {
@@ -710,7 +921,7 @@ test("color picker badges are backgrounds, preview the renamed path, and cancel 
       const fallback = items.find((item: { value: string }) => item.value === "__default__");
       assert.ok(fallback);
       assert.equal(fallback.label, "Default (inherit)");
-      assert.equal(fallback.description, "Use the default accent background for the agent name");
+      assert.equal(fallback.description, "Use the default accent background for the type pill");
       assert.doesNotMatch(fallback.description, /foreground/i);
       for (const color of AGENT_COLORS) {
         const item = items.find((entry: { value: string }) => entry.value === color);
@@ -718,18 +929,18 @@ test("color picker badges are backgrounds, preview the renamed path, and cancel 
         assert.equal(item.label, expectedBadge(theme, color, color));
         assert.equal(stripTerminalSequences(item.label), ` ${color} `);
         assert.match(item.label, /\x1b\[1m/);
-        assert.equal(item.description, `Agent name background: ${color}`);
+        assert.equal(item.description, `Type pill background: ${color}`);
         assert.doesNotMatch(item.description, /foreground/i);
         assert.doesNotMatch(item.label, /●/);
       }
       const selected = component.getSelectList().getSelectedItem();
       assert.equal(selected?.value, "success");
-      assertPreviewMatchesSpawned(previewText(component), theme, "scout", "success");
+      assertColorPreview(previewText(component), theme, "scout", "success");
       assert.doesNotMatch(previewText(component), /\/worker/);
 
       component.handleInput("\x1b[B");
       assert.equal(component.getSelectList().getSelectedItem()?.value, "error");
-      assertPreviewMatchesSpawned(previewText(component), theme, "scout", "error");
+      assertColorPreview(previewText(component), theme, "scout", "error");
 
       component.handleInput("\x1b[A");
       assert.equal(component.getSelectList().getSelectedItem()?.value, "success");
@@ -742,7 +953,7 @@ test("color picker badges are backgrounds, preview the renamed path, and cancel 
         component.handleInput("\x1b[A");
       }
       assert.equal(component.getSelectList().getSelectedItem()?.value, "__default__");
-      assertPreviewMatchesSpawned(previewText(component), theme, "scout", undefined);
+      assertColorPreview(previewText(component), theme, "scout", undefined);
       component.handleInput("\x1b");
     });
     await editAgentTypes(ctx, store);
@@ -763,7 +974,7 @@ test("color picker default unsets a configured success color", async () => {
     const { ctx } = editorContext(root, ["worker", "color", "Save", "Global", undefined]);
     const pickerError = driveColorPicker(ctx, theme, (component) => {
       assert.equal(component.getSelectList().getSelectedItem()?.value, "success");
-      assertPreviewMatchesSpawned(previewText(component), theme, "worker", "success");
+      assertColorPreview(previewText(component), theme, "worker", "success");
       for (
         let step = 0;
         step < AGENT_COLORS.length &&
@@ -773,7 +984,7 @@ test("color picker default unsets a configured success color", async () => {
         component.handleInput("\x1b[A");
       }
       assert.equal(component.getSelectList().getSelectedItem()?.value, "__default__");
-      assertPreviewMatchesSpawned(previewText(component), theme, "worker", undefined);
+      assertColorPreview(previewText(component), theme, "worker", undefined);
       const accent = contrastChannel(theme.colors.accent);
       assert.ok(
         previewText(component).includes(
