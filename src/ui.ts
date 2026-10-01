@@ -110,7 +110,7 @@ function formatCount(value: number | undefined): string {
   return compactCount.format(metricCount(value)).toLowerCase();
 }
 
-function counterLabel(thread: ThreadView, now = Date.now()): string {
+export function threadMetrics(thread: ThreadView, now = Date.now()): string {
   return `${formatDuration(elapsedTotal(thread, now))} ↑${formatCount(thread.inputTokens)} ↓${formatCount(thread.outputTokens)}`;
 }
 
@@ -152,7 +152,7 @@ export function renderThreads(
     const path = agentPath(thread.path, thread.color, theme);
     const state = theme.fg(stateColor, `[${sanitizeText(thread.state)}]`);
     const left = `${badge} ${path} ${state} ${sanitizeText(thread.status || thread.task)}`;
-    return fitLine(left, theme.fg("muted", counterLabel(thread)), Math.max(0, width));
+    return fitLine(left, theme.fg("muted", threadMetrics(thread)), Math.max(0, width));
   });
   if (visible.length > limit) {
     lines.push(

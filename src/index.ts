@@ -11,6 +11,7 @@ import { ConfigStore } from "./config.ts";
 import { ThreadManager } from "./manager.ts";
 import { DEFAULT_MANAGER_SETTINGS, loadManagerSettings } from "./settings.ts";
 import { configureAgents } from "./settings-ui.ts";
+import { showAgentStatus } from "./status-ui.ts";
 import { createDriverFactory } from "./runtime.ts";
 import { agentTools } from "./tools.ts";
 import { editAgentTypes, showThreads, updateWidget } from "./ui.ts";
@@ -240,7 +241,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
     description:
       "Configure agent settings, edit definitions or inspect retained threads",
     getArgumentCompletions: (prefix) =>
-      ["types", "reload", "thread"]
+      ["status", "types", "reload", "thread"]
         .filter((value) => value.startsWith(prefix))
         .map((value) => ({ value, label: value })),
     handler: async (args, ctx) => {
@@ -270,6 +271,8 @@ export default function piSubagent(pi: ExtensionAPI): void {
               ctx.ui.notify(diagnostics.join("\n"), "warning");
           },
         });
+      } else if (command === "status") {
+        await showAgentStatus(ctx, requireManager().scope("/root"));
       } else if (command === "thread") {
         await showThreads(
           ctx,
@@ -278,7 +281,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
         );
       } else
         ctx.ui.notify(
-          "Usage: /agents [types | reload | thread /root/name]",
+          "Usage: /agents [status | types | reload | thread /root/name]",
           "warning",
         );
     },

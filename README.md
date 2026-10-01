@@ -97,6 +97,7 @@ Project types override global types. Malformed definitions and same-scope duplic
 - `/agents types`: create/edit agent types. Field dialogs edit YAML defaults while preserving the prompt. Model preferences use an ordered picker: add available models (scoped entries are marked), remove entries, and move them up/down to control preference order. The YAML editor edits the header together; **Open in external editor** edits the whole Markdown file using `$VISUAL`, `$EDITOR`, or `vi`.
 - `/agents reload`: reload definitions and show diagnostics.
 - `/agents`: open a bordered settings dialog. Edit level, concurrency and retained-thread limits, choose global or trusted-project scope, and save with **Ctrl+S**. Settings apply immediately without interrupting existing work. **Agent definitions** opens the type editor.
+- `/agents status`: open a live, bordered tree of all retained agents, including running and paused sessions. **↑↓** select, **←→** collapse/expand, **PgUp/PgDn** scroll, **Enter** inspect/resume/stop a thread, **Esc** close. The dialog refreshes every second and preserves selection.
 - `/agents thread`: pick a retained thread, inspect its output/transcript, send input/resume, or stop it.
 - `/agents thread /root/controller-security-research`: open one thread directly.
 
