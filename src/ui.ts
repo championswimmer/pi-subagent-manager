@@ -16,6 +16,8 @@ import {
   Container,
   SelectList,
   Text,
+  colorToRgb,
+  rgbColor,
   stripTerminalSequences,
   truncateToWidth,
 } from "@earendil-works/pi-tui";
@@ -34,10 +36,33 @@ export function sanitizeText(text: string): string {
   return stripTerminalSequences(text).replace(/[\x00-\x1f\x7f-\x9f]/g, " ");
 }
 
+type AgentBadgeTheme = Pick<Theme, "fg" | "colors" | "style">;
+
+/** Use the theme's concrete token color as a background, with readable text. */
+function agentNameBadge(name: string, color: string | undefined, theme: AgentBadgeTheme): string {
+  const token: ThemeColor = AGENT_COLORS.includes(color as (typeof AGENT_COLORS)[number])
+    ? (color as ThemeColor)
+    : "accent";
+  const background = theme.colors[token];
+  const { r, g, b } = colorToRgb(background);
+  const linear = (channel: number) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  };
+  const luminance = 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+  // Pick whichever of black/white has the higher WCAG contrast ratio.
+  const foreground = luminance > Math.sqrt(0.0525) - 0.05 ? 0 : 255;
+  return theme.style(` ${sanitizeText(name)} `, {
+    bg: background,
+    fg: rgbColor(foreground, foreground, foreground),
+    bold: true,
+  });
+}
+
 export function renderThreads(
   threads: ThreadView[],
   width: number,
-  theme: Pick<Theme, "fg">,
+  theme: AgentBadgeTheme,
 ): string[] {
   const priority = (thread: ThreadView) =>
     thread.state === "starting" || thread.state === "running"
@@ -52,16 +77,12 @@ export function renderThreads(
     );
   const limit = visible.length > 8 ? 7 : 8;
   const lines = visible.slice(0, limit).map((thread) => {
-    const color: ThemeColor = AGENT_COLORS.includes(thread.color as (typeof AGENT_COLORS)[number])
-      ? (thread.color as ThemeColor)
-      : thread.state === "failed"
-        ? "error"
-        : thread.state === "paused"
-          ? "warning"
-          : "accent";
-    const label = `${sanitizeText(thread.path)} [${sanitizeText(thread.state)}]`;
+    const stateColor =
+      thread.state === "failed" ? "error" : thread.state === "paused" ? "warning" : "accent";
+    const badge = agentNameBadge(thread.path, thread.color, theme);
+    const state = theme.fg(stateColor, `[${sanitizeText(thread.state)}]`);
     return truncateToWidth(
-      `${theme.fg(color, label)} ${sanitizeText(thread.status || thread.task)}`,
+      `${badge} ${state} ${sanitizeText(thread.status || thread.task)}`,
       Math.max(0, width),
     );
   });
@@ -242,7 +263,6 @@ async function editToolList(
   if (type.tools && !Object.keys(type.tools).length) delete type.tools;
 }
 
-const AGENT_COLOR_PREVIEW = "/worker [running] Working";
 const AGENT_COLOR_DEFAULT = "__default__";
 const AGENT_COLOR_CANCEL = Symbol("agent-color-cancel");
 
@@ -256,6 +276,7 @@ class AgentColorPickerComponent extends Container {
     tui: { requestRender(force?: boolean): void },
     theme: Theme,
     currentColor: AgentType["color"] | undefined,
+    private readonly agentName: string,
     onSelect: (color: AgentType["color"] | undefined) => void,
     onCancel: () => void,
   ) {
@@ -265,12 +286,12 @@ class AgentColorPickerComponent extends Container {
       {
         value: AGENT_COLOR_DEFAULT,
         label: "Default (inherit)",
-        description: "Use Pi default foreground color",
+        description: "Use the default accent background for the agent name",
       },
       ...AGENT_COLORS.map((color) => ({
         value: color,
-        label: theme.fg(color, `● ${color}`),
-        description: `Pi semantic foreground color: ${color}`,
+        label: agentNameBadge(color, color, theme),
+        description: `Agent name background: ${color}`,
       })),
     ];
     this.preview = new Text();
@@ -313,11 +334,12 @@ class AgentColorPickerComponent extends Container {
   }
 
   private updatePreview(tui: { requestRender(force?: boolean): void }, value: string): void {
-    const preview =
-      value === AGENT_COLOR_DEFAULT
-        ? `Preview: ${AGENT_COLOR_PREVIEW}`
-        : this.theme.fg(value as ThemeColor, `Preview: ${AGENT_COLOR_PREVIEW}`);
-    this.preview.setText(preview);
+    const badge = agentNameBadge(
+      `/${this.agentName}`,
+      value === AGENT_COLOR_DEFAULT ? undefined : value,
+      this.theme,
+    );
+    this.preview.setText(`Preview: ${badge} ${this.theme.fg("accent", "[running]")} Working`);
     tui.requestRender();
   }
 }
@@ -325,6 +347,7 @@ class AgentColorPickerComponent extends Container {
 async function selectAgentColor(
   ctx: ExtensionCommandContext,
   currentColor: AgentType["color"] | undefined,
+  agentName: string,
 ): Promise<AgentType["color"] | undefined | typeof AGENT_COLOR_CANCEL> {
   return ctx.ui.custom(
     (tui, theme, _keys, done) => {
@@ -332,6 +355,7 @@ async function selectAgentColor(
         tui,
         theme,
         currentColor,
+        agentName,
         (value) => done(value),
         () => done(AGENT_COLOR_CANCEL),
       );
@@ -528,7 +552,7 @@ export async function editAgentTypes(
           if (value === "Default (inherit)") delete candidate.thinkingLevel;
           else candidate.thinkingLevel = value as AgentType["thinkingLevel"];
         } else if (field === "color") {
-          const value = await selectAgentColor(ctx, candidate.color);
+          const value = await selectAgentColor(ctx, candidate.color, candidate.name);
           if (value === AGENT_COLOR_CANCEL) continue;
           if (value === undefined) delete candidate.color;
           else candidate.color = value;

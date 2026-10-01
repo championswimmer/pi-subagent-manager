@@ -10,6 +10,7 @@ export interface AgentType {
   /** @deprecated Use ordered models instead. */
   model?: string;
   thinkingLevel?: ThinkingLevel;
+  /** Pi semantic token used as the agent name pill's background. */
   color?: string;
   tools?: { allow?: string[]; block?: string[] };
   systemPrompt: string;

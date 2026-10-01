@@ -14,7 +14,7 @@ import { isMap, isScalar, parseDocument, stringify } from "yaml";
 import { getModelPreferences } from "./models.js";
 import { THINKING_LEVELS, type AgentType } from "./types.js";
 
-// Pi semantic foreground tokens (background tokens are intentionally excluded).
+// Pi semantic color tokens, resolved as concrete colors for agent name backgrounds.
 export const AGENT_COLORS = [
   "accent",
   "border",

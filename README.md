@@ -75,7 +75,7 @@ The Markdown body is the agent's system prompt. `name` and `description` are req
 - **models:** an ordered YAML list of exact `provider/model-id` preferences. Model IDs may contain additional slashes. The first entry that exists in `/scoped-models` wins; the scan follows the list order, not the scoped-model order.
 - **model:** deprecated compatibility alias for a single preference. Existing definitions still parse, but saving normalizes them to `models:` and does not write `model:` back out.
 - **thinkingLevel:** `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. The SDK applies the selected model's supported levels.
-- **color:** a pi semantic foreground color, such as `accent`, `success`, `warning`, `error`, `muted` or `dim`. Colors follow theme changes.
+- **color:** a pi semantic color, such as `accent`, `success`, `warning`, `error`, `muted` or `dim`, used as the background of the agent's name pill. Text is bold and automatically contrasts with the background. The color picker previews the pill; colors follow theme changes. Unset uses `accent`.
 - **tools:** exact-name `allow` and/or `block` lists. Block wins. An empty allow list means **no tools**; omission allows supported tools. Unavailable names fail clearly, rather than widening access.
 
 If `models`/`model` is omitted, the agent inherits the effective parent/default model. Matching is strict: preferences are matched verbatim against `/scoped-models`, and if none match — including when `/scoped-models` is empty — spawn fails with an actionable error instead of falling back to the registry.

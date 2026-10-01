@@ -4,14 +4,24 @@ import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { quote } from "shell-quote";
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import type {
-  ExtensionCommandContext,
-  ExtensionContext,
+import {
+  colorToRgb,
+  foregroundAnsi,
+  rgbColor,
+  stripTerminalSequences,
+  styleText,
+  visibleWidth,
+  type Color,
+} from "@earendil-works/pi-tui";
+import {
   Theme,
+  type ExtensionCommandContext,
+  type ExtensionContext,
+  type ThemeColor,
 } from "@earendil-works/pi-coding-agent";
 import type { ThreadView } from "../src/types.ts";
-import { ConfigStore, parseAgentType, serializeAgentType } from "../src/config.ts";
+import { AGENT_COLORS, ConfigStore, parseAgentType, serializeAgentType } from "../src/config.ts";
+import { canonicalPath } from "../src/paths.ts";
 import {
   editAgentTypes,
   editorArguments,
@@ -36,7 +46,83 @@ function thread(path: string, overrides: Partial<ThreadView> = {}): ThreadView {
     ...overrides,
   };
 }
-const plainTheme: Pick<Theme, "fg"> = { fg: (_color, text) => text };
+function testTheme(appearance: "dark" | "light"): Theme {
+  // Deterministic fixtures use the public API, independent of terminal color detection.
+  const foreground = appearance === "dark" ? "#eeeeee" : "#111111";
+  const background = appearance === "dark" ? "#111111" : "#eeeeee";
+  const colors = {
+    ...Object.fromEntries(AGENT_COLORS.map((token) => [token, foreground])),
+    accent: appearance === "dark" ? "#60a5fa" : "#1e40af",
+    success: appearance === "dark" ? "#166534" : "#b7e4c7",
+    warning: "#facc15",
+    error: "#b91c1c",
+  } as ConstructorParameters<typeof Theme>[0];
+  const backgrounds = Object.fromEntries(
+    [
+      "selectedBg",
+      "searchMatchBg",
+      "userMessageBg",
+      "customMessageBg",
+      "toolPendingBg",
+      "toolSuccessBg",
+      "toolErrorBg",
+    ].map((token) => [token, background]),
+  ) as ConstructorParameters<typeof Theme>[1];
+  return new Theme(colors, backgrounds, "truecolor", { appearance });
+}
+
+const darkTheme = testTheme("dark");
+const lightTheme = testTheme("light");
+
+/** Black text above the WCAG black/white crossover (~0.179), otherwise white. */
+function contrastChannel(color: Color): 0 | 255 {
+  const { r, g, b } = colorToRgb(color);
+  const linear = (channel: number) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  };
+  const luminance = 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+  return luminance > Math.sqrt(0.0525) - 0.05 ? 0 : 255;
+}
+
+function badgeToken(color: string | undefined): ThemeColor {
+  return AGENT_COLORS.includes(color as (typeof AGENT_COLORS)[number])
+    ? (color as ThemeColor)
+    : "accent";
+}
+
+function expectedBadge(theme: Theme, name: string, color: string | undefined): string {
+  const background = theme.colors[badgeToken(color)];
+  const channel = contrastChannel(background);
+  return styleText(
+    ` ${sanitizeText(name)} `,
+    { bg: background, fg: rgbColor(channel, channel, channel), bold: true },
+    theme.getColorMode(),
+  );
+}
+
+function stateToken(state: ThreadView["state"]): "error" | "warning" | "accent" {
+  return state === "failed" ? "error" : state === "paused" ? "warning" : "accent";
+}
+
+function expectedThreadLine(theme: Theme, view: ThreadView): string {
+  const badge = expectedBadge(theme, view.path, view.color);
+  const state = theme.fg(stateToken(view.state), `[${sanitizeText(view.state)}]`);
+  return `${badge} ${state} ${sanitizeText(view.status || view.task)}`;
+}
+
+/** Visible text inside each background-color span. Resets are not part of the span. */
+function backgroundCoveredText(line: string): string[] {
+  const spans: string[] = [];
+  const pattern = /\x1b\[48;(?:2(?:;\d+){3}|5;\d+)m/g;
+  for (let match = pattern.exec(line); match; match = pattern.exec(line)) {
+    const close = line.indexOf("\x1b[49m", match.index);
+    assert.ok(close > match.index, "background SGR must reset");
+    spans.push(stripTerminalSequences(line.slice(match.index, close)));
+    pattern.lastIndex = close + "\x1b[49m".length;
+  }
+  return spans;
+}
 
 test("widget is compact, excludes current root, and reports hidden threads", () => {
   const threads = [
@@ -48,7 +134,7 @@ test("widget is compact, excludes current root, and reports hidden threads", () 
     thread("/paused", { state: "paused", updatedAt: 12 }),
     thread("/starting", { state: "starting", updatedAt: 11 }),
   ];
-  const lines = renderThreads(threads, 80, plainTheme);
+  const lines = renderThreads(threads, 80, darkTheme);
   assert.equal(lines.length, 8);
   assert.ok(!lines.some((line) => line.includes("/root")));
   assert.match(lines[0]!, /\/starting/);
@@ -56,7 +142,7 @@ test("widget is compact, excludes current root, and reports hidden threads", () 
   assert.match(lines[2]!, /\/paused/);
   assert.match(lines[3]!, /\/worker9/);
   assert.match(lines.at(-1)!, /\+6 more threads/);
-  assert.equal(renderThreads(threads.slice(1, 9), 80, plainTheme).length, 8);
+  assert.equal(renderThreads(threads.slice(1, 9), 80, darkTheme).length, 8);
 });
 
 test("widget sanitizes untrusted text and fits narrow Unicode terminal widths", () => {
@@ -66,7 +152,7 @@ test("widget sanitizes untrusted text and fits narrow Unicode terminal widths", 
     }),
   ];
   for (const width of [0, 1, 5, 20, 80]) {
-    const lines = renderThreads(threads, width, plainTheme);
+    const lines = renderThreads(threads, width, darkTheme);
     assert.ok(lines.every((line) => visibleWidth(line) <= width));
     assert.ok(lines.every((line) => !/[\x00-\x1f\x7f-\x9f]/.test(stripTerminalSequences(line))));
   }
@@ -77,15 +163,32 @@ test("widget clears when empty and resolves theme dynamically at render", () => 
   let content: unknown;
   let options: unknown;
   let marker = "first";
-  const colors: string[] = [];
+  const fgCalls: { marker: string; color: string; text: string }[] = [];
+  const styleCalls: { marker: string; text: string; bold?: boolean; bg: string; fg: string }[] = [];
+  const tokenColor = (name: string) =>
+    rgbColor(AGENT_COLORS.indexOf(name as (typeof AGENT_COLORS)[number]) + 1, 8, 9);
   const ctx = {
     hasUI: true,
     ui: {
       get theme() {
+        const current = marker;
         return {
           fg: (color: string, text: string) => {
-            colors.push(color);
-            return `${marker}:${text}`;
+            fgCalls.push({ marker: current, color, text });
+            return `${current}<fg:${color}>${text}</fg>`;
+          },
+          colors: Object.fromEntries(AGENT_COLORS.map((name) => [name, tokenColor(name)])),
+          style: (text: string, style: { bold?: boolean; bg?: Color; fg?: Color }) => {
+            const bg = style.bg ? colorToRgb(style.bg) : { r: -1, g: -1, b: -1 };
+            const fg = style.fg ? colorToRgb(style.fg) : { r: -1, g: -1, b: -1 };
+            styleCalls.push({
+              marker: current,
+              text,
+              bold: style.bold,
+              bg: `${bg.r},${bg.g},${bg.b}`,
+              fg: `${fg.r},${fg.g},${fg.b}`,
+            });
+            return `${current}<bg:${bg.r}>${text}</bg>`;
           },
         };
       },
@@ -97,15 +200,54 @@ test("widget clears when empty and resolves theme dynamically at render", () => 
     },
   } as unknown as ExtensionContext;
   updateWidget(ctx, [
-    thread("/worker", { color: "success" }),
-    thread("/fallback", { color: "\x1b[31m" }),
+    thread("/worker", { color: "success", status: "Working" }),
+    thread("/fallback", { color: "\x1b[31m", status: "Working" }),
   ]);
   assert.deepEqual(options, { placement: "belowEditor" });
   const widget = (content as () => { render(width: number): string[] })();
-  assert.match(widget.render(80)[0]!, /^first:/);
+  const first = widget.render(120);
+  assert.match(first[0]!, /^first<bg:/);
+  assert.match(first[0]!, /first<fg:accent>\[running\]<\/fg> Working$/);
+  assert.doesNotMatch(first[0]!, /<fg:success>/);
   marker = "second";
-  assert.match(widget.render(80)[0]!, /^second:/);
-  assert.deepEqual(colors, ["success", "accent", "success", "accent"]);
+  const second = widget.render(120);
+  assert.match(second[0]!, /^second<bg:/);
+  assert.match(
+    second[1]!,
+    /second<bg:1> \/fallback <\/bg> second<fg:accent>\[running\]<\/fg> Working$/,
+  );
+  assert.deepEqual(
+    styleCalls.map((call) => call.text),
+    [" /worker ", " /fallback ", " /worker ", " /fallback "],
+  );
+  assert.deepEqual(
+    styleCalls.map((call) => call.marker),
+    ["first", "first", "second", "second"],
+  );
+  assert.ok(styleCalls.every((call) => call.bold === true));
+  const successBg = `${tokenColor("success").r},8,9`;
+  const accentBg = `${tokenColor("accent").r},8,9`;
+  assert.deepEqual(
+    styleCalls.map((call) => call.bg),
+    [successBg, accentBg, successBg, accentBg],
+  );
+  assert.deepEqual(
+    styleCalls.map((call) => call.fg),
+    styleCalls.map((call) => {
+      const [r, g, b] = call.bg.split(",").map(Number);
+      const channel = contrastChannel(rgbColor(r!, g!, b!));
+      return `${channel},${channel},${channel}`;
+    }),
+  );
+  assert.deepEqual(
+    fgCalls.map((call) => ({ color: call.color, text: call.text })),
+    [
+      { color: "accent", text: "[running]" },
+      { color: "accent", text: "[running]" },
+      { color: "accent", text: "[running]" },
+      { color: "accent", text: "[running]" },
+    ],
+  );
   updateWidget(ctx, []);
   assert.equal(content, undefined);
   updateWidget(ctx, [thread("/root")]);
@@ -224,9 +366,7 @@ function editorContext(
   const scopes: string[][] = [];
   const menus: { title: string; options: string[] }[] = [];
   const editors: { title: string; prefill?: string }[] = [];
-  const colorPickerTheme = {
-    fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
-  } as unknown as Theme;
+  const colorPickerTheme = darkTheme;
   const availableModels = options.availableModels ?? [];
   const scopedModels = (options.scopedModels ?? []).map((identity) => {
     const [provider, ...rest] = identity.split("/");
@@ -432,47 +572,224 @@ test("saving model preferences stores canonical ordered models after add and reo
   }
 });
 
-test("color picker previews semantic tokens and supports default unsetting", async () => {
-  const { root, store } = await configFixture();
+async function workerWithSuccess() {
+  const fixture = await configFixture();
+  await writeFile(
+    join(fixture.agentDir, "agents", "worker.md"),
+    serializeAgentType({
+      name: "worker",
+      description: "Worker",
+      systemPrompt: fixture.body,
+      color: "success",
+    }),
+  );
+  fixture.store.reload();
+  assert.equal(fixture.store.get("worker").color, "success");
+  return fixture;
+}
+
+function driveColorPicker(
+  ctx: ExtensionCommandContext,
+  theme: Theme,
+  drive: (component: any) => void,
+) {
+  let pickerError: unknown;
+  ctx.ui.custom = (async (factory: Function) => {
+    return new Promise((resolve, reject) => {
+      Promise.resolve(factory({ requestRender: () => {} }, theme, {}, resolve))
+        .then((component) => {
+          try {
+            drive(component);
+          } catch (error) {
+            pickerError = error;
+            component.getSelectList?.().onCancel?.();
+            resolve(undefined as never);
+          }
+        })
+        .catch(reject);
+    });
+  }) as typeof ctx.ui.custom;
+  return () => {
+    if (pickerError) throw pickerError;
+  };
+}
+
+function previewText(component: { getPreview(): { render(width: number): string[] } }): string {
+  return component.getPreview().render(160).join("\n");
+}
+
+function assertPreviewMatchesSpawned(
+  preview: string,
+  theme: Theme,
+  agentName: string,
+  color: string | undefined,
+) {
+  // Absolute spawn paths keep the leading slash; the preview uses that thread name, not /root/name.
+  const spawned = canonicalPath(`/${agentName}`);
+  assert.equal(spawned, `/${agentName}`);
+  const widget = renderThreads(
+    [thread(spawned, { color, state: "running", status: "Working" })],
+    160,
+    theme,
+  )[0]!;
+  const badge = expectedBadge(theme, spawned, color);
+  const running = `${badge} ${theme.fg("accent", "[running]")} Working`;
+  assert.equal(widget, running);
+  assert.ok(preview.includes(`Preview: ${running}`));
+  assert.deepEqual(backgroundCoveredText(preview), [` ${spawned} `]);
+}
+
+test("thread badges paint only the name, with bold contrast on dark and light backgrounds", () => {
+  const channels = new Set<0 | 255>();
+  for (const theme of [darkTheme, lightTheme]) {
+    for (const color of ["accent", "success", "warning", "text", "error"] as const) {
+      const view = thread("/worker", { color, state: "running", status: "Working" });
+      const line = renderThreads([view], 80, theme)[0]!;
+      const badge = expectedBadge(theme, view.path, color);
+      const channel = contrastChannel(theme.colors[color]);
+      channels.add(channel);
+      assert.equal(line, expectedThreadLine(theme, view));
+      assert.deepEqual(backgroundCoveredText(line), [" /worker "]);
+      assert.match(badge, /\x1b\[1m/);
+      assert.ok(
+        badge.includes(foregroundAnsi(rgbColor(channel, channel, channel), theme.getColorMode())),
+      );
+      assert.doesNotMatch(line.slice(badge.length), /\x1b\[48;/);
+      assert.doesNotMatch(line.slice(badge.length), /\x1b\[1m/);
+    }
+  }
+  assert.ok(channels.has(0), "a light background must use black text");
+  assert.ok(channels.has(255), "a dark background must use white text");
+
+  for (const [state, token] of [
+    ["failed", "error"],
+    ["paused", "warning"],
+    ["starting", "accent"],
+    ["completed", "accent"],
+    ["stopped", "accent"],
+  ] as const) {
+    const view = thread("/worker", { state, color: "success", status: "Busy", task: "Ignored" });
+    const line = renderThreads([view], 80, darkTheme)[0]!;
+    assert.equal(line, expectedThreadLine(darkTheme, view));
+    assert.ok(line.includes(darkTheme.fg(token, `[${state}]`)));
+    assert.ok(line.endsWith(" Busy"));
+    assert.deepEqual(backgroundCoveredText(line), [" /worker "]);
+  }
+
+  const invalid = thread("/owned\x1b[31m", {
+    color: "\x1b[31mnot-a-token",
+    state: "failed",
+    status: "",
+    task: "Recover",
+  });
+  const fallback = renderThreads([invalid], 80, darkTheme)[0]!;
+  assert.equal(fallback, expectedThreadLine(darkTheme, invalid));
+  assert.equal(
+    expectedBadge(darkTheme, invalid.path, invalid.color),
+    expectedBadge(darkTheme, invalid.path, "accent"),
+  );
+  assert.deepEqual(backgroundCoveredText(fallback), [` ${sanitizeText(invalid.path)} `]);
+  assert.ok(fallback.endsWith(" Recover"));
+  // Badge padding plus the separator before [state] is two spaces; controls are stripped, not shown.
+  assert.equal(
+    stripTerminalSequences(fallback),
+    ` ${sanitizeText(invalid.path)}  [failed] Recover`,
+  );
+  assert.ok(!/[\x00-\x1f\x7f-\x9f]/.test(stripTerminalSequences(fallback)));
+});
+
+test("color picker badges are backgrounds, preview the renamed path, and cancel keeps success", async () => {
+  const { root, store, agentDir } = await workerWithSuccess();
+  const theme = darkTheme;
   try {
-    const { ctx } = editorContext(root, ["worker", "color", "Save", "Global", undefined]);
-    const rendered = { options: [] as string[], preview: [] as string[] };
-    ctx.ui.custom = (async (factory: Function) => {
-      return new Promise<any>((resolve, reject) => {
-        Promise.resolve(
-          factory(
-            { requestRender: () => {} },
-            {
-              fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
-            },
-            {},
-            (result: unknown) => resolve(result),
-          ),
-        )
-          .then((component: any) => {
-            const items = component.getItems();
-            const success = items.find((item: { value: string }) => item.value === "success");
-            assert.ok(success);
-            rendered.options = [success.label];
-            component.getSelectList().onSelectionChange?.(success);
-            rendered.preview = component.getPreview().render(80);
-            const defaultItem = items.find(
-              (item: { value: string }) => item.value === "__default__",
-            );
-            assert.ok(defaultItem);
-            component.getSelectList().onSelect?.(defaultItem);
-          })
-          .catch(reject);
-      });
-    }) as typeof ctx.ui.custom;
+    const original = await readFile(join(agentDir, "agents", "worker.md"), "utf8");
+    assert.match(original, /color: success/);
+    const { ctx } = editorContext(root, ["worker", "name", "color", undefined], ["scout"]);
+    const pickerError = driveColorPicker(ctx, theme, (component) => {
+      const items = component.getItems();
+      const fallback = items.find((item: { value: string }) => item.value === "__default__");
+      assert.ok(fallback);
+      assert.equal(fallback.label, "Default (inherit)");
+      assert.equal(fallback.description, "Use the default accent background for the agent name");
+      assert.doesNotMatch(fallback.description, /foreground/i);
+      for (const color of AGENT_COLORS) {
+        const item = items.find((entry: { value: string }) => entry.value === color);
+        assert.ok(item, color);
+        assert.equal(item.label, expectedBadge(theme, color, color));
+        assert.equal(stripTerminalSequences(item.label), ` ${color} `);
+        assert.match(item.label, /\x1b\[1m/);
+        assert.equal(item.description, `Agent name background: ${color}`);
+        assert.doesNotMatch(item.description, /foreground/i);
+        assert.doesNotMatch(item.label, /●/);
+      }
+      const selected = component.getSelectList().getSelectedItem();
+      assert.equal(selected?.value, "success");
+      assertPreviewMatchesSpawned(previewText(component), theme, "scout", "success");
+      assert.doesNotMatch(previewText(component), /\/worker/);
+
+      component.handleInput("\x1b[B");
+      assert.equal(component.getSelectList().getSelectedItem()?.value, "error");
+      assertPreviewMatchesSpawned(previewText(component), theme, "scout", "error");
+
+      component.handleInput("\x1b[A");
+      assert.equal(component.getSelectList().getSelectedItem()?.value, "success");
+      for (
+        let step = 0;
+        step < AGENT_COLORS.length &&
+        component.getSelectList().getSelectedItem()?.value !== "__default__";
+        step++
+      ) {
+        component.handleInput("\x1b[A");
+      }
+      assert.equal(component.getSelectList().getSelectedItem()?.value, "__default__");
+      assertPreviewMatchesSpawned(previewText(component), theme, "scout", undefined);
+      component.handleInput("\x1b");
+    });
     await editAgentTypes(ctx, store);
-    assert.equal(store.get("worker").color, undefined);
-    assert.ok(rendered.options.some((line) => line.includes("<success>● success</success>")));
-    assert.ok(
-      rendered.preview.some((line) =>
-        line.includes("<success>Preview: /worker [running] Working</success>"),
-      ),
-    );
+    pickerError();
+    assert.equal(store.get("worker").color, "success");
+    assert.equal(store.get("worker").name, "worker");
+    assert.equal(await readFile(join(agentDir, "agents", "worker.md"), "utf8"), original);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("color picker default unsets a configured success color", async () => {
+  const { root, store, agentDir } = await workerWithSuccess();
+  const theme = lightTheme;
+  try {
+    assert.equal(store.get("worker").color, "success");
+    const { ctx } = editorContext(root, ["worker", "color", "Save", "Global", undefined]);
+    const pickerError = driveColorPicker(ctx, theme, (component) => {
+      assert.equal(component.getSelectList().getSelectedItem()?.value, "success");
+      assertPreviewMatchesSpawned(previewText(component), theme, "worker", "success");
+      for (
+        let step = 0;
+        step < AGENT_COLORS.length &&
+        component.getSelectList().getSelectedItem()?.value !== "__default__";
+        step++
+      ) {
+        component.handleInput("\x1b[A");
+      }
+      assert.equal(component.getSelectList().getSelectedItem()?.value, "__default__");
+      assertPreviewMatchesSpawned(previewText(component), theme, "worker", undefined);
+      const accent = contrastChannel(theme.colors.accent);
+      assert.ok(
+        previewText(component).includes(
+          foregroundAnsi(rgbColor(accent, accent, accent), theme.getColorMode()),
+        ),
+      );
+      component.handleInput("\r");
+    });
+    const original = await readFile(join(agentDir, "agents", "worker.md"), "utf8");
+    assert.match(original, /color: success/);
+    await editAgentTypes(ctx, store);
+    pickerError();
+    const saved = store.get("worker");
+    assert.equal(saved.color, undefined);
+    assert.ok(saved.filePath);
+    assert.doesNotMatch(await readFile(saved.filePath, "utf8"), /^color:/m);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
