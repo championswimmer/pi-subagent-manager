@@ -450,6 +450,7 @@ export class ThreadManager {
             const parentRecord = this.record(record.view.parent);
             if (!parentRecord.driver) await this.ensureDriver(parentRecord, readOnly);
           }
+          const parentSessionFile = this.lexicalParentSessionFile(record);
           const options: DriverOptions = {
             path: record.view.path,
             type: record.definition,
@@ -469,6 +470,7 @@ export class ThreadManager {
                 this.touch(record);
               }
             },
+            ...(parentSessionFile ? { parentSessionFile } : {}),
             ...(record.sessionLeafId !== undefined ? { sessionLeafId: record.sessionLeafId } : {}),
           };
           return this.options.createDriver(options);
@@ -526,6 +528,14 @@ export class ThreadManager {
   private sessionLeafId(record: Record): string | null | undefined {
     const leaf = record.driver?.sessionLeafId;
     return leaf !== undefined ? leaf : record.sessionLeafId;
+  }
+  /** Live persisted file, else the saved file of a restored parent that has not been opened. */
+  private lexicalParentSessionFile(record: Record): string | undefined {
+    const parent = record.view.parent;
+    if (!parent || parent === "/root") return undefined;
+    const parentRecord = this.records.get(parent);
+    if (!parentRecord) return undefined;
+    return parentRecord.driver?.sessionFile ?? parentRecord.view.sessionFile;
   }
   private view(record: Record): ThreadView {
     return structuredClone({

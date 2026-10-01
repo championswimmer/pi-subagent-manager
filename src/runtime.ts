@@ -1,6 +1,6 @@
 import path from "node:path";
 import { existsSync } from "node:fs";
-import { mkdir, realpath } from "node:fs/promises";
+import { mkdir, readFile, realpath } from "node:fs/promises";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -19,10 +19,23 @@ import {
 } from "./mailbox.ts";
 import { selectTools } from "./config.ts";
 import { modelIdentity, getModelPreferences, selectPreferredModel } from "./models.ts";
-import { THINKING_LEVELS, type DriverFactory, type ThinkingLevel } from "./types.ts";
+import {
+  THINKING_LEVELS,
+  type DriverFactory,
+  type DriverOptions,
+  type ThinkingLevel,
+} from "./types.ts";
 
 const BUILTINS = ["read", "bash", "powershell", "edit", "write", "grep", "find", "ls"];
+/** Persisted before transcript messages so older-leaf restores still carry ownership. */
+const THREAD_OWNERSHIP_TYPE = "pi-subagent:thread:v1";
+const SESSION_FILE_ERROR =
+  "Subagent sessionFile must be a JSONL file inside this root's session directory";
 type ScopedModel = ExtensionContext["scopedModels"][number];
+interface ThreadOwnership {
+  rootId: string;
+  threadPath: string;
+}
 
 function parseModelIdentity(identity: string): { provider: string; id: string } {
   const slash = identity.indexOf("/");
@@ -33,6 +46,87 @@ function scopedModelsKey(scopedModels: readonly ScopedModel[]): string {
   return scopedModels
     .map(({ model, thinkingLevel }) => `${modelIdentity(model)}\0${thinkingLevel ?? ""}`)
     .join("\n");
+}
+
+function isJsonlWithin(directory: string, file: string): boolean {
+  const relative = path.relative(directory, file);
+  return (
+    !!relative &&
+    !relative.startsWith(`..${path.sep}`) &&
+    relative !== ".." &&
+    !path.isAbsolute(relative) &&
+    file.endsWith(".jsonl")
+  );
+}
+
+async function tryRealpath(target: string): Promise<string | undefined> {
+  try {
+    return await realpath(target);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return undefined;
+    throw error;
+  }
+}
+
+function ownershipFromTranscript(content: string): ThreadOwnership | undefined {
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object") continue;
+    const entry = parsed as { type?: unknown; customType?: unknown; data?: unknown };
+    if (entry.type !== "custom" || entry.customType !== THREAD_OWNERSHIP_TYPE) continue;
+    const data = entry.data;
+    if (!data || typeof data !== "object") return undefined;
+    const { rootId, threadPath } = data as { rootId?: unknown; threadPath?: unknown };
+    if (typeof rootId !== "string" || typeof threadPath !== "string") return undefined;
+    return { rootId, threadPath };
+  }
+  return undefined;
+}
+
+/** Orchestrator file for /root and independent roots; nested parents supply their own file. */
+function resolveParentSession(
+  options: DriverOptions,
+  rootSessionFile: string | undefined,
+): string | undefined {
+  if (options.parentSessionFile) return options.parentSessionFile;
+  if (!options.parentPath || options.parentPath === "/root") return rootSessionFile;
+  return undefined;
+}
+
+async function assertAcceptedSessionFile(
+  sessionFile: string,
+  sessionDir: string,
+  legacyDir: string,
+  rootId: string,
+  threadPath: string,
+  signal: AbortSignal,
+): Promise<void> {
+  signal.throwIfAborted();
+  const sharedDir = await realpath(sessionDir);
+  signal.throwIfAborted();
+  const file = await tryRealpath(sessionFile);
+  signal.throwIfAborted();
+  const legacyDirReal = await tryRealpath(legacyDir);
+  signal.throwIfAborted();
+  // Legacy root-scoped transcripts stay valid, including files nested under that directory.
+  if (file && legacyDirReal && isJsonlWithin(legacyDirReal, file)) return;
+  if (!file || path.dirname(file) !== sharedDir || !file.endsWith(".jsonl")) {
+    throw new Error(SESSION_FILE_ERROR);
+  }
+  const ownership = ownershipFromTranscript(await readFile(file, { encoding: "utf8", signal }));
+  signal.throwIfAborted();
+  if (!ownership || ownership.rootId !== rootId || ownership.threadPath !== threadPath) {
+    throw new Error(
+      "Subagent sessionFile ownership metadata does not match this rootId and thread path",
+    );
+  }
 }
 
 /** Isolated SDK sessions; neither external extensions nor the CLI's MCP factories are loaded. */
@@ -46,36 +140,40 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(rootId))
       throw new Error("Unsafe root session id for subagent storage");
     const agentDir = getAgentDir();
-    const sessionDir = path.join(agentDir, "subagents", rootId);
+    const sessionDir = ctx.sessionManager.getSessionDir();
+    const legacyDir = path.join(agentDir, "subagents", rootId);
     options.signal.throwIfAborted();
     await mkdir(sessionDir, { recursive: true });
     options.signal.throwIfAborted();
     let sessionManager: SessionManager;
     if (options.sessionFile) {
-      options.signal.throwIfAborted();
-      const directory = await realpath(sessionDir);
-      options.signal.throwIfAborted();
-      const file = await realpath(options.sessionFile);
-      options.signal.throwIfAborted();
-      const relative = path.relative(directory, file);
-      if (
-        !relative ||
-        relative.startsWith(`..${path.sep}`) ||
-        relative === ".." ||
-        path.isAbsolute(relative) ||
-        !file.endsWith(".jsonl")
-      ) {
-        throw new Error(
-          "Subagent sessionFile must be a JSONL file inside this root's subagent sessions directory",
-        );
-      }
+      await assertAcceptedSessionFile(
+        options.sessionFile,
+        sessionDir,
+        legacyDir,
+        rootId,
+        options.path,
+        options.signal,
+      );
+      // Open the caller path, not its realpath, so retained sessionFile identity is stable.
       sessionManager = SessionManager.open(path.resolve(options.sessionFile), sessionDir, ctx.cwd);
       if (options.sessionLeafId !== undefined) {
         if (options.sessionLeafId === null) sessionManager.resetLeaf();
         else sessionManager.branch(options.sessionLeafId);
       }
     } else {
-      sessionManager = SessionManager.create(ctx.cwd, sessionDir);
+      const parentSession = resolveParentSession(options, ctx.sessionManager.getSessionFile());
+      sessionManager = SessionManager.create(
+        ctx.cwd,
+        sessionDir,
+        parentSession ? { parentSession } : undefined,
+      );
+      // Before transcript messages so an older restored leaf still has name and ownership as ancestors.
+      sessionManager.appendSessionInfo(`${options.type.name} ${options.path}`);
+      sessionManager.appendCustomEntry(THREAD_OWNERSHIP_TYPE, {
+        rootId,
+        threadPath: options.path,
+      });
       for (const message of options.inherited) {
         // Summary messages are projections, not appendable SDK session entries.
         if (message.role === "compactionSummary" || message.role === "branchSummary") {

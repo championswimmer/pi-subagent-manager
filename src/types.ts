@@ -61,6 +61,8 @@ export interface DriverOptions {
   shouldPause(): boolean;
   parentPath: string | null;
   sessionFile?: string;
+  /** Retained transcript of a nested lexical parent. Absent for /root and independent roots. */
+  parentSessionFile?: string;
   sessionLeafId?: string | null;
   signal: AbortSignal;
 }

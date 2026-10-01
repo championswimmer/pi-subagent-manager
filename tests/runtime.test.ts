@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -221,18 +221,16 @@ test("isolated real SDK driver without credentials", async (t) => {
           }),
         );
         assert.equal(driver.output(), "");
-        assert.ok(
-          driver.sessionFile?.startsWith(path.join(directory, "subagents", root.getSessionId())),
-        );
+        assert.ok(driver.sessionFile);
+        assert.equal(path.dirname(driver.sessionFile), root.getSessionDir());
         assert.equal(driver.snapshot().filter((msg) => msg.role === "assistant").length, 1);
         const clone = driver.snapshot();
         clone.length = 0;
         assert.ok(driver.snapshot().length);
         await driver.prompt("task");
         assert.equal(driver.output(), "child answer");
-        assert.ok(
-          driver.sessionFile?.startsWith(path.join(directory, "subagents", root.getSessionId())),
-        );
+        assert.ok(driver.sessionFile);
+        assert.equal(path.dirname(driver.sessionFile), root.getSessionDir());
         assert.equal(requests.at(-1)?.model.id, "model/with/slashes");
         assert.equal(requests.at(-1)?.apiKey, "fake-runtime-only-key");
         assert.ok(requests.at(-1)?.system.includes("ONLY CHILD PROMPT"));
@@ -328,8 +326,11 @@ test("isolated real SDK driver without credentials", async (t) => {
         );
         await independent.prompt("independent task");
         const independentFile = independent.sessionFile;
-        assert.ok(
-          independentFile?.startsWith(path.join(directory, "subagents", root.getSessionId())),
+        assert.ok(independentFile);
+        assert.equal(path.dirname(independentFile), root.getSessionDir());
+        assert.equal(
+          SessionManager.open(independentFile).getHeader()?.parentSession,
+          root.getSessionFile(),
         );
       },
     );
@@ -567,9 +568,7 @@ test("isolated real SDK driver without credentials", async (t) => {
         assert.ok(!serialized.includes("second prompt"));
         assert.ok(!serialized.includes("second answer"));
         await assert.rejects(
-          create(
-            options({ path: "/root/branch-bad", sessionFile: file, sessionLeafId: "missing" }),
-          ),
+          create(options({ path: "/root/branch", sessionFile: file, sessionLeafId: "missing" })),
           /not found/,
         );
       },
@@ -581,11 +580,7 @@ test("isolated real SDK driver without credentials", async (t) => {
         const driver = await create(options({ path: "/root/reconcile" }));
         await driver.sendUpdate("checkpointed update");
         const file = driver.sessionFile!;
-        const branch = SessionManager.open(
-          file,
-          path.join(directory, "subagents", root.getSessionId()),
-          cwd,
-        )
+        const branch = SessionManager.open(file, root.getSessionDir(), cwd)
           .getBranch()
           .find(
             (entry) =>
@@ -961,6 +956,51 @@ test("isolated real SDK driver without credentials", async (t) => {
       }
       assert.equal(calls, count);
     });
+
+    await t.test("shared session directory enforces root and thread ownership", async () => {
+      next = answer("owned answer");
+      const driver = await create(options({ path: "/root/owned" }));
+      await driver.prompt("owned task");
+      const file = driver.sessionFile!;
+      await assert.rejects(
+        factory(options({ path: "/root/wrong-thread", sessionFile: file })),
+        /inside this root|ownership|thread/i,
+      );
+      const otherRoot = SessionManager.create(cwd, root.getSessionDir());
+      const otherFactory = createDriverFactory(() => ({ ...ctx, sessionManager: otherRoot }));
+      await assert.rejects(
+        otherFactory(options({ path: "/root/owned", sessionFile: file })),
+        /inside this root|ownership|thread/i,
+      );
+      root.appendMessage(answer("root transcript"));
+      await assert.rejects(
+        factory(options({ sessionFile: root.getSessionFile()! })),
+        /inside this root|ownership|thread/i,
+      );
+      const foreign = SessionManager.create(cwd, path.join(directory, "foreign"));
+      foreign.appendMessage(answer("foreign transcript"));
+      const linked = path.join(root.getSessionDir(), "foreign-link.jsonl");
+      await symlink(foreign.getSessionFile()!, linked);
+      await assert.rejects(factory(options({ sessionFile: linked })), /inside this root/i);
+    });
+
+    await t.test(
+      "legacy root-scoped transcripts remain reopenable without ownership metadata",
+      async () => {
+        next = answer("legacy continued");
+        const legacyDir = path.join(directory, "subagents", root.getSessionId());
+        const legacy = SessionManager.create(cwd, legacyDir);
+        legacy.appendMessage(answer("old child answer"));
+        const driver = await create(options({ sessionFile: legacy.getSessionFile()! }));
+        assert.equal(driver.sessionFile, legacy.getSessionFile());
+        assert.equal(
+          driver.snapshot().some((message) => messageText(message) === "old child answer"),
+          true,
+        );
+        await driver.prompt("continue legacy child");
+        assert.equal(driver.sessionFile, legacy.getSessionFile());
+      },
+    );
 
     await t.test("invalid model/tool/storage policies fail closed", async () => {
       await assert.rejects(

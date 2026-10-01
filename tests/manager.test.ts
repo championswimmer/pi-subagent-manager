@@ -93,6 +93,10 @@ test("spawn snapshots only lexical parent; independent roots have no root contex
       timestamp: drivers.get("/k")!.messages[0].timestamp,
     })),
   );
+  assert.equal(
+    drivers.get("/k/l")!.options.parentSessionFile,
+    drivers.get("/k")!.driver.sessionFile,
+  );
   await assert.rejects(
     manager.spawn("/root/worker", { path: "/k/forbidden", type: "worker", task: "cross-tree" }),
     /descendants/,

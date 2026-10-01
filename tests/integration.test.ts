@@ -3,7 +3,13 @@ import { test } from "node:test";
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { type AssistantMessage, type JsonObject } from "@earendil-works/pi-ai";
-import { buildSessionContext, SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+  buildSessionContext,
+  SessionManager,
+  SessionSelectorComponent,
+  initTheme,
+} from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import type { AgentType, SavedThread, ThreadView } from "../src/types.ts";
 import { REGISTRY_ENTRY, registry, withOfflineHarness } from "./helpers/integrationHarness.ts";
 
@@ -80,6 +86,75 @@ const sessionLeafId = (thread: SavedThread) => {
   return thread.view.sessionLeafId;
 };
 
+test(
+  "native resume discovery lists named children with lexical session ancestry",
+  { timeout: 30000 },
+  async () => {
+    await withOfflineHarness(
+      { agentFiles: { offline: offlineAgent() }, onRequest: () => answer("done") },
+      async ({ cwd, open, close, tool }) => {
+        const root = SessionManager.create(cwd);
+        root.appendSessionInfo("Resume discovery root");
+        root.appendMessage({ role: "user", content: "Root task", timestamp: Date.now() });
+        root.appendMessage(answer("Root context"));
+        const session = await open(root);
+        const child = await tool<ThreadView>(session, "agent_spawn", {
+          path: "worker",
+          type: "offline",
+          task: "Child task",
+        });
+        const grandchild = await tool<ThreadView>(session, "agent_spawn", {
+          path: "/root/worker/review",
+          type: "offline",
+          task: "Grandchild task",
+        });
+        assert.ok(child.sessionFile);
+        assert.ok(grandchild.sessionFile);
+        for (const list of [await SessionManager.list(cwd), await SessionManager.listAll()]) {
+          const byPath = new Map(list.map((entry) => [entry.path, entry]));
+          assert.equal(byPath.get(root.getSessionFile()!)?.name, "Resume discovery root");
+          assert.equal(byPath.get(child.sessionFile)?.name, "offline /root/worker");
+          assert.equal(byPath.get(child.sessionFile)?.parentSessionPath, root.getSessionFile());
+          assert.equal(byPath.get(grandchild.sessionFile)?.name, "offline /root/worker/review");
+          assert.equal(byPath.get(grandchild.sessionFile)?.parentSessionPath, child.sessionFile);
+        }
+        initTheme("dark", false);
+        const selector = new SessionSelectorComponent(
+          async () => [],
+          async () => [],
+          () => {},
+          () => {},
+          () => {},
+          () => {},
+        );
+        await new Promise((resolve) => setImmediate(resolve));
+        selector.getSessionList().setSessions(await SessionManager.list(cwd), false);
+        const rows = selector.getSessionList().render(120).map(stripTerminalSequences);
+        const rootRow = rows.findIndex((row) => row.includes("Resume discovery root"));
+        const childRow = rows.findIndex(
+          (row) => row.includes("offline /root/worker") && !row.includes("/review"),
+        );
+        const grandchildRow = rows.findIndex((row) => row.includes("offline /root/worker/review"));
+        assert.ok(rootRow >= 0 && childRow > rootRow && grandchildRow > childRow);
+        assert.match(rows[childRow], /└─ offline \/root\/worker/);
+        assert.match(rows[grandchildRow], /   └─ offline \/root\/worker\/review/);
+        await close(session);
+        const reopened = await open(SessionManager.open(root.getSessionFile()!));
+        const restored = await tool<ThreadView[]>(reopened, "agent_status", {});
+        assert.equal(
+          restored.find((thread) => thread.path === child.path)?.sessionFile,
+          child.sessionFile,
+        );
+        assert.equal(
+          restored.find((thread) => thread.path === grandchild.path)?.sessionFile,
+          grandchild.sessionFile,
+        );
+        await close(reopened);
+      },
+    );
+  },
+);
+
 // One lifecycle scenario using real SDK sessions, JSONL storage, and extension binding; no driver mocks.
 test(
   "offline extension retains paused/completed child across parent reopen and isolates a fork",
@@ -115,7 +190,15 @@ test(
         assert.equal(paused.output, undefined, "pause must not hand back an answer");
         assert.equal(requests.length, 1, "pause stops before another provider turn");
         const childFile = paused.sessionFile!;
-        assert.ok(childFile.startsWith(path.join(directory, "subagents", root.getSessionId())));
+        assert.equal(path.dirname(childFile), root.getSessionDir());
+        assert.equal(
+          SessionManager.open(childFile).getHeader()?.parentSession,
+          root.getSessionFile(),
+        );
+        const listedChild = (await SessionManager.list(cwd, root.getSessionDir())).find(
+          (entry) => entry.path === childFile,
+        );
+        assert.equal(listedChild?.name, "offline /root/worker");
         assert.ok((await readFile(childFile, "utf8")).includes('"toolCallId":"pause-1"'));
         assert.equal(registry(root).rootSessionId, root.getSessionId());
         assert.equal(registry(root).threads[0].view.state, "paused");
@@ -401,7 +484,12 @@ test(
         });
         assert.equal(spawned.state, "completed");
         assert.equal(spawned.output, CHILD_OUTPUT);
-        assert.ok(spawned.sessionFile?.startsWith(rootScopedDir));
+        assert.ok(spawned.sessionFile);
+        assert.equal(path.dirname(spawned.sessionFile), root.getSessionDir());
+        assert.equal(
+          SessionManager.open(spawned.sessionFile).getHeader()?.parentSession,
+          reviewerFile,
+        );
         assert.equal(requests.length, 1, "only the new child prompt uses the provider");
         assert.equal(requests[0].path, CHILD_PATH);
         assert.equal(requests[0].lexicalParent, "/root/team/reviewer");
@@ -459,7 +547,10 @@ test(
         assert.equal(durableByPath.get("/root/team/reviewer")?.state, "paused");
         assert.equal(durableByPath.get(CHILD_PATH)?.state, "completed");
         assert.equal(durableByPath.get(CHILD_PATH)?.output, CHILD_OUTPUT);
-        assert.ok(durableByPath.get(CHILD_PATH)?.sessionFile?.startsWith(rootScopedDir));
+        assert.equal(
+          path.dirname(durableByPath.get(CHILD_PATH)!.sessionFile!),
+          root.getSessionDir(),
+        );
 
         const durableParent = SessionManager.open(reviewerFile);
         const mailboxEntries = durableParent
