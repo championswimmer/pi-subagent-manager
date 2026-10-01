@@ -7,9 +7,18 @@ import type {
   ExtensionCommandContext,
   Theme,
 } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  CURSOR_MARKER,
+  stripTerminalSequences,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import { ConfigStore } from "../src/config.ts";
-import { DialogMenu, dialogHeight, frameDialog } from "../src/dialog.ts";
+import {
+  DialogEditor,
+  DialogMenu,
+  dialogHeight,
+  frameDialog,
+} from "../src/dialog.ts";
 import { configureAgents } from "../src/settings-ui.ts";
 import {
   DEFAULT_MANAGER_SETTINGS,
@@ -87,6 +96,68 @@ test("two-column menu scrolls, restores selection, supports keyboard and preserv
     assert.ok(lines.length <= dialogHeight(host));
     assert.ok(lines.every((line) => visibleWidth(line) <= width));
   }
+});
+
+test("multiline dialog forwards focus, keeps cursor visible, applies with Ctrl+S and cancels", () => {
+  const host = { requestRender() {}, terminal: { rows: 12 } };
+  let applied: string | undefined;
+  const initial =
+    "first\nsecond\nthird\nfourth\nfifth\nsixth\nseventh\neighth\nninth\ntenth";
+  const component = new DialogEditor(
+    host,
+    theme,
+    "System prompt",
+    initial,
+    (value) => {
+      applied = value;
+    },
+  );
+  component.focused = true;
+  assert.equal(component.getEditor().focused, true);
+  component.handleInput("\x1b[B");
+  component.handleInput("\r");
+  assert.equal(
+    applied,
+    undefined,
+    "Enter inserts a newline rather than submitting",
+  );
+  component.handleInput("\x1b[F");
+  for (const width of [1, 3, 10, 40, 100]) {
+    const lines = component.render(width);
+    assert.ok(lines.length <= dialogHeight(host));
+    assert.ok(lines.every((line) => visibleWidth(line) <= width));
+    if (width >= 40) {
+      assert.match(stripTerminalSequences(lines.at(-1)!), /^╰.*╯$/);
+      assert.match(lines.join("\n"), /Ctrl\+S apply/);
+      assert.ok(
+        lines.some((line) => line.includes(CURSOR_MARKER)),
+        "visible cursor survives cropping and framing",
+      );
+    }
+  }
+  component.handleInput("\x13");
+  assert.equal(applied, component.getEditor().getText());
+  component.handleInput("\x1b");
+  assert.equal(applied, undefined);
+});
+
+test("multiline dialog strips control sequences before render and preserves unchanged prefill", () => {
+  const host = { requestRender() {}, terminal: { rows: 24 } };
+  let value: string | undefined;
+  const initial = "hello\tworld\r\n\x1b]0;injected\x07second\x00line";
+  const component = new DialogEditor(
+    host,
+    theme,
+    "Prompt",
+    initial,
+    (result) => {
+      value = result;
+    },
+  );
+  assert.ok(!component.getEditor().getText().includes("\x1b"));
+  assert.ok(!component.render(80).join("\n").includes("injected"));
+  component.handleInput("\x13");
+  assert.equal(value, initial);
 });
 
 function fixture(t: TestContext) {

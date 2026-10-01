@@ -3,6 +3,8 @@ import type {
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import {
+  CURSOR_MARKER,
+  Editor,
   getKeybindings,
   Input,
   Key,
@@ -15,6 +17,9 @@ import {
 export interface DialogHost {
   requestRender(force?: boolean): void;
   terminal?: { rows: number };
+}
+export interface DialogEditorHost extends DialogHost {
+  terminal: { rows: number };
 }
 export interface DialogRow {
   id: string;
@@ -76,6 +81,89 @@ export function frameDialog(
     line(theme.fg("dim", dialogText(footer))),
     theme.fg("border", "╰" + "─".repeat(inner) + "╯"),
   ];
+}
+
+/** A multiline editor inside the same bounded shell as the surrounding form. */
+export class DialogEditor {
+  private editor: Editor;
+  private initialText: string;
+  constructor(
+    private host: DialogEditorHost,
+    private theme: Theme,
+    readonly title: string,
+    readonly prefill: string,
+    private done: (value: string | undefined) => void,
+  ) {
+    this.editor = new Editor(
+      host as ConstructorParameters<typeof Editor>[0],
+      {
+        borderColor: (text) => theme.fg("border", text),
+        selectList: {
+          selectedPrefix: (text) => theme.fg("accent", text),
+          selectedText: (text) => theme.fg("accent", text),
+          description: (text) => theme.fg("muted", text),
+          scrollInfo: (text) => theme.fg("dim", text),
+          noMatch: (text) => theme.fg("warning", text),
+        },
+      },
+      { paddingX: 0 },
+    );
+    this.editor.setText(
+      stripTerminalSequences(prefill)
+        .replace(/\r\n?/g, "\n")
+        .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, ""),
+    );
+    this.initialText = this.editor.getText();
+    this.editor.disableSubmit = true;
+  }
+  getEditor(): Editor {
+    return this.editor;
+  }
+  get focused(): boolean {
+    return this.editor.focused;
+  }
+  set focused(value: boolean) {
+    this.editor.focused = value;
+  }
+  handleInput(data: string): void {
+    if (matchesKey(data, Key.escape)) return this.done(undefined);
+    if (matchesKey(data, Key.ctrl("s"))) {
+      const value = this.editor.getText();
+      return this.done(value === this.initialText ? this.prefill : value);
+    }
+    this.editor.handleInput(data);
+    this.host.requestRender();
+  }
+  invalidate(): void {
+    this.editor.invalidate();
+  }
+  render(width: number): string[] {
+    const height = dialogHeight(this.host);
+    const rows = this.editor.render(Math.max(1, width - 4)).slice(1, -1);
+    const budget = Math.max(0, height - 4);
+    const cursor = rows.findIndex((line) => line.includes(CURSOR_MARKER));
+    const start = cursor >= budget ? cursor - budget + 1 : 0;
+    return frameDialog(
+      this.theme,
+      width,
+      height,
+      this.title,
+      rows.slice(start, start + budget).map((line) => ` ${line}`),
+      "Enter newline · Ctrl+S apply · Esc cancel",
+    );
+  }
+}
+
+export function dialogEditor(
+  ctx: ExtensionCommandContext,
+  title: string,
+  prefill: string,
+): Promise<string | undefined> {
+  return ctx.ui.custom(
+    (host, theme, _keys, done) =>
+      new DialogEditor(host, theme, title, prefill, done),
+    DIALOG_OPTIONS,
+  );
 }
 
 /** Bounded, two-column menu shared by settings and agent definitions. */

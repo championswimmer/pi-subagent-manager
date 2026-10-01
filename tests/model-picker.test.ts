@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { initTheme, type ScopedModel, type Theme } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import {
+  initTheme,
+  type ScopedModel,
+  type Theme,
+} from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { OrderedModelEditorComponent } from "../src/model-picker.ts";
 
 initTheme();
@@ -18,24 +22,28 @@ function createComponent(options?: {
   initialModels?: readonly string[];
   availableModels?: readonly ReturnType<typeof availableModel>[];
   scopedModels?: readonly string[];
+  terminalRows?: number;
 }) {
   const done: string[][] = [];
   let cancelled = 0;
   let renders = 0;
-  const models =
-    options?.availableModels ??
-    [
-      availableModel("anthropic", "claude-3.7-sonnet", "Claude 3.7 Sonnet"),
-      availableModel("google", "gemini-2.5-pro", "Gemini 2.5 Pro"),
-      availableModel("local", "llama3.3", "Llama 3.3"),
-      availableModel("openai", "gpt-4.1", "GPT-4.1"),
-    ];
+  const models = options?.availableModels ?? [
+    availableModel("anthropic", "claude-3.7-sonnet", "Claude 3.7 Sonnet"),
+    availableModel("google", "gemini-2.5-pro", "Gemini 2.5 Pro"),
+    availableModel("local", "llama3.3", "Llama 3.3"),
+    availableModel("openai", "gpt-4.1", "GPT-4.1"),
+  ];
   const component = new OrderedModelEditorComponent({
-    tui: { requestRender: () => renders++ },
+    tui: {
+      requestRender: () => renders++,
+      terminal: { rows: options?.terminalRows ?? 24 },
+    },
     theme: { fg: (_color: string, text: string) => text } as unknown as Theme,
     availableModels: models,
     scopedModels: (options?.scopedModels ?? []).map((identity) => {
-      const model = models.find((entry) => `${entry.provider}/${entry.id}` === identity);
+      const model = models.find(
+        (entry) => `${entry.provider}/${entry.id}` === identity,
+      );
       assert.ok(model, `Missing scoped model ${identity}`);
       return { model } as unknown as ScopedModel;
     }),
@@ -45,7 +53,12 @@ function createComponent(options?: {
       cancelled += 1;
     },
   });
-  return { component, done, getCancelled: () => cancelled, getRenders: () => renders };
+  return {
+    component,
+    done,
+    getCancelled: () => cancelled,
+    getRenders: () => renders,
+  };
 }
 
 function press(component: OrderedModelEditorComponent, ...keys: string[]) {
@@ -56,7 +69,10 @@ function typeText(component: OrderedModelEditorComponent, text: string) {
   for (const char of text) component.handleInput(char);
 }
 
-function moveSelectionToValue(component: OrderedModelEditorComponent, value: string) {
+function moveSelectionToValue(
+  component: OrderedModelEditorComponent,
+  value: string,
+) {
   const items = component.getCurrentItems();
   const targetIndex = items.findIndex((item) => item.value === value);
   assert.notEqual(targetIndex, -1, `Missing option: ${value}`);
@@ -83,25 +99,35 @@ test("ordered model editor searches, annotates scope, and excludes duplicates wh
   assert.equal(component.getSearchInput()?.focused, true);
 
   typeText(component, "claude");
-  assert.equal(component.getSelectList().getSelectedItem()?.value, "anthropic/claude-3.7-sonnet");
+  assert.equal(
+    component.getSelectList().getSelectedItem()?.value,
+    "anthropic/claude-3.7-sonnet",
+  );
   press(component, ENTER);
   assert.deepEqual(component.getDraftModels(), ["anthropic/claude-3.7-sonnet"]);
   assert.equal(component.getMode(), "menu");
 
   activateValue(component, "action:add");
   const pickerItems = component.getCurrentItems();
-  assert.ok(!pickerItems.some((item) => item.value === "anthropic/claude-3.7-sonnet"));
+  assert.ok(
+    !pickerItems.some((item) => item.value === "anthropic/claude-3.7-sonnet"),
+  );
   assert.match(
-    pickerItems.find((item) => item.value === "local/llama3.3")?.description ?? "",
+    pickerItems.find((item) => item.value === "local/llama3.3")?.description ??
+      "",
     /portable preference/,
   );
   assert.match(
-    pickerItems.find((item) => item.value === "openai/gpt-4.1")?.description ?? "",
+    pickerItems.find((item) => item.value === "openai/gpt-4.1")?.description ??
+      "",
     /scoped in this session/,
   );
 
   typeText(component, "llama");
-  assert.equal(component.getSelectList().getSelectedItem()?.value, "local/llama3.3");
+  assert.equal(
+    component.getSelectList().getSelectedItem()?.value,
+    "local/llama3.3",
+  );
   press(component, ENTER);
   activateValue(component, "action:done");
 
@@ -110,13 +136,17 @@ test("ordered model editor searches, annotates scope, and excludes duplicates wh
 });
 
 test("ordered model editor warns and annotates portable preferences when scope is empty", () => {
-  const picker = createComponent({ initialModels: [], scopedModels: [] }).component;
+  const picker = createComponent({
+    initialModels: [],
+    scopedModels: [],
+  }).component;
   assert.match(
     picker.render(200).join("\n"),
     /No scoped models: explicit preferences cannot run\. Configure \/scoped-models\./,
   );
   assert.match(
-    picker.getCurrentItems().find((item) => item.value === "openai/gpt-4.1")?.description ?? "",
+    picker.getCurrentItems().find((item) => item.value === "openai/gpt-4.1")
+      ?.description ?? "",
     /portable preference · not scoped in this session/,
   );
 
@@ -129,7 +159,8 @@ test("ordered model editor warns and annotates portable preferences when scope i
     /No scoped models: explicit preferences cannot run\. Configure \/scoped-models\./,
   );
   assert.match(
-    menu.getCurrentItems().find((item) => item.value === "entry:0")?.description ?? "",
+    menu.getCurrentItems().find((item) => item.value === "entry:0")
+      ?.description ?? "",
     /portable preference · not scoped in this session/,
   );
 });
@@ -157,12 +188,17 @@ test("ordered model editor keeps raw identities while sanitizing picker labels",
 
 test("ordered model editor replaces unavailable entries, reorders, removes, and clears", () => {
   const { component, done } = createComponent({
-    initialModels: ["custom/missing", "openai/gpt-4.1", "anthropic/claude-3.7-sonnet"],
+    initialModels: [
+      "custom/missing",
+      "openai/gpt-4.1",
+      "anthropic/claude-3.7-sonnet",
+    ],
     scopedModels: ["anthropic/claude-3.7-sonnet", "openai/gpt-4.1"],
   });
 
   assert.match(
-    component.getCurrentItems().find((item) => item.value === "entry:0")?.description ?? "",
+    component.getCurrentItems().find((item) => item.value === "entry:0")
+      ?.description ?? "",
     /unavailable in current model registry/,
   );
 
@@ -194,7 +230,10 @@ test("ordered model editor replaces unavailable entries, reorders, removes, and 
 
   activateValue(component, "entry:2");
   activateValue(component, "action:remove");
-  assert.deepEqual(component.getDraftModels(), ["anthropic/claude-3.7-sonnet", "google/gemini-2.5-pro"]);
+  assert.deepEqual(component.getDraftModels(), [
+    "anthropic/claude-3.7-sonnet",
+    "google/gemini-2.5-pro",
+  ]);
 
   activateValue(component, "action:clear");
   assert.deepEqual(component.getDraftModels(), []);
@@ -226,17 +265,53 @@ test("ordered model editor cancellation preserves the draft across picker and ac
   assert.deepEqual(done, []);
 });
 
+test("model dialogs keep selected rows, borders and footer visible on short terminals", () => {
+  const models = Array.from({ length: 30 }, (_, i) =>
+    availableModel("local", `model-${i}`),
+  );
+  const { component } = createComponent({
+    terminalRows: 12,
+    availableModels: models,
+    initialModels: models.map((model) => `local/${model.id}`),
+  });
+  moveSelectionToValue(component, "entry:29");
+  for (const width of [3, 20, 80]) {
+    const lines = component.render(width);
+    assert.ok(lines.length <= 10);
+    assert.ok(lines.every((line) => visibleWidth(line) <= width));
+    if (width >= 80) {
+      assert.match(lines.join("\n"), /model-29/);
+      assert.match(lines.join("\n"), /Esc cancel/);
+      assert.match(stripTerminalSequences(lines.at(-1)!), /^╰.*╯$/);
+    }
+  }
+  activateValue(component, "entry:29");
+  activateValue(component, "action:replace");
+  component.focused = true;
+  const lines = component.render(80);
+  assert.ok(lines.length <= 10);
+  assert.match(lines.join("\n"), /Type filter.*Esc back/);
+  assert.match(stripTerminalSequences(lines.at(-1)!), /^╰.*╯$/);
+});
+
 test("ordered model editor render stays within narrow widths", () => {
   const { component } = createComponent({
     initialModels: ["openai/gpt-4.1", "local/llama3.3"],
     availableModels: [
-      availableModel("openai", "gpt-4.1", "A very long model name for width checks"),
+      availableModel(
+        "openai",
+        "gpt-4.1",
+        "A very long model name for width checks",
+      ),
       availableModel("local", "llama3.3", "Another very long model name"),
     ],
   });
 
   for (const width of [18, 24, 40]) {
     const lines = component.render(width);
-    assert.ok(lines.every((line) => visibleWidth(line) <= width), `render overflowed width ${width}`);
+    assert.ok(
+      lines.every((line) => visibleWidth(line) <= width),
+      `render overflowed width ${width}`,
+    );
   }
 });

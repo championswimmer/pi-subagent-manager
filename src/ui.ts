@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parse as parseShell } from "shell-quote";
 import {
-  DynamicBorder,
   type ExtensionCommandContext,
   type ExtensionContext,
   getSelectListTheme,
@@ -22,10 +21,28 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import { AGENT_COLORS, ConfigStore, parseAgentType, serializeAgentType } from "./config.ts";
+import {
+  AGENT_COLORS,
+  ConfigStore,
+  parseAgentType,
+  serializeAgentType,
+} from "./config.ts";
 import { editModelPreferences, MODEL_EDITOR_CANCEL } from "./model-picker.ts";
+import {
+  canOpenDialog,
+  dialogEditor,
+  dialogMenu,
+  dialogHeight,
+  frameDialog,
+  DIALOG_OPTIONS,
+} from "./dialog.ts";
 import { getModelPreferences } from "./models.ts";
-import { THINKING_LEVELS, type AgentType, type ThreadService, type ThreadView } from "./types.ts";
+import {
+  THINKING_LEVELS,
+  type AgentType,
+  type ThreadService,
+  type ThreadView,
+} from "./types.ts";
 
 export type ThreadController = Pick<
   ThreadService,
@@ -47,14 +64,19 @@ function agentColorToken(color: string | undefined): ThemeColor {
 }
 
 /** Background pill with bold contrasting text. Label is sanitized; caller supplies brackets. */
-function contrastPill(label: string, color: string | undefined, theme: AgentBadgeTheme): string {
+function contrastPill(
+  label: string,
+  color: string | undefined,
+  theme: AgentBadgeTheme,
+): string {
   const background = theme.colors[agentColorToken(color)];
   const { r, g, b } = colorToRgb(background);
   const linear = (channel: number) => {
     const value = channel / 255;
     return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
   };
-  const luminance = 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+  const luminance =
+    0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
   // Pick whichever of black/white has the higher WCAG contrast ratio.
   const foreground = luminance > Math.sqrt(0.0525) - 0.05 ? 0 : 255;
   return theme.style(` ${sanitizeText(label)} `, {
@@ -64,16 +86,26 @@ function contrastPill(label: string, color: string | undefined, theme: AgentBadg
   });
 }
 
-function agentTypeBadge(type: string, color: string | undefined, theme: AgentBadgeTheme): string {
+function agentTypeBadge(
+  type: string,
+  color: string | undefined,
+  theme: AgentBadgeTheme,
+): string {
   return contrastPill(`[${type}]`, color, theme);
 }
 
-function agentPath(path: string, color: string | undefined, theme: AgentBadgeTheme): string {
+function agentPath(
+  path: string,
+  color: string | undefined,
+  theme: AgentBadgeTheme,
+): string {
   return theme.fg(agentColorToken(color), sanitizeText(path));
 }
 
 function metricCount(value: number | undefined): number {
-  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : 0;
 }
 
 /** Settled active time plus the current live run, only while starting or running. */
@@ -125,7 +157,10 @@ function fitLine(left: string, right: string, width: number): string {
 }
 
 function isLive(thread: ThreadView): boolean {
-  return thread.path !== "/root" && (thread.state === "starting" || thread.state === "running");
+  return (
+    thread.path !== "/root" &&
+    (thread.state === "starting" || thread.state === "running")
+  );
 }
 
 export function renderThreads(
@@ -142,22 +177,36 @@ export function renderThreads(
   const visible = threads
     .filter((thread) => thread.path !== "/root")
     .sort(
-      (a, b) => priority(a) - priority(b) || b.updatedAt - a.updatedAt || b.createdAt - a.createdAt,
+      (a, b) =>
+        priority(a) - priority(b) ||
+        b.updatedAt - a.updatedAt ||
+        b.createdAt - a.createdAt,
     );
   const limit = visible.length > 8 ? 7 : 8;
   const lines = visible.slice(0, limit).map((thread) => {
     const stateColor =
-      thread.state === "failed" ? "error" : thread.state === "paused" ? "warning" : "accent";
+      thread.state === "failed"
+        ? "error"
+        : thread.state === "paused"
+          ? "warning"
+          : "accent";
     const badge = agentTypeBadge(thread.type, thread.color, theme);
     const path = agentPath(thread.path, thread.color, theme);
     const state = theme.fg(stateColor, `[${sanitizeText(thread.state)}]`);
     const left = `${badge} ${path} ${state} ${sanitizeText(thread.status || thread.task)}`;
-    return fitLine(left, theme.fg("muted", threadMetrics(thread)), Math.max(0, width));
+    return fitLine(
+      left,
+      theme.fg("muted", threadMetrics(thread)),
+      Math.max(0, width),
+    );
   });
   if (visible.length > limit) {
     lines.push(
       truncateToWidth(
-        theme.fg("muted", `+${visible.length - limit} more threads · /agents thread`),
+        theme.fg(
+          "muted",
+          `+${visible.length - limit} more threads · /agents thread`,
+        ),
         Math.max(0, width),
       ),
     );
@@ -165,7 +214,10 @@ export function renderThreads(
   return lines;
 }
 
-export function updateWidget(ctx: ExtensionContext, threads: ThreadView[]): void {
+export function updateWidget(
+  ctx: ExtensionContext,
+  threads: ThreadView[],
+): void {
   if (!ctx.hasUI) return;
   if (!threads.some((thread) => thread.path !== "/root")) {
     ctx.ui.setWidget("pi-subagent", undefined, { placement: "belowEditor" });
@@ -203,7 +255,9 @@ export async function showThreads(
   while (true) {
     try {
       if (!selectedPath) {
-        const threads = controller.list().filter((thread) => thread.path !== "/root");
+        const threads = controller
+          .list()
+          .filter((thread) => thread.path !== "/root");
         if (!threads.length) {
           ctx.ui.notify("No subagent threads.", "info");
           return;
@@ -220,7 +274,9 @@ export async function showThreads(
       if (selectedPath === "/root")
         throw new Error("/root is the current Pi thread, not a subagent.");
       const thread = controller.get(selectedPath);
-      const children = controller.list().filter((child) => child.parent === selectedPath);
+      const children = controller
+        .list()
+        .filter((child) => child.parent === selectedPath);
       const title = `${sanitizeText(thread.path)} [${sanitizeText(thread.state)}] ${sanitizeText(thread.status)}`;
       const action = await ctx.ui.select(title, [
         "View output",
@@ -246,7 +302,10 @@ export async function showThreads(
           text.split("\n").map(sanitizeText).join("\n"),
         );
       } else if (action === "Send input / resume") {
-        const message = await ctx.ui.editor("Send input / resume retained session", "");
+        const message = await ctx.ui.editor(
+          "Send input / resume retained session",
+          "",
+        );
         if (message?.trim()) await controller.steer(selectedPath, message);
       } else if (action === "Stop") {
         if (
@@ -263,10 +322,14 @@ export async function showThreads(
         );
         const selected = await ctx.ui.select("Children", labels);
         if (selected !== undefined)
-          selectedPath = children[labels.indexOf(selected)]?.path ?? selectedPath;
+          selectedPath =
+            children[labels.indexOf(selected)]?.path ?? selectedPath;
       }
     } catch (error) {
-      ctx.ui.notify(sanitizeText(error instanceof Error ? error.message : String(error)), "error");
+      ctx.ui.notify(
+        sanitizeText(error instanceof Error ? error.message : String(error)),
+        "error",
+      );
       return;
     }
   }
@@ -283,9 +346,15 @@ export function editorArguments(command: string): string[] {
   return args as string[];
 }
 
-async function externalEdit(ctx: ExtensionCommandContext, text: string): Promise<string> {
-  if (ctx.mode !== "tui") throw new Error("External editing requires interactive TUI mode.");
-  const [command, ...args] = editorArguments(process.env.VISUAL || process.env.EDITOR || "vi");
+async function externalEdit(
+  ctx: ExtensionCommandContext,
+  text: string,
+): Promise<string> {
+  if (ctx.mode !== "tui")
+    throw new Error("External editing requires interactive TUI mode.");
+  const [command, ...args] = editorArguments(
+    process.env.VISUAL || process.env.EDITOR || "vi",
+  );
   const directory = await mkdtemp(join(tmpdir(), "pi-subagent-"));
   const file = join(directory, "agent.md");
   try {
@@ -299,7 +368,9 @@ async function externalEdit(ctx: ExtensionCommandContext, text: string): Promise
         });
         if (result.error) throw result.error;
         if (result.status !== 0)
-          throw new Error(`Editor exited with status ${result.status ?? result.signal}.`);
+          throw new Error(
+            `Editor exited with status ${result.status ?? result.signal}.`,
+          );
       } finally {
         tui.start();
         tui.requestRender(true);
@@ -318,9 +389,24 @@ async function editToolList(
   type: AgentType,
   field: "allow" | "block",
 ): Promise<void> {
-  const mode = await ctx.ui.select(
-    `tools.${field} (${sanitizeText(toolListMenuValue(type.tools?.[field]))})`,
-    ["Unset (use default policy)", "Empty list", "Enter exact tool names"],
+  const modes = [
+    "Unset (use default policy)",
+    "Empty list",
+    "Enter exact tool names",
+  ];
+  const current = type.tools?.[field];
+  const mode = await dialogMenu(
+    ctx,
+    `tools.${field} (${sanitizeText(toolListMenuValue(current))})`,
+    modes.map((label) => ({ id: label, label })),
+    {
+      selectedId:
+        current === undefined
+          ? modes[0]
+          : current.length === 0
+            ? modes[1]
+            : modes[2],
+    },
   );
   if (!mode) return;
   if (mode === "Unset (use default policy)") {
@@ -329,7 +415,8 @@ async function editToolList(
     const value =
       mode === "Empty list"
         ? ""
-        : await ctx.ui.editor(
+        : await dialogEditor(
+            ctx,
             `tools.${field}: comma-separated exact names`,
             type.tools?.[field]?.join(", ") ?? "",
           );
@@ -347,13 +434,20 @@ const AGENT_COLOR_DEFAULT = "__default__";
 const AGENT_COLOR_CANCEL = Symbol("agent-color-cancel");
 
 class AgentColorPickerComponent extends Container {
-  private readonly items: { value: string; label: string; description?: string }[];
+  private readonly items: {
+    value: string;
+    label: string;
+    description?: string;
+  }[];
   private readonly preview: Text;
   private readonly theme: Theme;
   readonly selectList: SelectList;
 
   constructor(
-    tui: { requestRender(force?: boolean): void },
+    private readonly tui: {
+      requestRender(force?: boolean): void;
+      terminal?: { rows: number };
+    },
     theme: Theme,
     currentColor: AgentType["color"] | undefined,
     private readonly agentName: string,
@@ -387,18 +481,63 @@ class AgentColorPickerComponent extends Container {
       this.updatePreview(tui, item.value);
     };
     this.selectList.onSelect = (item) => {
-      onSelect(item.value === AGENT_COLOR_DEFAULT ? undefined : (item.value as AgentType["color"]));
+      onSelect(
+        item.value === AGENT_COLOR_DEFAULT
+          ? undefined
+          : (item.value as AgentType["color"]),
+      );
     };
     this.selectList.onCancel = onCancel;
-    this.addChild(new DynamicBorder((text) => theme.fg("muted", text)));
-    this.updatePreview(tui, this.items[selectedIndex >= 0 ? selectedIndex : 0]!.value);
-    this.addChild(this.preview);
-    this.addChild(this.selectList);
-    this.addChild(new DynamicBorder((text) => theme.fg("muted", text)));
+    this.updatePreview(
+      tui,
+      this.items[selectedIndex >= 0 ? selectedIndex : 0]!.value,
+    );
   }
 
-  getItems(): readonly { value: string; label: string; description?: string }[] {
+  getItems(): readonly {
+    value: string;
+    label: string;
+    description?: string;
+  }[] {
     return this.items;
+  }
+
+  render(width: number): string[] {
+    const height = dialogHeight(this.tui);
+    const budget = Math.max(1, height - 7);
+    const selected = this.items.findIndex(
+      (item) => item.value === this.selectList.getSelectedItem()?.value,
+    );
+    const start = Math.max(
+      0,
+      Math.min(selected - budget + 1, this.items.length - budget),
+    );
+    const body = [
+      ` ${truncateToWidth(
+        this.preview
+          .render(1000)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .join(" "),
+        Math.max(1, width - 4),
+        "",
+      )}`,
+      "",
+      ...this.items
+        .slice(start, start + budget)
+        .map(
+          (item, i) =>
+            `${start + i === selected ? "›" : " "} ${item.label}  ${this.theme.fg("muted", item.description ?? "")}`,
+        ),
+    ];
+    return frameDialog(
+      this.theme,
+      width,
+      height,
+      "Agent color",
+      body,
+      "↑↓ preview · Enter apply · Esc cancel",
+    );
   }
 
   getPreview(): Text {
@@ -413,7 +552,10 @@ class AgentColorPickerComponent extends Container {
     this.selectList.handleInput(keyData);
   }
 
-  private updatePreview(tui: { requestRender(force?: boolean): void }, value: string): void {
+  private updatePreview(
+    tui: { requestRender(force?: boolean): void },
+    value: string,
+  ): void {
     const color = value === AGENT_COLOR_DEFAULT ? undefined : value;
     const badge = agentTypeBadge(this.agentName, color, this.theme);
     const path = agentPath("/root/example-task", color, this.theme);
@@ -429,19 +571,16 @@ async function selectAgentColor(
   currentColor: AgentType["color"] | undefined,
   agentName: string,
 ): Promise<AgentType["color"] | undefined | typeof AGENT_COLOR_CANCEL> {
-  return ctx.ui.custom(
-    (tui, theme, _keys, done) => {
-      return new AgentColorPickerComponent(
-        tui,
-        theme,
-        currentColor,
-        agentName,
-        (value) => done(value),
-        () => done(AGENT_COLOR_CANCEL),
-      );
-    },
-    { overlay: true },
-  );
+  return ctx.ui.custom((tui, theme, _keys, done) => {
+    return new AgentColorPickerComponent(
+      tui,
+      theme,
+      currentColor,
+      agentName,
+      (value) => done(value),
+      () => done(AGENT_COLOR_CANCEL),
+    );
+  }, DIALOG_OPTIONS);
 }
 
 async function editDocument(
@@ -457,7 +596,8 @@ async function editDocument(
         text = await externalEdit(ctx, text);
       } else {
         const end = text.indexOf("\n---", 4);
-        const yaml = await ctx.ui.editor(
+        const yaml = await dialogEditor(
+          ctx,
           "Agent frontmatter YAML (Markdown body preserved)",
           text.slice(4, end),
         );
@@ -470,15 +610,28 @@ async function editDocument(
         source: type.source,
       };
     } catch (error) {
-      const diagnostic = sanitizeText(error instanceof Error ? error.message : String(error));
-      ctx.ui.notify(`Edit not accepted: ${diagnostic}. Original definition is unchanged.`, "error");
-      if (
-        !(await ctx.ui.confirm(
-          "Invalid edit — retry?",
-          `${diagnostic}\nRetry editing, or cancel to restore the previous definition.`,
-        ))
-      )
-        return;
+      const diagnostic = sanitizeText(
+        error instanceof Error ? error.message : String(error),
+      );
+      ctx.ui.notify(
+        `Edit not accepted: ${diagnostic}. Original definition is unchanged.`,
+        "error",
+      );
+      const action = await dialogMenu(ctx, "Invalid edit — retry?", [
+        {
+          id: "Retry",
+          label: "Retry",
+          value: "Continue editing",
+          help: diagnostic,
+        },
+        {
+          id: "Cancel",
+          label: "Cancel",
+          value: "Restore previous definition",
+          help: diagnostic,
+        },
+      ]);
+      if (action !== "Retry") return;
     }
   }
 }
@@ -493,7 +646,9 @@ function assertSaveDestination(
   const entries = store.list();
   const sameName = entries.find((entry) => entry.name === type.name);
   if (sameName && (!original || type.name !== original.name)) {
-    throw new Error(`Agent type ${type.name} already exists; choose a different name.`);
+    throw new Error(
+      `Agent type ${type.name} already exists; choose a different name.`,
+    );
   }
   const destination = store.destination(type.name, scope, original);
   if (
@@ -514,6 +669,9 @@ const EDIT_MENU_ACTIONS = [
   "tools.allow",
   "tools.block",
   "color",
+  "systemPrompt",
+  "Save scope",
+  "Source",
   "Edit frontmatter YAML",
   "External editor (entire Markdown)",
   "Save",
@@ -521,6 +679,63 @@ const EDIT_MENU_ACTIONS = [
 ] as const;
 
 type EditMenuAction = (typeof EDIT_MENU_ACTIONS)[number];
+
+const EDIT_FIELD_LABELS: Record<EditMenuAction, string> = {
+  name: "Name",
+  description: "Description",
+  models: "Models",
+  thinkingLevel: "Thinking level",
+  "tools.allow": "Allowed tools",
+  "tools.block": "Blocked tools",
+  color: "Color",
+  systemPrompt: "System prompt",
+  "Save scope": "Save scope",
+  Source: "Source (read-only)",
+  "Edit frontmatter YAML": "Frontmatter YAML",
+  "External editor (entire Markdown)": "External editor",
+  Save: "Save",
+  Cancel: "Cancel",
+};
+
+const EDIT_FIELD_HELP: Record<EditMenuAction, string> = {
+  name: "Unique type identifier. Renaming retains the original file.",
+  description: "Description shown when browsing and spawning agents.",
+  models:
+    "Ordered model preferences. Unavailable models are skipped at runtime.",
+  thinkingLevel: "Reasoning effort. Default follows the parent session.",
+  "tools.allow":
+    "Unset uses default policy; an empty list explicitly allows no tools.",
+  "tools.block": "Exact tool names to remove from the allowed set.",
+  color: "Thread widget color with live preview.",
+  systemPrompt: "Edit the Markdown prompt body in a multiline dialog.",
+  "Save scope":
+    "Project definitions override global definitions with the same name.",
+  Source:
+    "Read-only source. Bundled definitions are copied, never overwritten.",
+  "Edit frontmatter YAML": "Edit metadata as YAML, preserving the prompt body.",
+  "External editor (entire Markdown)":
+    "Edit the complete definition using $VISUAL / $EDITOR.",
+  Save: "Validate and save. Existing sessions keep their original configuration.",
+  Cancel: "Close without saving any edits.",
+};
+
+async function chooseSaveScope(
+  ctx: ExtensionCommandContext,
+  store: ConfigStore,
+  current: "user" | "project",
+): Promise<"user" | "project" | undefined> {
+  const choices = [
+    "Global",
+    ...(store.canSaveProject() ? ["Trusted project"] : []),
+  ];
+  const value = await dialogMenu(
+    ctx,
+    "Save scope",
+    choices.map((label) => ({ id: label, label })),
+    { selectedId: current === "user" ? "Global" : "Trusted project" },
+  );
+  return value ? (value === "Global" ? "user" : "project") : undefined;
+}
 
 /** Omitted tool lists use the default policy; [] is an explicit empty list, not inheritance. */
 function toolListMenuValue(names: string[] | undefined): string {
@@ -547,6 +762,8 @@ function editMenuLabel(action: EditMenuAction, draft: AgentType): string {
       return `tools.block: ${sanitizeText(toolListMenuValue(draft.tools?.block))}`;
     case "color":
       return `color: ${sanitizeText(draft.color ?? "Default (inherit)")}`;
+    case "systemPrompt":
+      return `systemPrompt: ${draft.systemPrompt.split("\n").length} lines · ${draft.systemPrompt.length} characters`;
     default:
       return action;
   }
@@ -556,32 +773,75 @@ export async function editAgentTypes(
   ctx: ExtensionCommandContext,
   store: ConfigStore,
 ): Promise<void> {
-  if (!ctx.hasUI) return;
+  if (!canOpenDialog(ctx)) return;
   while (true) {
     const types = store.list();
-    const names = types.map((type) => type.name);
-    const selection = await ctx.ui.select("Agent types", ["Create new type", ...names]);
+    const selection = await dialogMenu(ctx, "Agent types", [
+      {
+        id: "Create new type",
+        label: "Create new type",
+        value: "New definition",
+        help: "Nothing is written until you save.",
+      },
+      ...types.map((type) => ({
+        id: type.name,
+        label: type.name,
+        value: type.description,
+        help: `${type.source ?? "user"} · ${type.filePath ?? ""}`,
+      })),
+    ]);
     if (selection === undefined) return;
-    const original = selection === "Create new type" ? undefined : store.get(selection);
+    const original =
+      selection === "Create new type" ? undefined : store.get(selection);
     let draft: AgentType = original
       ? structuredClone(original)
       : { name: "new-agent", description: "New agent", systemPrompt: "" };
+    let selectedId: string | undefined;
+    let saveScope: "user" | "project" =
+      original?.source === "project" && store.canSaveProject()
+        ? "project"
+        : "user";
     while (true) {
-      const labels = EDIT_MENU_ACTIONS.map((action) => editMenuLabel(action, draft));
-      const selected = await ctx.ui.select(`Edit ${sanitizeText(draft.name)} (unsaved)`, labels);
-      if (selected === undefined) break;
-      const field = EDIT_MENU_ACTIONS[labels.indexOf(selected)];
+      const field = await dialogMenu(
+        ctx,
+        `Edit ${sanitizeText(draft.name)} (unsaved)`,
+        EDIT_MENU_ACTIONS.map((action) => {
+          const decorated = editMenuLabel(action, draft);
+          const separator = decorated.indexOf(": ");
+          return {
+            id: action,
+            label: EDIT_FIELD_LABELS[action],
+            value:
+              action === "Source"
+                ? (original?.source ?? "New draft")
+                : action === "Save scope"
+                  ? saveScope === "user"
+                    ? "Global"
+                    : "Trusted project"
+                  : separator >= 0
+                    ? decorated.slice(separator + 2)
+                    : "",
+            help:
+              action === "Source"
+                ? (original?.filePath ??
+                  "Not saved yet. Bundled definitions are copied, never overwritten.")
+                : EDIT_FIELD_HELP[action],
+          };
+        }),
+        {
+          selectedId,
+          saveId: "Save",
+          footer: "↑↓/Tab fields · Enter edit · Ctrl+S save · Esc cancel",
+        },
+      );
+      selectedId = field;
       if (!field || field === "Cancel") break;
       try {
         if (field === "Save") {
           // Round-trip before saving: no partial or invalid configuration is accepted.
           const validated = parseAgentType(serializeAgentType(draft));
-          const scopeChoice = await ctx.ui.select(
-            "Save scope",
-            store.canSaveProject() ? ["Global", "Trusted project"] : ["Global"],
-          );
-          if (!scopeChoice) continue;
-          const scope = scopeChoice === "Global" ? "user" : "project";
+          const scope = await chooseSaveScope(ctx, store, saveScope);
+          if (!scope) continue;
           assertSaveDestination(store, validated, original, scope);
           const saved = store.save(validated, scope, original);
           ctx.ui.notify(
@@ -590,7 +850,22 @@ export async function editAgentTypes(
           );
           break;
         }
-        if (field === "External editor (entire Markdown)" || field === "Edit frontmatter YAML") {
+        if (field === "Save scope") {
+          const scope = await chooseSaveScope(ctx, store, saveScope);
+          if (scope) saveScope = scope;
+          continue;
+        }
+        if (field === "Source") {
+          ctx.ui.notify(
+            original?.filePath ?? "This definition has not been saved yet.",
+            "info",
+          );
+          continue;
+        }
+        if (
+          field === "External editor (entire Markdown)" ||
+          field === "Edit frontmatter YAML"
+        ) {
           const edited = await editDocument(
             ctx,
             draft,
@@ -600,7 +875,11 @@ export async function editAgentTypes(
           continue;
         }
         const candidate = structuredClone(draft);
-        if (field === "name" || field === "description") {
+        if (
+          field === "name" ||
+          field === "description" ||
+          field === "systemPrompt"
+        ) {
           const originalValue = candidate[field] ?? "";
           // Editor prefill must not carry terminal controls. An unmodified or
           // SDK-trimmed submit keeps the original, including whitespace and CRLF.
@@ -610,11 +889,17 @@ export async function editAgentTypes(
             .split("\n")
             .map(sanitizeText)
             .join("\n");
-          const value = await ctx.ui.editor(`Agent ${field}`, prefill);
+          const value = await dialogEditor(ctx, `Agent ${field}`, prefill);
           if (value === undefined) continue;
-          candidate[field] = value === prefill || value === prefill.trim() ? originalValue : value;
+          candidate[field] =
+            value === prefill || value === prefill.trim()
+              ? originalValue
+              : value;
         } else if (field === "models") {
-          const value = await editModelPreferences(ctx, getModelPreferences(candidate));
+          const value = await editModelPreferences(
+            ctx,
+            getModelPreferences(candidate),
+          );
           if (value === MODEL_EDITOR_CANCEL) continue;
           if (value.length === 0) {
             delete candidate.models;
@@ -624,20 +909,33 @@ export async function editAgentTypes(
             delete candidate.model;
           }
         } else if (field === "thinkingLevel") {
-          const value = await ctx.ui.select("Thinking level", [
-            "Default (inherit)",
-            ...THINKING_LEVELS,
-          ]);
+          const value = await dialogMenu(
+            ctx,
+            "Thinking level",
+            ["Default (inherit)", ...THINKING_LEVELS].map((label) => ({
+              id: label,
+              label,
+            })),
+            { selectedId: candidate.thinkingLevel ?? "Default (inherit)" },
+          );
           if (!value) continue;
           if (value === "Default (inherit)") delete candidate.thinkingLevel;
           else candidate.thinkingLevel = value as AgentType["thinkingLevel"];
         } else if (field === "color") {
-          const value = await selectAgentColor(ctx, candidate.color, candidate.name);
+          const value = await selectAgentColor(
+            ctx,
+            candidate.color,
+            candidate.name,
+          );
           if (value === AGENT_COLOR_CANCEL) continue;
           if (value === undefined) delete candidate.color;
           else candidate.color = value;
         } else if (field === "tools.allow" || field === "tools.block") {
-          await editToolList(ctx, candidate, field === "tools.allow" ? "allow" : "block");
+          await editToolList(
+            ctx,
+            candidate,
+            field === "tools.allow" ? "allow" : "block",
+          );
         }
         parseAgentType(serializeAgentType(candidate));
         draft = candidate;
