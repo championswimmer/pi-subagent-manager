@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { getModelPreferences } from "./models.ts";
 import type { ThreadManager } from "./manager.ts";
 import type { AgentType, ThreadView } from "./types.ts";
 
@@ -43,10 +44,10 @@ export function agentTools(
       Type.Object({}),
       () =>
         result(
-          getTypes().map(({ name, description, model, thinkingLevel, color }) => ({
+          getTypes().map(({ name, description, thinkingLevel, color, ...type }) => ({
             name,
             description,
-            model,
+            models: getModelPreferences(type),
             thinkingLevel,
             color,
           })),

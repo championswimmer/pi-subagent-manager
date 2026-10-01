@@ -43,7 +43,7 @@ function fixture(t: TestContext) {
 test("parse and serialize round-trip all fields and exact Markdown body", () => {
   const type: AgentType = {
     ...definition,
-    model: "provider/model/id",
+    models: ["provider/model/id", "provider/fallback"],
     thinkingLevel: "high",
     color: "accent",
     tools: { allow: [], block: ["bash"] },
@@ -55,18 +55,44 @@ test("parse and serialize round-trip all fields and exact Markdown body", () => 
   assert.equal(parseAgentType("---\nname: empty\ndescription: Empty\n---").systemPrompt, "");
 });
 
+test("legacy model frontmatter parses as models and serializes canonically", () => {
+  const parsed = parseAgentType(markdown("model: provider/model/with/slashes\n"));
+  assert.deepEqual(parsed, {
+    ...definition,
+    models: ["provider/model/with/slashes"],
+    systemPrompt: "Body\n",
+  });
+
+  const legacy = {
+    ...definition,
+    model: "provider/model/with/slashes",
+  };
+  const serialized = serializeAgentType(legacy);
+  assert.match(
+    serialized,
+    /^---\nname: example\ndescription: Example agent\nmodels:\n  - provider\/model\/with\/slashes\n---\n# Instructions\n\nBe helpful\.\n$/,
+  );
+  assert.doesNotMatch(serialized, /\nmodel:/);
+  assert.deepEqual(parseAgentType(serialized), {
+    ...definition,
+    models: ["provider/model/with/slashes"],
+  });
+});
+
 test("serializer excludes provenance and quotes YAML-sensitive strings", () => {
   const type = {
     ...definition,
     description: "colon: # yes\nmultiline",
+    model: "provider/model",
     source: "user" as const,
     filePath: "/private/example.md",
   };
   const content = serializeAgentType(type);
-  assert.doesNotMatch(content, /source:|filePath:/);
+  assert.doesNotMatch(content, /source:|filePath:|\nmodel:/);
   assert.deepEqual(parseAgentType(content), {
     ...definition,
     description: type.description,
+    models: ["provider/model"],
   });
 });
 
@@ -91,12 +117,17 @@ test("reject malformed YAML, duplicate keys, unknown fields and unsupported Clau
   );
 });
 
-test("validate scalar fields, safe names, model and exact tool policy", () => {
+test("validate scalar fields, safe names, model preferences and exact tool policy", () => {
   for (const name of ["../escape", "a/b", '""', "null", "123", "a.b"])
     assert.throws(() => parseAgentType(markdown("", name)), /name/);
   for (const extra of [
     "model: model-only\n",
     "model: null\n",
+    "models: null\n",
+    "models: provider/model\n",
+    "models: []\n",
+    "models:\n  - provider/model\n  - provider/model\n",
+    "model: provider/legacy\nmodels:\n  - provider/model\n",
     "thinkingLevel: extreme\n",
     "color: red\n",
     "color: toolPendingBg\n",
@@ -107,7 +138,14 @@ test("validate scalar fields, safe names, model and exact tool policy", () => {
     "tools:\n  allow: [123]\n",
   ])
     assert.throws(() => parseAgentType(markdown(extra)));
-  assert.throws(() => parseAgentType("---\nname: valid\ndescription: ''\n---\n"), /description/);
+  assert.throws(
+    () => parseAgentType("---\nname: valid\ndescription: ''\n---\n"),
+    /description/,
+  );
+  assert.deepEqual(
+    parseAgentType(markdown("models:\n  - provider/model/with/slashes\n")).models,
+    ["provider/model/with/slashes"],
+  );
   for (const color of AGENT_COLORS)
     assert.equal(parseAgentType(markdown(`color: ${color}\n`)).color, color);
   for (const thinkingLevel of THINKING_LEVELS)

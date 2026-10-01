@@ -196,13 +196,29 @@ function editorContext(
   root: string,
   choices: (string | undefined)[],
   inputs: (string | undefined)[] = [],
+  options: {
+    mode?: "tui" | "rpc" | "json" | "print";
+    availableModels?: { provider: string; id: string; name: string }[];
+    scopedModels?: string[];
+  } = {},
 ) {
   const diagnostics: string[] = [];
   const scopes: string[][] = [];
+  const availableModels = options.availableModels ?? [];
+  const scopedModels = (options.scopedModels ?? []).map((identity) => {
+    const [provider, ...rest] = identity.split("/");
+    const id = rest.join("/");
+    const model =
+      availableModels.find((entry) => entry.provider === provider && entry.id === id) ??
+      ({ provider, id, name: id } as const);
+    return { model };
+  });
   const ctx = {
     hasUI: true,
-    mode: "tui",
+    mode: options.mode ?? "tui",
     cwd: root,
+    modelRegistry: { getAvailable: () => availableModels },
+    scopedModels,
     ui: {
       select: async (_title: string, options: string[]) => {
         if (_title === "Save scope") scopes.push(options);
@@ -219,7 +235,7 @@ function editorContext(
   return { ctx, diagnostics, scopes };
 }
 
-test("type field editor handles all YAML fields without changing Markdown", async () => {
+test("type field editor handles YAML fields without changing Markdown", async () => {
   const { root, store, body } = await configFixture();
   try {
     const { ctx } = editorContext(
@@ -228,7 +244,6 @@ test("type field editor handles all YAML fields without changing Markdown", asyn
         "worker",
         "name",
         "description",
-        "model",
         "thinkingLevel",
         "high",
         "tools.allow",
@@ -241,12 +256,12 @@ test("type field editor handles all YAML fields without changing Markdown", asyn
         "Global",
         undefined,
       ],
-      ["renamed", "New description", "provider/model", "bash, read"],
+      ["renamed", "New description", "bash, read"],
     );
     await editAgentTypes(ctx, store);
     const saved = store.get("renamed");
     assert.equal(saved.description, "New description");
-    assert.equal(saved.model, "provider/model");
+    assert.equal(saved.model, undefined);
     assert.equal(saved.thinkingLevel, "high");
     assert.equal(saved.color, "success");
     assert.deepEqual(saved.tools, { allow: [], block: ["bash", "read"] });
@@ -261,6 +276,123 @@ test("type field editor handles all YAML fields without changing Markdown", asyn
   }
 });
 
+test("legacy scalar model opens the ordered picker and cancel keeps the saved definition", async () => {
+  const { root, store, agentDir, body } = await configFixture();
+  try {
+    const legacyScalarDefinition = `---\nname: worker\ndescription: Worker\nmodel: openai/gpt-4.1\n---\n${body}`;
+    await writeFile(join(agentDir, "agents", "worker.md"), legacyScalarDefinition);
+    store.reload();
+    const { ctx } = editorContext(
+      root,
+      ["worker", "models", "Cancel", undefined],
+      [],
+      {
+        availableModels: [
+          { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
+          { provider: "anthropic", id: "claude-3.7-sonnet", name: "Claude 3.7 Sonnet" },
+        ],
+        scopedModels: ["openai/gpt-4.1"],
+      },
+    );
+    const observed = { mode: "", label: "", description: "" };
+    const theme = {
+      fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+    } as unknown as Theme;
+    ctx.ui.custom = (async (factory: Function) => {
+      return new Promise<any>((resolve, reject) => {
+        Promise.resolve(
+          factory(
+            { requestRender: () => {} },
+            theme,
+            {},
+            (result: unknown) => resolve(result),
+          ),
+        )
+          .then((component: any) => {
+            observed.mode = component.getMode();
+            observed.label = component.getCurrentItems()[0]?.label ?? "";
+            observed.description = component.getCurrentItems()[0]?.description ?? "";
+            component.handleInput("\u001B");
+          })
+          .catch(reject);
+      });
+    }) as typeof ctx.ui.custom;
+    await editAgentTypes(ctx, store);
+    assert.equal(observed.mode, "menu");
+    assert.equal(observed.label, "1. openai/gpt-4.1");
+    assert.match(observed.description, /scoped in this session/);
+    assert.deepEqual((store.get("worker") as { models?: string[] }).models, ["openai/gpt-4.1"]);
+    assert.equal(store.get("worker").systemPrompt, body);
+    assert.equal(await readFile(join(agentDir, "agents", "worker.md"), "utf8"), legacyScalarDefinition);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("saving model preferences stores canonical ordered models after add and reorder", async () => {
+  const { root, store, body } = await configFixture();
+  try {
+    const { ctx } = editorContext(
+      root,
+      ["worker", "models", "Save", "Global", undefined],
+      [],
+      {
+        availableModels: [
+          { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
+          {
+            provider: "anthropic",
+            id: "claude-3.7-sonnet",
+            name: "Claude 3.7 Sonnet",
+          },
+          { provider: "google", id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
+        ],
+        scopedModels: ["openai/gpt-4.1", "anthropic/claude-3.7-sonnet"],
+      },
+    );
+    ctx.ui.custom = (async (factory: Function) => {
+      return new Promise<any>((resolve, reject) => {
+        Promise.resolve(
+          factory(
+            { requestRender: () => {} },
+            { fg: (_color: string, text: string) => text },
+            {},
+            (result: unknown) => resolve(result),
+          ),
+        )
+          .then((component: any) => {
+            const selectValue = (value: string) => {
+              const item = component
+                .getCurrentItems()
+                .find((entry: { value: string }) => entry.value === value);
+              assert.ok(item, `Missing model picker option: ${value}`);
+              component.getSelectList().onSelect?.(item);
+            };
+            selectValue("openai/gpt-4.1");
+            selectValue("action:add");
+            selectValue("anthropic/claude-3.7-sonnet");
+            selectValue("entry:1");
+            selectValue("action:earlier");
+            selectValue("action:done");
+          })
+          .catch(reject);
+      });
+    }) as typeof ctx.ui.custom;
+    await editAgentTypes(ctx, store);
+    const saved = store.get("worker");
+    assert.deepEqual(saved.models, ["anthropic/claude-3.7-sonnet", "openai/gpt-4.1"]);
+    assert.equal(saved.model, undefined);
+    assert.equal(saved.systemPrompt, body);
+    const persisted = await readFile(saved.filePath!, "utf8");
+    assert.match(
+      persisted,
+      /models:\n  - anthropic\/claude-3\.7-sonnet\n  - openai\/gpt-4\.1/,
+    );
+    assert.doesNotMatch(persisted, /\nmodel:/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("invalid field edits and untrusted project saves leave configuration unchanged", async () => {
   const { root, store, body } = await configFixture();
   try {
@@ -269,7 +401,6 @@ test("invalid field edits and untrusted project saves leave configuration unchan
       [
         "worker",
         "name",
-        "model",
         "tools.allow",
         "Enter exact tool names",
         "Save",
@@ -277,13 +408,13 @@ test("invalid field edits and untrusted project saves leave configuration unchan
         "Cancel",
         undefined,
       ],
-      ["../escape", "missing-provider", "read, read"],
+      ["../escape", "read, read"],
     );
     await editAgentTypes(ctx, store);
     assert.equal(store.get("worker").systemPrompt, body);
     assert.equal(store.get("worker").model, undefined);
     assert.equal(store.get("worker").tools, undefined);
-    assert.equal(diagnostics.length, 3);
+    assert.equal(diagnostics.length, 2);
     assert.deepEqual(scopes, [["Global"]]);
   } finally {
     await rm(root, { recursive: true, force: true });

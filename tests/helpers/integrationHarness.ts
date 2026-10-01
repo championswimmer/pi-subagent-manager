@@ -51,6 +51,7 @@ export async function withOfflineHarness(
   options: {
     agentFiles: Record<string, string>;
     onRequest(request: LoggedRequest): AssistantMessage;
+    scopedModels?: string[];
   },
   body: (harness: OfflineHarness) => Promise<void>,
 ): Promise<void> {
@@ -139,6 +140,13 @@ export async function withOfflineHarness(
       },
     });
     await runtime.setRuntimeApiKey("integration-test", "offline-runtime-key");
+    const scopedModels = (options.scopedModels ?? [
+      "integration-test/offline",
+      "integration-test/offline-alt",
+    ]).map((identity) => {
+      const slash = identity.indexOf("/");
+      return { model: runtime.getModel(identity.slice(0, slash), identity.slice(slash + 1))! };
+    });
 
     const open = async (manager: SessionManager) => {
       const settingsManager = SettingsManager.inMemory({
@@ -164,6 +172,7 @@ export async function withOfflineHarness(
         agentDir: directory,
         modelRuntime: runtime,
         model: runtime.getModel("integration-test", "offline"),
+        scopedModels,
         sessionManager: manager,
         settingsManager,
         resourceLoader,

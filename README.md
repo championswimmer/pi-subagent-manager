@@ -56,7 +56,9 @@ Definitions are Markdown files with YAML frontmatter:
 ---
 name: coding-researcher
 description: Investigate APIs and find evidence before implementation
-model: anthropic/claude-sonnet-4-6
+models:
+  - anthropic/claude-sonnet-4-6
+  - openai/gpt-5
 thinkingLevel: high
 color: accent
 tools:
@@ -70,10 +72,13 @@ report concrete findings, and do not modify files.
 
 The Markdown body is the agent's system prompt. `name` and `description` are required. Other fields are optional:
 
-- **model:** `provider/model-id`; omission uses parent/default model. Model IDs may contain slashes.
+- **models:** an ordered YAML list of exact `provider/model-id` preferences. Model IDs may contain additional slashes. The first entry that exists in `/scoped-models` wins; the scan follows the list order, not the scoped-model order.
+- **model:** deprecated compatibility alias for a single preference. Existing definitions still parse, but saving normalizes them to `models:` and does not write `model:` back out.
 - **thinkingLevel:** `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. The SDK applies the selected model's supported levels.
 - **color:** a pi semantic foreground color, such as `accent`, `success`, `warning`, `error`, `muted` or `dim`. Colors follow theme changes.
 - **tools:** exact-name `allow` and/or `block` lists. Block wins. An empty allow list means **no tools**; omission allows supported tools. Unavailable names fail clearly, rather than widening access.
+
+If `models`/`model` is omitted, the agent inherits the effective parent/default model. Matching is strict: preferences are matched verbatim against `/scoped-models`, and if none match — including when `/scoped-models` is empty — spawn fails with an actionable error instead of falling back to the registry.
 
 Discovery precedence:
 
@@ -85,7 +90,7 @@ Project types override global types. Malformed definitions and same-scope duplic
 
 ### Configuration and thread UI
 
-- `/agents types`: create/edit agent types. Field dialogs edit YAML defaults while preserving the prompt. The YAML editor edits the header together; **Open in external editor** edits the whole Markdown file using `$VISUAL`, `$EDITOR`, or `vi`.
+- `/agents types`: create/edit agent types. Field dialogs edit YAML defaults while preserving the prompt. Model preferences use an ordered picker: add available models (scoped entries are marked), remove entries, and move them up/down to control preference order. The YAML editor edits the header together; **Open in external editor** edits the whole Markdown file using `$VISUAL`, `$EDITOR`, or `vi`.
 - `/agents reload`: reload definitions and show diagnostics.
 - `/agents`: pick a thread, inspect its output/transcript, send input/resume, or stop it.
 - `/agents thread /root/coding-researcher`: open one thread directly.

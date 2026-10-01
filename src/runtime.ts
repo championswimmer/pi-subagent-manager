@@ -18,9 +18,22 @@ import {
   DurableMailbox,
 } from "./mailbox.ts";
 import { selectTools } from "./config.ts";
+import { modelIdentity, getModelPreferences, selectPreferredModel } from "./models.ts";
 import { THINKING_LEVELS, type DriverFactory, type ThinkingLevel } from "./types.ts";
 
 const BUILTINS = ["read", "bash", "powershell", "edit", "write", "grep", "find", "ls"];
+type ScopedModel = ExtensionContext["scopedModels"][number];
+
+function parseModelIdentity(identity: string): { provider: string; id: string } {
+  const slash = identity.indexOf("/");
+  return { provider: identity.slice(0, slash), id: identity.slice(slash + 1) };
+}
+
+function scopedModelsKey(scopedModels: readonly ScopedModel[]): string {
+  return scopedModels
+    .map(({ model, thinkingLevel }) => `${modelIdentity(model)}\0${thinkingLevel ?? ""}`)
+    .join("\n");
+}
 
 /** Isolated SDK sessions; neither external extensions nor the CLI's MCP factories are loaded. */
 export function createDriverFactory(getRootContext: () => ExtensionContext): DriverFactory {
@@ -88,6 +101,30 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
         }
       }
     }
+    const parent = options.parentPath ? resolved.get(`${rootId}:${options.parentPath}`) : undefined;
+    const restored = options.sessionFile ? sessionManager.buildSessionContext() : undefined;
+    const modelPreferences = getModelPreferences(options.type);
+    const normalizeScopedModels = (
+      scopedModels: ExtensionContext["scopedModels"] | null | undefined,
+    ): readonly ScopedModel[] => scopedModels ?? [];
+    const selectScopedPreference = (scopedModels: readonly ScopedModel[]) => {
+      try {
+        return selectPreferredModel(options.type, scopedModels);
+      } catch (error) {
+        if (scopedModels.length === 0 && error instanceof Error && !error.message.includes("[]"))
+          throw new Error(`${error.message} Current /scoped-models scope: [].`);
+        throw error;
+      }
+    };
+    const initialScopedModels = normalizeScopedModels(ctx.scopedModels);
+    let provider = parent?.provider ?? ctx.model?.provider;
+    let id = parent?.id ?? ctx.model?.id;
+    if (modelPreferences !== undefined) {
+      ({ provider, id } = parseModelIdentity(selectScopedPreference(initialScopedModels)!));
+    } else if (restored?.model) {
+      provider = restored.model.provider;
+      id = restored.model.modelId;
+    }
     options.signal.throwIfAborted();
     const runtime = await ModelRuntime.create({
       authPath: path.join(agentDir, "auth.json"),
@@ -103,40 +140,41 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
       if (native) runtime.registerNativeProvider(native);
       if (config) runtime.registerProvider(providerId, config);
     }
-    const parent = options.parentPath ? resolved.get(`${rootId}:${options.parentPath}`) : undefined;
-    let provider = parent?.provider ?? ctx.model?.provider;
-    let id = parent?.id ?? ctx.model?.id;
-    if (options.type.model) {
-      const slash = options.type.model.indexOf("/");
-      if (slash < 1 || slash === options.type.model.length - 1)
-        throw new Error("Agent model must be provider/model-id");
-      provider = options.type.model.slice(0, slash);
-      id = options.type.model.slice(slash + 1);
-    }
-    const restored = options.sessionFile ? sessionManager.buildSessionContext() : undefined;
-    if (restored?.model) {
-      provider = restored.model.provider;
-      id = restored.model.modelId;
-    }
-    options.signal.throwIfAborted();
-    if (provider && ctx.modelRegistry.getProviderAuthStatus(provider).source === "runtime") {
-      const apiKey = await ctx.modelRegistry.getApiKeyForProvider(provider);
+    const mirrorRuntimeAuth = async (providerId: string) => {
+      options.signal.throwIfAborted();
+      if (ctx.modelRegistry.getProviderAuthStatus(providerId).source !== "runtime") return;
+      const apiKey = await ctx.modelRegistry.getApiKeyForProvider(providerId);
       options.signal.throwIfAborted();
       if (apiKey !== undefined)
-        await runtime.setRuntimeApiKey(provider, apiKey, { signal: options.signal });
+        await runtime.setRuntimeApiKey(providerId, apiKey, { signal: options.signal });
       options.signal.throwIfAborted();
-    }
-    const rootModel = provider && id ? ctx.modelRegistry.find(provider, id) : undefined;
-    if (rootModel?.api === "pi-virtual") {
-      throw new Error(
-        `Virtual model ${provider}/${id} cannot be reproduced through the public registry API. Set this agent type's model to a physical provider/model-id.`,
-      );
-    }
-    const model = provider && id ? runtime.getModel(provider, id) : undefined;
-    if (!model)
-      throw new Error(
-        `Subagent model ${provider ?? "(unset)"}/${id ?? "(unset)"} is unavailable; select a physical model in the root or agent type`,
-      );
+    };
+    const resolveRuntimeModel = async (
+      providerId: string | undefined,
+      modelId: string | undefined,
+      scopedModels: readonly ScopedModel[],
+    ) => {
+      if (!providerId || !modelId)
+        throw new Error(
+          `Subagent model ${providerId ?? "(unset)"}/${modelId ?? "(unset)"} is unavailable; select a physical model in the root or agent type`,
+        );
+      await mirrorRuntimeAuth(providerId);
+      const sourceModel =
+        scopedModels.find(({ model }) => model.provider === providerId && model.id === modelId)?.model ??
+        ctx.modelRegistry.find(providerId, modelId);
+      if (sourceModel?.api === "pi-virtual") {
+        throw new Error(
+          `Virtual model ${providerId}/${modelId} cannot be reproduced through the public registry API. Set this agent type's model to a physical provider/model-id.`,
+        );
+      }
+      const runtimeModel = runtime.getModel(providerId, modelId);
+      if (!runtimeModel)
+        throw new Error(
+          `Subagent model ${providerId}/${modelId} is unavailable; select a physical model in the root or agent type`,
+        );
+      return runtimeModel;
+    };
+    const model = await resolveRuntimeModel(provider, id, initialScopedModels);
     const savedThinking =
       restored && THINKING_LEVELS.includes(restored.thinkingLevel as ThinkingLevel)
         ? (restored.thinkingLevel as ThinkingLevel)
@@ -194,13 +232,71 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
       modelRuntime: runtime,
       model,
       thinkingLevel,
+      scopedModels: [...initialScopedModels],
       settingsManager,
       resourceLoader: loader,
       sessionManager,
       tools: toolNames,
       customTools: options.tools.filter((tool) => allowed.has(tool.name)),
     });
+    let lastScopedModelsKey = "";
+    const updateResolved = () => {
+      const currentModel = session.model;
+      if (!currentModel) throw new Error(`Subagent ${options.path} has no selected model`);
+      resolved.set(`${rootId}:${options.path}`, {
+        provider: currentModel.provider,
+        id: currentModel.id,
+        thinking: session.thinkingLevel,
+      });
+    };
+    const assertScopedRequestAuthorized = (
+      currentIdentity: string | undefined,
+      liveScopedModels: readonly ScopedModel[],
+    ) => {
+      if (modelPreferences === undefined) return;
+      const preferredIdentity = selectScopedPreference(liveScopedModels);
+      if (!preferredIdentity) return;
+      if (!currentIdentity) throw new Error(`Subagent ${options.path} has no selected model`);
+      if (currentIdentity !== preferredIdentity) {
+        throw new Error(
+          `Agent type ${JSON.stringify(options.type.name)} scope changed for subagent ${JSON.stringify(options.path)}: current model is ${currentIdentity} but preferred is ${preferredIdentity}; resume agent to use ${preferredIdentity}.`,
+        );
+      }
+    };
+    const assertCurrentModelAuthorized = () => {
+      const currentModel = session.model;
+      assertScopedRequestAuthorized(
+        currentModel ? modelIdentity(currentModel) : undefined,
+        normalizeScopedModels(getRootContext().scopedModels),
+      );
+    };
+    const enforceScopedModelPolicy = async () => {
+      const liveScopedModels = normalizeScopedModels(getRootContext().scopedModels);
+      const key = scopedModelsKey(liveScopedModels);
+      if (key !== lastScopedModelsKey) {
+        session.setScopedModels([...liveScopedModels]);
+        lastScopedModelsKey = key;
+      }
+      if (modelPreferences === undefined) {
+        updateResolved();
+        return;
+      }
+      const preferredIdentity = selectScopedPreference(liveScopedModels);
+      if (!preferredIdentity) {
+        updateResolved();
+        return;
+      }
+      const currentModel = session.model;
+      if (!currentModel || modelIdentity(currentModel) !== preferredIdentity) {
+        const { provider: preferredProvider, id: preferredId } = parseModelIdentity(preferredIdentity);
+        await session.setModel(
+          await resolveRuntimeModel(preferredProvider, preferredId, liveScopedModels),
+        );
+      }
+      updateResolved();
+    };
     try {
+      await enforceScopedModelPolicy();
       options.signal.throwIfAborted();
       await session.bindExtensions({ mode: "print" });
       options.signal.throwIfAborted();
@@ -208,6 +304,14 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
       session.dispose();
       throw error;
     }
+    const streamFunction = session.agent.streamFunction;
+    session.agent.streamFunction = async (requestModel, context, streamOptions) => {
+      assertScopedRequestAuthorized(
+        modelIdentity(requestModel),
+        normalizeScopedModels(getRootContext().scopedModels),
+      );
+      return streamFunction(requestModel, context, streamOptions);
+    };
     const mailbox = new DurableMailbox(sessionManager);
     const emitCheckpoint = () =>
       options.onEvent({
@@ -223,6 +327,7 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
       emit("activity", BOOTSTRAP_MESSAGE);
     };
     const queueAccepted = async (kind: "steer" | "followUp", content: string) => {
+      assertCurrentModelAuthorized();
       ensurePersistedSession();
       const accepted = mailbox.accept(kind, content);
       emitCheckpoint();
@@ -266,11 +371,7 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
       }
       return decision || undefined;
     };
-    resolved.set(`${rootId}:${options.path}`, {
-      provider: model.provider,
-      id: model.id,
-      thinking: session.thinkingLevel,
-    });
+    updateResolved();
     let disposed = false;
     let running = false;
     let aborted = false;
@@ -313,6 +414,7 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
         baseline = session.messages.length;
         finalOutput = "";
         try {
+          await enforceScopedModelPolicy();
           await resumePending();
           await session.prompt(message, { expandPromptTemplates: false });
           await session.waitForIdle();
@@ -332,6 +434,7 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
           emit("error", error instanceof Error ? error.message : String(error));
           throw error;
         } finally {
+          updateResolved();
           running = false;
         }
       },

@@ -6,6 +6,8 @@ export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 export interface AgentType {
   name: string;
   description: string;
+  models?: string[];
+  /** @deprecated Use ordered models instead. */
   model?: string;
   thinkingLevel?: ThinkingLevel;
   color?: string;

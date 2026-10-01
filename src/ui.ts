@@ -12,6 +12,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, truncateToWidth } from "@earendil-works/pi-tui";
 import { AGENT_COLORS, ConfigStore, parseAgentType, serializeAgentType } from "./config.ts";
+import { editModelPreferences, MODEL_EDITOR_CANCEL } from "./model-picker.ts";
+import { getModelPreferences } from "./models.ts";
 import { THINKING_LEVELS, type AgentType, type ThreadService, type ThreadView } from "./types.ts";
 
 export type ThreadController = Pick<
@@ -312,7 +314,7 @@ export async function editAgentTypes(
       const field = await ctx.ui.select(`Edit ${sanitizeText(draft.name)} (unsaved)`, [
         "name",
         "description",
-        "model",
+        "models",
         "thinkingLevel",
         "tools.allow",
         "tools.block",
@@ -351,14 +353,20 @@ export async function editAgentTypes(
           continue;
         }
         const candidate = structuredClone(draft);
-        if (field === "name" || field === "description" || field === "model") {
-          const value = await ctx.ui.input(
-            `Agent ${field}${field === "model" ? " (provider/id, blank = default)" : ""}`,
-            candidate[field] ?? "",
-          );
+        if (field === "name" || field === "description") {
+          const value = await ctx.ui.input(`Agent ${field}`, candidate[field] ?? "");
           if (value === undefined) continue;
-          if (field === "model" && !value.trim()) delete candidate.model;
-          else candidate[field] = value;
+          candidate[field] = value;
+        } else if (field === "models") {
+          const value = await editModelPreferences(ctx, getModelPreferences(candidate));
+          if (value === MODEL_EDITOR_CANCEL) continue;
+          if (value.length === 0) {
+            delete candidate.models;
+            delete candidate.model;
+          } else {
+            candidate.models = [...value];
+            delete candidate.model;
+          }
         } else if (field === "thinkingLevel") {
           const value = await ctx.ui.select("Thinking level", [
             "Default (inherit)",

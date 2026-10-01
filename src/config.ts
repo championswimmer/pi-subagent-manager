@@ -11,6 +11,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { isMap, isScalar, parseDocument, stringify } from "yaml";
+import { getModelPreferences } from "./models.js";
 import { THINKING_LEVELS, type AgentType } from "./types.js";
 
 // Pi semantic foreground tokens (background tokens are intentionally excluded).
@@ -68,7 +69,15 @@ export const AGENT_COLORS = [
 
 const NAME = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
 const TOOL = /^[a-zA-Z0-9_-]+$/;
-const FIELDS = new Set(["name", "description", "model", "thinkingLevel", "color", "tools"]);
+const FIELDS = new Set([
+  "name",
+  "description",
+  "models",
+  "model",
+  "thinkingLevel",
+  "color",
+  "tools",
+]);
 
 type AgentScope = "user" | "project";
 type SaveOrigin = Pick<AgentType, "name" | "source" | "filePath">;
@@ -154,11 +163,11 @@ export function parseAgentType(content: string, filePath?: string): AgentType {
       description: data.description,
       systemPrompt: body,
     };
-    if (Object.hasOwn(data, "model")) {
-      if (typeof data.model !== "string" || !/^[^\s/]+\/[^\s]+$/.test(data.model))
-        throw new Error("model must be provider/model-id");
-      result.model = data.model;
-    }
+    const models = getModelPreferences({
+      models: data.models,
+      model: data.model,
+    });
+    if (models !== undefined) result.models = models;
     if (Object.hasOwn(data, "thinkingLevel")) {
       if (!THINKING_LEVELS.includes(data.thinkingLevel as AgentType["thinkingLevel"] & string))
         throw new Error(`thinkingLevel must be one of: ${THINKING_LEVELS.join(", ")}`);
@@ -185,7 +194,9 @@ export function serializeAgentType(type: AgentType): string {
     name: type.name,
     description: type.description,
   };
-  for (const key of ["model", "thinkingLevel", "color", "tools"] as const)
+  const models = getModelPreferences(type);
+  if (models !== undefined) data.models = models;
+  for (const key of ["thinkingLevel", "color", "tools"] as const)
     if (type[key] !== undefined) data[key] = type[key];
   const content = `---\n${stringify(data)}---\n${type.systemPrompt}`;
   parseAgentType(content);

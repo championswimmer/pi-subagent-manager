@@ -34,6 +34,10 @@ const offlineAgent = (body = "ONLY OFFLINE CHILD") =>
   `---\nname: offline\ndescription: Offline lifecycle worker\ntools:\n  allow: [agent_pause]\n---\n${body}\n`;
 const nestedAgent = (body = "ONLY OFFLINE CHILD") =>
   `---\nname: nested\ndescription: Nested offline lifecycle worker\nmodel: integration-test/offline-alt\nthinkingLevel: high\ntools:\n  allow: [agent_pause]\n---\n${body}\n`;
+const orderedAgent = (models: string[], body = "ONLY OFFLINE CHILD") =>
+  `---\nname: ordered\ndescription: Ordered offline lifecycle worker\nmodels:\n${models
+    .map((model) => `  - ${model}`)
+    .join("\n")}\ntools:\n  allow: [agent_pause]\n---\n${body}\n`;
 const contextText = (manager: SessionManager, leafId?: string) =>
   JSON.stringify(buildSessionContext(manager.getEntries(), leafId).messages);
 const rootNotifications = (manager: SessionManager) =>
@@ -611,6 +615,46 @@ test(
           ["answer C"],
         );
 
+        await close(session);
+        assert.deepEqual(errors, []);
+      },
+    );
+  },
+);
+
+test(
+  "offline extension surfaces scoped model policy failures as failed thread status",
+  { timeout: 30000 },
+  async () => {
+    await withOfflineHarness(
+      {
+        agentFiles: {
+          ordered: orderedAgent(["integration-test/offline-alt"]),
+        },
+        scopedModels: ["integration-test/offline"],
+        onRequest() {
+          throw new Error("provider must not be called when scope rejects the agent model");
+        },
+      },
+      async ({ directory, cwd, errors, requests, open, close, tool }) => {
+        const root = SessionManager.create(cwd, path.join(directory, "parents"));
+        const session = await open(root);
+        const failed = await tool<ThreadView>(session, "agent_spawn", {
+          path: "worker",
+          type: "ordered",
+          task: "Attempt disallowed scoped model",
+        });
+        assert.equal(failed.state, "failed");
+        assert.match(failed.error ?? "", /integration-test\/offline-alt/);
+        assert.match(failed.error ?? "", /\/scoped-models/);
+        assert.match(failed.status, /\/scoped-models/);
+        assert.equal(requests.length, 0);
+
+        const visible = await tool<ThreadView>(session, "agent_status", { path: "worker" });
+        assert.equal(visible.state, "failed");
+        assert.equal(visible.error, failed.error);
+        assert.equal(registry(root).threads[0]?.view.state, "failed");
+        assert.equal(registry(root).threads[0]?.view.error, failed.error);
         await close(session);
         assert.deepEqual(errors, []);
       },
