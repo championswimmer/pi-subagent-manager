@@ -11,7 +11,7 @@ import type {
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { ThreadView } from "../src/types.ts";
-import { ConfigStore, serializeAgentType } from "../src/config.ts";
+import { ConfigStore, parseAgentType, serializeAgentType } from "../src/config.ts";
 import {
   editAgentTypes,
   editorArguments,
@@ -192,6 +192,24 @@ async function configFixture(fileName = "worker.md") {
   return { root, agentDir, store, body };
 }
 
+const EDIT_FIELD_ACTIONS = new Set([
+  "name",
+  "description",
+  "models",
+  "thinkingLevel",
+  "tools.allow",
+  "tools.block",
+  "color",
+]);
+
+/** Map scripted bare field actions to decorated labels only in the main unsaved edit menu. */
+function scriptedEditChoice(title: string, options: string[], choice: string): string {
+  if (!/^Edit .+ \(unsaved\)$/.test(title) || !EDIT_FIELD_ACTIONS.has(choice)) return choice;
+  const label = options.find((option) => option.startsWith(`${choice}: `));
+  assert.ok(label, `Missing decorated field label for ${choice}`);
+  return label;
+}
+
 function editorContext(
   root: string,
   choices: (string | undefined)[],
@@ -204,6 +222,8 @@ function editorContext(
 ) {
   const diagnostics: string[] = [];
   const scopes: string[][] = [];
+  const menus: { title: string; options: string[] }[] = [];
+  const editors: { title: string; prefill?: string }[] = [];
   const colorPickerTheme = {
     fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
   } as unknown as Theme;
@@ -223,21 +243,20 @@ function editorContext(
     modelRegistry: { getAvailable: () => availableModels },
     scopedModels,
     ui: {
-      select: async (_title: string, options: string[]) => {
-        if (_title === "Save scope") scopes.push(options);
+      select: async (title: string, options: string[]) => {
+        menus.push({ title, options: [...options] });
+        if (title === "Save scope") scopes.push(options);
         const choice = choices.shift();
-        if (choice !== undefined)
-          assert.ok(options.includes(choice), `Missing dialog option: ${choice}`);
-        return choice;
+        if (choice === undefined) return choice;
+        const resolved = scriptedEditChoice(title, options, choice);
+        assert.ok(options.includes(resolved), `Missing dialog option: ${choice}`);
+        return resolved;
       },
       custom: async (factory: Function) => {
         return new Promise<any>((resolve, reject) => {
           Promise.resolve(
-            factory(
-              { requestRender: () => {} },
-              colorPickerTheme,
-              {},
-              (result: unknown) => resolve(result),
+            factory({ requestRender: () => {} }, colorPickerTheme, {}, (result: unknown) =>
+              resolve(result),
             ),
           )
             .then((component: any) => {
@@ -256,12 +275,18 @@ function editorContext(
             .catch(reject);
         });
       },
-      input: async () => inputs.shift(),
+      input: async () => {
+        throw new Error("ui.input is placeholder-only; field edits must use ui.editor");
+      },
+      editor: async (title: string, prefill?: string) => {
+        editors.push({ title, prefill });
+        return inputs.shift();
+      },
       notify: (message: string) => diagnostics.push(message),
       confirm: async () => false,
     },
   } as unknown as ExtensionCommandContext;
-  return { ctx, diagnostics, scopes };
+  return { ctx, diagnostics, scopes, menus, editors };
 }
 
 test("type field editor handles YAML fields without changing Markdown", async () => {
@@ -311,18 +336,13 @@ test("legacy scalar model opens the ordered picker and cancel keeps the saved de
     const legacyScalarDefinition = `---\nname: worker\ndescription: Worker\nmodel: openai/gpt-4.1\n---\n${body}`;
     await writeFile(join(agentDir, "agents", "worker.md"), legacyScalarDefinition);
     store.reload();
-    const { ctx } = editorContext(
-      root,
-      ["worker", "models", "Cancel", undefined],
-      [],
-      {
-        availableModels: [
-          { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
-          { provider: "anthropic", id: "claude-3.7-sonnet", name: "Claude 3.7 Sonnet" },
-        ],
-        scopedModels: ["openai/gpt-4.1"],
-      },
-    );
+    const { ctx } = editorContext(root, ["worker", "models", "Cancel", undefined], [], {
+      availableModels: [
+        { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
+        { provider: "anthropic", id: "claude-3.7-sonnet", name: "Claude 3.7 Sonnet" },
+      ],
+      scopedModels: ["openai/gpt-4.1"],
+    });
     const observed = { mode: "", label: "", description: "" };
     const theme = {
       fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
@@ -330,12 +350,7 @@ test("legacy scalar model opens the ordered picker and cancel keeps the saved de
     ctx.ui.custom = (async (factory: Function) => {
       return new Promise<any>((resolve, reject) => {
         Promise.resolve(
-          factory(
-            { requestRender: () => {} },
-            theme,
-            {},
-            (result: unknown) => resolve(result),
-          ),
+          factory({ requestRender: () => {} }, theme, {}, (result: unknown) => resolve(result)),
         )
           .then((component: any) => {
             observed.mode = component.getMode();
@@ -352,7 +367,10 @@ test("legacy scalar model opens the ordered picker and cancel keeps the saved de
     assert.match(observed.description, /scoped in this session/);
     assert.deepEqual((store.get("worker") as { models?: string[] }).models, ["openai/gpt-4.1"]);
     assert.equal(store.get("worker").systemPrompt, body);
-    assert.equal(await readFile(join(agentDir, "agents", "worker.md"), "utf8"), legacyScalarDefinition);
+    assert.equal(
+      await readFile(join(agentDir, "agents", "worker.md"), "utf8"),
+      legacyScalarDefinition,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -361,23 +379,18 @@ test("legacy scalar model opens the ordered picker and cancel keeps the saved de
 test("saving model preferences stores canonical ordered models after add and reorder", async () => {
   const { root, store, body } = await configFixture();
   try {
-    const { ctx } = editorContext(
-      root,
-      ["worker", "models", "Save", "Global", undefined],
-      [],
-      {
-        availableModels: [
-          { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
-          {
-            provider: "anthropic",
-            id: "claude-3.7-sonnet",
-            name: "Claude 3.7 Sonnet",
-          },
-          { provider: "google", id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
-        ],
-        scopedModels: ["openai/gpt-4.1", "anthropic/claude-3.7-sonnet"],
-      },
-    );
+    const { ctx } = editorContext(root, ["worker", "models", "Save", "Global", undefined], [], {
+      availableModels: [
+        { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
+        {
+          provider: "anthropic",
+          id: "claude-3.7-sonnet",
+          name: "Claude 3.7 Sonnet",
+        },
+        { provider: "google", id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
+      ],
+      scopedModels: ["openai/gpt-4.1", "anthropic/claude-3.7-sonnet"],
+    });
     ctx.ui.custom = (async (factory: Function) => {
       return new Promise<any>((resolve, reject) => {
         Promise.resolve(
@@ -412,10 +425,7 @@ test("saving model preferences stores canonical ordered models after add and reo
     assert.equal(saved.model, undefined);
     assert.equal(saved.systemPrompt, body);
     const persisted = await readFile(saved.filePath!, "utf8");
-    assert.match(
-      persisted,
-      /models:\n  - anthropic\/claude-3\.7-sonnet\n  - openai\/gpt-4\.1/,
-    );
+    assert.match(persisted, /models:\n  - anthropic\/claude-3\.7-sonnet\n  - openai\/gpt-4\.1/);
     assert.doesNotMatch(persisted, /\nmodel:/);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -512,7 +522,10 @@ test("editing a noncanonical filename copies into preferred storage and keeps th
     assert.equal(saved.filePath, join(agentDir, "subagent-manager", "agents", "worker.md"));
     assert.equal(saved.systemPrompt, body);
     assert.match(await readFile(saved.filePath!, "utf8"), /description: Revised/);
-    assert.match(await readFile(join(agentDir, "agents", "custom.md"), "utf8"), /description: Worker/);
+    assert.match(
+      await readFile(join(agentDir, "agents", "custom.md"), "utf8"),
+      /description: Worker/,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -614,6 +627,304 @@ test("frontmatter editor retries invalid YAML and preserves Markdown on save", a
     assert.equal(store.get("worker").description, "Revised");
     assert.equal(store.get("worker").systemPrompt, body);
     assert.match(diagnostics[0]!, /Edit not accepted/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+const EDIT_ACTIONS = [
+  "Edit frontmatter YAML",
+  "External editor (entire Markdown)",
+  "Save",
+  "Cancel",
+] as const;
+
+function unsavedMenus(menus: { title: string; options: string[] }[]) {
+  return menus.filter((menu) => /^Edit .+ \(unsaved\)$/.test(menu.title));
+}
+
+test("edit menu shows current values, ordered models, legacy scalars, and tool policy states", async () => {
+  const { root, store, agentDir, body } = await configFixture();
+  try {
+    const hostile = "Worker\x1b[31mred\x1b[0m\x1b]0;owned\x07\r\nnext";
+    await writeFile(
+      join(agentDir, "agents", "worker.md"),
+      serializeAgentType({
+        name: "worker",
+        description: hostile,
+        systemPrompt: body,
+        models: ["openai/gpt-4.1", "anthropic/claude-3.7-sonnet"],
+        thinkingLevel: "high",
+        color: "success",
+        tools: { allow: ["bash", "read"], block: ["edit"] },
+      }),
+    );
+    await writeFile(
+      join(agentDir, "agents", "legacy.md"),
+      `---\nname: legacy\ndescription: Legacy scalar\nmodel: google/gemini-2.5-pro\n---\n${body}`,
+    );
+    await writeFile(
+      join(agentDir, "agents", "empty.md"),
+      serializeAgentType({
+        name: "empty",
+        description: "Explicit empty tools",
+        systemPrompt: body,
+        tools: { allow: [], block: [] },
+      }),
+    );
+    store.reload();
+    const { ctx, menus } = editorContext(root, [
+      "worker",
+      "Cancel",
+      "legacy",
+      "Cancel",
+      "empty",
+      "Cancel",
+      undefined,
+    ]);
+    await editAgentTypes(ctx, store);
+    const editMenus = unsavedMenus(menus);
+    assert.equal(editMenus.length, 3);
+    assert.equal(editMenus[0]!.title, "Edit worker (unsaved)");
+    assert.deepEqual(editMenus[0]!.options, [
+      "name: worker",
+      `description: ${sanitizeText(hostile)}`,
+      "models: openai/gpt-4.1, anthropic/claude-3.7-sonnet",
+      "thinkingLevel: high",
+      "tools.allow: bash, read",
+      "tools.block: edit",
+      "color: success",
+      ...EDIT_ACTIONS,
+    ]);
+    assert.notEqual(sanitizeText(hostile), hostile);
+    assert.ok(editMenus[0]!.options.every((option) => !/[\x00-\x1f\x7f-\x9f]/.test(option)));
+    assert.equal(editMenus[1]!.title, "Edit legacy (unsaved)");
+    assert.deepEqual(editMenus[1]!.options, [
+      "name: legacy",
+      "description: Legacy scalar",
+      "models: google/gemini-2.5-pro",
+      "thinkingLevel: Default (inherit)",
+      "tools.allow: Unset (use default policy)",
+      "tools.block: Unset (use default policy)",
+      "color: Default (inherit)",
+      ...EDIT_ACTIONS,
+    ]);
+    assert.ok(
+      editMenus[1]!.options
+        .filter((option) => option.startsWith("tools."))
+        .every((option) => !/inherit/.test(option)),
+    );
+    assert.equal(editMenus[2]!.title, "Edit empty (unsaved)");
+    assert.deepEqual(editMenus[2]!.options, [
+      "name: empty",
+      "description: Explicit empty tools",
+      "models: Default (inherit)",
+      "thinkingLevel: Default (inherit)",
+      "tools.allow: Empty list",
+      "tools.block: Empty list",
+      "color: Default (inherit)",
+      ...EDIT_ACTIONS,
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("field editor prefills current values and cancelled or invalid edits keep the visible draft", async () => {
+  const { root, store, agentDir, body } = await configFixture();
+  try {
+    await writeFile(
+      join(agentDir, "agents", "worker.md"),
+      serializeAgentType({
+        name: "worker",
+        description: "Worker",
+        systemPrompt: body,
+        tools: { allow: ["read"], block: ["bash"] },
+      }),
+    );
+    store.reload();
+    const { ctx, menus, editors, diagnostics } = editorContext(
+      root,
+      [
+        "worker",
+        "name",
+        "name",
+        "description",
+        "tools.allow",
+        "Enter exact tool names",
+        "tools.block",
+        "Enter exact tool names",
+        "tools.allow",
+        "Enter exact tool names",
+        "name",
+        "Cancel",
+        undefined,
+      ],
+      ["renamed", undefined, "", "bash, edit", undefined, "read, read", "../escape"],
+    );
+    await editAgentTypes(ctx, store);
+    const editMenus = unsavedMenus(menus);
+    assert.equal(editMenus[0]!.title, "Edit worker (unsaved)");
+    assert.deepEqual(editMenus[0]!.options, [
+      "name: worker",
+      "description: Worker",
+      "models: Default (inherit)",
+      "thinkingLevel: Default (inherit)",
+      "tools.allow: read",
+      "tools.block: bash",
+      "color: Default (inherit)",
+      ...EDIT_ACTIONS,
+    ]);
+    assert.equal(editMenus[1]!.title, "Edit renamed (unsaved)");
+    assert.deepEqual(editMenus[1]!.options, [
+      "name: renamed",
+      "description: Worker",
+      "models: Default (inherit)",
+      "thinkingLevel: Default (inherit)",
+      "tools.allow: read",
+      "tools.block: bash",
+      "color: Default (inherit)",
+      ...EDIT_ACTIONS,
+    ]);
+    assert.deepEqual(editMenus[2]!.options, editMenus[1]!.options);
+    assert.deepEqual(editMenus[3]!.options, editMenus[1]!.options);
+    assert.equal(editMenus[4]!.title, "Edit renamed (unsaved)");
+    assert.deepEqual(editMenus[4]!.options, [
+      "name: renamed",
+      "description: Worker",
+      "models: Default (inherit)",
+      "thinkingLevel: Default (inherit)",
+      "tools.allow: bash, edit",
+      "tools.block: bash",
+      "color: Default (inherit)",
+      ...EDIT_ACTIONS,
+    ]);
+    assert.deepEqual(editMenus[5]!.options, editMenus[4]!.options);
+    assert.deepEqual(editMenus[6]!.options, editMenus[4]!.options);
+    assert.deepEqual(editMenus[7]!.options, editMenus[4]!.options);
+    assert.equal(editMenus.length, 8);
+    assert.deepEqual(editors, [
+      { title: "Agent name", prefill: "worker" },
+      { title: "Agent name", prefill: "renamed" },
+      { title: "Agent description", prefill: "Worker" },
+      { title: "tools.allow: comma-separated exact names", prefill: "read" },
+      { title: "tools.block: comma-separated exact names", prefill: "bash" },
+      { title: "tools.allow: comma-separated exact names", prefill: "bash, edit" },
+      { title: "Agent name", prefill: "renamed" },
+    ]);
+    assert.equal(diagnostics.length, 3);
+    assert.equal(store.get("worker").name, "worker");
+    assert.deepEqual(store.get("worker").tools, { allow: ["read"], block: ["bash"] });
+    assert.equal(store.get("worker").systemPrompt, body);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("description editor prefills safe text and unchanged submits keep the original", async () => {
+  const { root, store, agentDir, body } = await configFixture();
+  try {
+    const hostile = "  keep\x1b[31mred\x1b[0m\x1b]0;owned\x07\r\n\tline\rrest\ntab\there  ";
+    const prefill = hostile
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n")
+      .split("\n")
+      .map(sanitizeText)
+      .join("\n");
+    await writeFile(
+      join(agentDir, "agents", "worker.md"),
+      serializeAgentType({
+        name: "worker",
+        description: hostile,
+        systemPrompt: body,
+      }),
+    );
+    await writeFile(
+      join(agentDir, "agents", "empty.md"),
+      serializeAgentType({
+        name: "empty",
+        description: "Explicit empty tools",
+        systemPrompt: body,
+        tools: { allow: [], block: [] },
+      }),
+    );
+    store.reload();
+    const unchanged = editorContext(
+      root,
+      [
+        "worker",
+        "description",
+        "description",
+        "description",
+        "tools.allow",
+        undefined,
+        "tools.block",
+        undefined,
+        "Save",
+        "Global",
+        "empty",
+        "tools.allow",
+        undefined,
+        "tools.block",
+        undefined,
+        "Cancel",
+        undefined,
+      ],
+      [undefined, prefill, prefill.trim()],
+    );
+    await editAgentTypes(unchanged.ctx, store);
+    const descriptionLabel = `description: ${sanitizeText(hostile)}`;
+    const workerMenus = unsavedMenus(unchanged.menus).filter((menu) =>
+      menu.title.startsWith("Edit worker"),
+    );
+    assert.equal(workerMenus.length, 6);
+    assert.ok(workerMenus.every((menu) => menu.options.includes(descriptionLabel)));
+    assert.deepEqual(
+      unchanged.editors.map((call) => call.prefill),
+      [prefill, prefill, prefill],
+    );
+    for (const call of unchanged.editors) {
+      assert.equal(call.title, "Agent description");
+      assert.notEqual(call.prefill, hostile);
+      assert.match(call.prefill ?? "", /\n/);
+      assert.ok(!/[\x00-\x09\x0b-\x1f\x7f-\x9f]/.test(call.prefill ?? ""));
+      assert.ok(!call.prefill?.includes("\x1b"));
+    }
+    const saved = store.get("worker");
+    assert.equal(saved.description, hostile);
+    assert.equal(parseAgentType(await readFile(saved.filePath!, "utf8")).description, hostile);
+    assert.equal(saved.systemPrompt, body);
+    const toolTitles = unchanged.menus
+      .filter((menu) => menu.title.startsWith("tools."))
+      .map((menu) => menu.title);
+    assert.deepEqual(toolTitles, [
+      "tools.allow (Unset (use default policy))",
+      "tools.block (Unset (use default policy))",
+      "tools.allow (Empty list)",
+      "tools.block (Empty list)",
+    ]);
+    assert.ok(
+      unchanged.menus
+        .filter((menu) => menu.title.startsWith("tools."))
+        .every(
+          (menu) =>
+            !/[\x00-\x1f\x7f-\x9f]/.test(menu.title) &&
+            menu.options.includes("Unset (use default policy)") &&
+            menu.options.includes("Empty list"),
+        ),
+    );
+
+    const changed = editorContext(
+      root,
+      ["worker", "description", "Save", "Global", undefined],
+      ["Revised notes"],
+    );
+    await editAgentTypes(changed.ctx, store);
+    const changedMenus = unsavedMenus(changed.menus);
+    assert.equal(changed.editors[0]?.prefill, prefill);
+    assert.ok(changedMenus[1]!.options.includes("description: Revised notes"));
+    assert.equal(store.get("worker").description, "Revised notes");
+    assert.equal(store.get("worker").systemPrompt, body);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

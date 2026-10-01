@@ -218,7 +218,7 @@ async function editToolList(
   field: "allow" | "block",
 ): Promise<void> {
   const mode = await ctx.ui.select(
-    `tools.${field} (${type.tools?.[field]?.join(", ") ?? "unset"})`,
+    `tools.${field} (${sanitizeText(toolListMenuValue(type.tools?.[field]))})`,
     ["Unset (use default policy)", "Empty list", "Enter exact tool names"],
   );
   if (!mode) return;
@@ -228,9 +228,9 @@ async function editToolList(
     const value =
       mode === "Empty list"
         ? ""
-        : await ctx.ui.input(
+        : await ctx.ui.editor(
             `tools.${field}: comma-separated exact names`,
-            type.tools?.[field]?.join(", "),
+            type.tools?.[field]?.join(", ") ?? "",
           );
     if (value === undefined) return;
     type.tools ??= {};
@@ -286,9 +286,7 @@ class AgentColorPickerComponent extends Container {
       this.updatePreview(tui, item.value);
     };
     this.selectList.onSelect = (item) => {
-      onSelect(
-        item.value === AGENT_COLOR_DEFAULT ? undefined : (item.value as AgentType["color"]),
-      );
+      onSelect(item.value === AGENT_COLOR_DEFAULT ? undefined : (item.value as AgentType["color"]));
     };
     this.selectList.onCancel = onCancel;
     this.addChild(new DynamicBorder((text) => theme.fg("muted", text)));
@@ -404,6 +402,52 @@ function assertSaveDestination(
   }
 }
 
+const EDIT_MENU_ACTIONS = [
+  "name",
+  "description",
+  "models",
+  "thinkingLevel",
+  "tools.allow",
+  "tools.block",
+  "color",
+  "Edit frontmatter YAML",
+  "External editor (entire Markdown)",
+  "Save",
+  "Cancel",
+] as const;
+
+type EditMenuAction = (typeof EDIT_MENU_ACTIONS)[number];
+
+/** Omitted tool lists use the default policy; [] is an explicit empty list, not inheritance. */
+function toolListMenuValue(names: string[] | undefined): string {
+  if (names === undefined) return "Unset (use default policy)";
+  if (names.length === 0) return "Empty list";
+  return names.join(", ");
+}
+
+function editMenuLabel(action: EditMenuAction, draft: AgentType): string {
+  switch (action) {
+    case "name":
+      return `name: ${sanitizeText(draft.name)}`;
+    case "description":
+      return `description: ${sanitizeText(draft.description)}`;
+    case "models": {
+      const models = getModelPreferences(draft);
+      return `models: ${sanitizeText(models?.join(", ") ?? "Default (inherit)")}`;
+    }
+    case "thinkingLevel":
+      return `thinkingLevel: ${sanitizeText(draft.thinkingLevel ?? "Default (inherit)")}`;
+    case "tools.allow":
+      return `tools.allow: ${sanitizeText(toolListMenuValue(draft.tools?.allow))}`;
+    case "tools.block":
+      return `tools.block: ${sanitizeText(toolListMenuValue(draft.tools?.block))}`;
+    case "color":
+      return `color: ${sanitizeText(draft.color ?? "Default (inherit)")}`;
+    default:
+      return action;
+  }
+}
+
 export async function editAgentTypes(
   ctx: ExtensionCommandContext,
   store: ConfigStore,
@@ -419,19 +463,10 @@ export async function editAgentTypes(
       ? structuredClone(original)
       : { name: "new-agent", description: "New agent", systemPrompt: "" };
     while (true) {
-      const field = await ctx.ui.select(`Edit ${sanitizeText(draft.name)} (unsaved)`, [
-        "name",
-        "description",
-        "models",
-        "thinkingLevel",
-        "tools.allow",
-        "tools.block",
-        "color",
-        "Edit frontmatter YAML",
-        "External editor (entire Markdown)",
-        "Save",
-        "Cancel",
-      ]);
+      const labels = EDIT_MENU_ACTIONS.map((action) => editMenuLabel(action, draft));
+      const selected = await ctx.ui.select(`Edit ${sanitizeText(draft.name)} (unsaved)`, labels);
+      if (selected === undefined) break;
+      const field = EDIT_MENU_ACTIONS[labels.indexOf(selected)];
       if (!field || field === "Cancel") break;
       try {
         if (field === "Save") {
@@ -462,9 +497,18 @@ export async function editAgentTypes(
         }
         const candidate = structuredClone(draft);
         if (field === "name" || field === "description") {
-          const value = await ctx.ui.input(`Agent ${field}`, candidate[field] ?? "");
+          const originalValue = candidate[field] ?? "";
+          // Editor prefill must not carry terminal controls. An unmodified or
+          // SDK-trimmed submit keeps the original, including whitespace and CRLF.
+          const prefill = originalValue
+            .replace(/\r\n/g, "\n")
+            .replace(/\r/g, "\n")
+            .split("\n")
+            .map(sanitizeText)
+            .join("\n");
+          const value = await ctx.ui.editor(`Agent ${field}`, prefill);
           if (value === undefined) continue;
-          candidate[field] = value;
+          candidate[field] = value === prefill || value === prefill.trim() ? originalValue : value;
         } else if (field === "models") {
           const value = await editModelPreferences(ctx, getModelPreferences(candidate));
           if (value === MODEL_EDITOR_CANCEL) continue;
