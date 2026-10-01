@@ -313,7 +313,7 @@ test("cancelling a wait or timing out does not stop detached child", async () =>
 });
 
 test("stop cascades but retains sessions, and children cannot wait on ancestors", async () => {
-  const { manager, drivers } = fixture();
+  const { manager, drivers } = fixture({ maxLevels: 4 });
   await manager.spawn("/root", { path: "worker", type: "worker", task: "parent", wait: false });
   await tick();
   await manager.spawn("/root/worker", {

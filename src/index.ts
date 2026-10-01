@@ -3,6 +3,7 @@ import { buildSessionContext, getAgentDir } from "@earendil-works/pi-coding-agen
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { ConfigStore } from "./config.ts";
 import { ThreadManager } from "./manager.ts";
+import { DEFAULT_MANAGER_SETTINGS, loadManagerSettings } from "./settings.ts";
 import { createDriverFactory } from "./runtime.ts";
 import { agentTools } from "./tools.ts";
 import { editAgentTypes, showThreads, updateWidget } from "./ui.ts";
@@ -24,6 +25,16 @@ export default function piSubagent(pi: ExtensionAPI): void {
     includeProject: false,
   });
   let manager: ThreadManager | undefined;
+  let limits = { ...DEFAULT_MANAGER_SETTINGS };
+  const loadLimits = (ctx: ExtensionContext) => {
+    const loaded = loadManagerSettings({
+      cwd: ctx.cwd,
+      agentDir: getAgentDir(),
+      includeProject: ctx.isProjectTrusted(),
+    });
+    limits = loaded.settings;
+    return loaded.diagnostics;
+  };
   let generation = 0;
   let persistenceSignature = "";
   const requireManager = () => {
@@ -112,7 +123,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
 
   for (const tool of agentTools(requireManager, "/root", () => store.list())) pi.registerTool(tool);
   pi.on("before_agent_start", async (event) => ({
-    systemPrompt: `${event.systemPrompt}\n\n## pi-subagent\nYou are /root. Thread paths determine context ancestry, independently of agent type. Children can pause WITHOUT handing back an answer; completed and paused sessions can both receive more work via agent_steer. Working child threads appear above the footer. Available types:\n${store
+    systemPrompt: `${event.systemPrompt}\n\n## pi-subagent\nYou are /root. Thread paths determine context ancestry, independently of agent type. Children can pause WITHOUT handing back an answer; completed and paused sessions can both receive more work via agent_steer. Working child threads appear above the footer. The main conversation is L1; the maximum is ${limits.maxLevels} levels including L1. For independent work, spawn all siblings with wait:false before calling agent_wait; the same pattern applies inside child agents that have delegation tools. Waiting parents count toward the shared ${limits.maxConcurrent}-thread concurrency limit. Available types:\n${store
       .list()
       .map((type) => `- ${type.name}: ${type.description}`)
       .join(
@@ -131,7 +142,9 @@ export default function piSubagent(pi: ExtensionAPI): void {
       includeProject: ctx.isProjectTrusted(),
     });
     persistenceSignature = "";
+    const settingsDiagnostics = loadLimits(ctx);
     const instance = new ThreadManager({
+      ...limits,
       createDriver: createDriverFactory(requireContext),
       rootSnapshot: () => buildSessionContext(requireContext().sessionManager.getBranch()).messages,
       getType: (name) => store.get(name),
@@ -167,7 +180,8 @@ export default function piSubagent(pi: ExtensionAPI): void {
     }
     restoreRootMailbox(ctx);
     updateWidget(ctx, requireManager().list());
-    if (store.diagnostics.length) ctx.ui.notify(store.diagnostics.join("\n"), "warning");
+    const diagnostics = [...store.diagnostics, ...settingsDiagnostics];
+    if (diagnostics.length) ctx.ui.notify(diagnostics.join("\n"), "warning");
   };
   pi.on("session_start", async (_event, ctx) => attachSession(ctx));
   pi.on("session_tree", async (_event, ctx) => attachSession(ctx));
@@ -202,11 +216,13 @@ export default function piSubagent(pi: ExtensionAPI): void {
         store.reload();
       } else if (command === "reload") {
         store.reload();
+        const diagnostics = [...store.diagnostics, ...loadLimits(ctx)];
+        requireManager().setLimits(limits);
         ctx.ui.notify(
-          store.diagnostics.length
-            ? store.diagnostics.join("\n")
-            : `Loaded ${store.list().length} agent types`,
-          store.diagnostics.length ? "warning" : "info",
+          diagnostics.length
+            ? diagnostics.join("\n")
+            : `Loaded ${store.list().length} agent types; maximum ${limits.maxLevels} levels`,
+          diagnostics.length ? "warning" : "info",
         );
       } else if (!command || command === "thread") {
         await showThreads(ctx, requireManager().scope("/root"), rest.join(" ") || undefined);

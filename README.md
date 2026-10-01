@@ -119,14 +119,43 @@ A compact, themed activity widget appears **below the editor, above pi's footer/
 { "path": "coding-researcher", "type": "researcher", "task": "Investigate this API", "wait": false }
 ```
 
-Then use `agent_wait` or `agent_status` on `/root/coding-researcher`. Wait timeouts and cancellation do **not** kill detached children. Progress/settlement notifications do not force a parent model turn; they are recorded and visible for the parent's next interaction. Large final answers are paginated, not silently lost.
+Then use `agent_wait` or `agent_status` on `/root/coding-researcher`.
+
+### Parallel and nested work
+
+Launch **all independent siblings with `wait: false` before waiting**. For example, `/root` can launch `team-a` and `team-b`, then each team can launch `worker-a` and `worker-b` the same way. This works even if tool calls are delivered sequentially: detached children run in separate SDK sessions. Same-turn foreground calls also overlap when pi executes their tool batch in parallel, but spawning one foreground child and awaiting it before launching the next is sequential.
+
+Use a delegating type such as `worker` or `architect` for team coordinators. A custom allow list must include `agent_spawn` and `agent_wait`; the bundled read-only `researcher` intentionally does not have delegation tools. Children never bypass their tool policy or the shared limits.
+
+### Manager settings
+
+Settings belong to **this extension**, not another subagent package:
+
+- Global: `<pi-agent-dir>/subagent-manager/settings.json` (normally `~/.pi/agent/subagent-manager/settings.json`).
+- Project: `<cwd>/.pi/agent/subagent-manager/settings.json`, loaded only when pi trusts the project; overrides global values.
+
+```json
+{
+  "maxLevels": 3,
+  "maxConcurrent": 16,
+  "maxThreads": 64
+}
+```
+
+All keys are optional. `maxLevels` includes the main conversation as **L1**: the default permits L2 children and L3 grandchildren, but no L4. An independent root such as `/k` is still L2, so independent paths cannot bypass the limit. `maxLevels: 1` disables new children; supported values are integers from 1 to 32.
+
+`maxConcurrent` counts starting/running threads **across the entire tree**, including parents waiting for children; `maxThreads` counts all retained threads. Both require positive safe integers. Capacity exhaustion fails clearly rather than queuing. Omitted settings use the defaults above. Unknown keys, malformed values and symlinked settings paths produce warnings; an invalid file is ignored atomically, preserving the preceding valid layer/defaults.
+
+Use `/agents reload` to reload definitions and settings. New limits do not cancel existing threads or discard retained sessions; they govern new spawns and future concurrency reservations. Lowering the level limit still permits resuming previously retained deeper sessions, but no new agents can be spawned beyond the limit. `/reload` or reopening the parent also reloads settings. This extension does **not** read `.pi/subagents.json` or settings owned by `@tintinweb/pi-subagents`; avoid loading both extensions because they both register `/agents`.
+
+Wait timeouts and cancellation do **not** kill detached children. Progress/settlement notifications do not force a parent model turn; they are recorded and visible for the parent's next interaction. Large final answers are paginated, not silently lost.
 
 ## Boundaries
 
 - Tool policies are **not a sandbox**. Agents share the working directory and OS permissions; concurrent edits may conflict.
 - Child sessions load pi built-in tools and this extension's controls, **not automatically discovered third-party extensions, MCP servers, skills or project context files**. This prevents recursive extension loading and keeps the tool policy explicit.
 - Custom/native model provider registrations and runtime-only API keys are mirrored. Virtual/router models need a concrete configured model; unsupported providers fail with an actionable error.
-- Defaults limit depth to 8, active threads to 16 and total retained threads to 64 per parent session. Waiting agents count as active. Limits live in `ManagerOptions`.
+- Defaults limit the tree to 3 levels including the main conversation, 16 active threads and 64 retained threads per parent session. Waiting agents count as active. Configure them using this extension's manager settings.
 
 ## Development
 
@@ -137,11 +166,12 @@ npm test
 npm run format:check
 ```
 
-The suite is offline: meaningful lifecycle/policy tests plus scripted-provider SDK tests for pause, persistence and recovery. Generated JSONL scenarios cover multilevel nested agents, unopened lexical parents, interrupted work, durable mailboxes, root forks and same-file tree navigation. No live model credentials are required.
+The suite is offline: meaningful lifecycle/policy tests plus scripted-provider SDK tests for nested parallel launches, level settings, pause, persistence and recovery. Generated JSONL scenarios cover multilevel nested agents, unopened lexical parents, interrupted work, durable mailboxes, root forks and same-file tree navigation. No live model credentials are required.
 
 The code is deliberately layered:
 
 - `config.ts`: frontmatter validation, precedence and atomic saves.
+- `settings.ts`: validated global/project manager limits and safe configuration paths.
 - `paths.ts`: canonical ancestry and safe context snapshots.
 - `manager.ts`: runtime-independent ownership, lifecycle and retained registry. `scope(caller)` exposes the same caller-bound `ThreadService` to tools and UI.
 - `runtime.ts`: isolated pi SDK sessions, providers and safe turn boundaries.

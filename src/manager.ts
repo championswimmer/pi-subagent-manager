@@ -10,6 +10,7 @@ import type {
   ThreadView,
 } from "./types.ts";
 import { canonicalPath, inheritContext, isDescendant, parentPath } from "./paths.ts";
+import { DEFAULT_MANAGER_SETTINGS, type ManagerSettings } from "./settings.ts";
 
 interface Record {
   view: ThreadView;
@@ -57,6 +58,11 @@ export class ThreadManager {
   private disposed = false;
   private epoch = 0;
   constructor(private options: ManagerOptions) {}
+
+  /** New limits affect future launches/resumes, never cancel existing work. */
+  setLimits(limits: ManagerSettings): void {
+    this.options = { ...this.options, ...limits };
+  }
 
   list(): ThreadView[] {
     return [...this.records.values()].map((record) => this.view(record));
@@ -199,9 +205,17 @@ export class ThreadManager {
     if (caller !== "/root" && parent !== caller)
       throw new Error("An agent may spawn only its immediate children");
     if (!args.task.trim()) throw new Error("Task must not be empty");
-    if (path.slice(1).split("/").length - 1 > (this.options.maxDepth ?? 8))
+    const segments = path.slice(1).split("/");
+    // Independent roots still represent agents launched by the main L1 conversation.
+    const level = segments.length + (segments[0] === "root" ? 0 : 1);
+    const maxLevels = this.options.maxLevels ?? DEFAULT_MANAGER_SETTINGS.maxLevels;
+    if (
+      this.options.maxLevels === undefined && this.options.maxDepth !== undefined
+        ? segments.length - 1 > this.options.maxDepth
+        : level > maxLevels
+    )
       throw new Error("Agent depth limit reached");
-    if (this.records.size >= (this.options.maxThreads ?? 64))
+    if (this.records.size >= (this.options.maxThreads ?? DEFAULT_MANAGER_SETTINGS.maxThreads))
       throw new Error("Total thread limit reached");
     this.assertCapacity();
     const type = structuredClone(this.options.getType(args.type));
@@ -570,7 +584,7 @@ export class ThreadManager {
   private assertCapacity(): void {
     if (
       [...this.records.values()].filter((record) => active(record.view)).length >=
-      (this.options.maxConcurrent ?? 16)
+      (this.options.maxConcurrent ?? DEFAULT_MANAGER_SETTINGS.maxConcurrent)
     )
       throw new Error("Concurrent thread limit reached; wait for a thread to settle");
   }

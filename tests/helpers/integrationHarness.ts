@@ -16,6 +16,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import piSubagent from "../../src/index.ts";
 import type { SavedThread } from "../../src/types.ts";
+import type { ManagerSettings } from "../../src/settings.ts";
 
 export const REGISTRY_ENTRY = "pi-subagent:registry:v1";
 
@@ -50,8 +51,9 @@ export const registry = (manager: SessionManager, fromId?: string) => {
 export async function withOfflineHarness(
   options: {
     agentFiles: Record<string, string>;
-    onRequest(request: LoggedRequest): AssistantMessage;
+    onRequest(request: LoggedRequest): AssistantMessage | Promise<AssistantMessage>;
     scopedModels?: string[];
+    managerSettings?: Partial<ManagerSettings>;
   },
   body: (harness: OfflineHarness) => Promise<void>,
 ): Promise<void> {
@@ -65,6 +67,13 @@ export async function withOfflineHarness(
   try {
     const cwd = path.join(directory, "workspace");
     await mkdir(cwd);
+    if (options.managerSettings) {
+      await mkdir(path.join(directory, "subagent-manager"));
+      await writeFile(
+        path.join(directory, "subagent-manager", "settings.json"),
+        JSON.stringify(options.managerSettings),
+      );
+    }
     await mkdir(path.join(directory, "agents"));
     for (const [name, content] of Object.entries(options.agentFiles)) {
       await writeFile(path.join(directory, "agents", `${name}.md`), content);
@@ -127,23 +136,46 @@ export async function withOfflineHarness(
         requests.push(request);
         const reply = options.onRequest(request);
         const stream = createAssistantMessageEventStream();
-        void Promise.resolve().then(() => {
-          stream.push({ type: "start", partial: reply });
-          stream.push({
-            type: "done",
-            reason: reply.stopReason as "stop" | "toolUse",
-            message: reply,
+        void Promise.resolve()
+          .then(async () => {
+            const message = await reply;
+            stream.push({ type: "start", partial: message });
+            stream.push({
+              type: "done",
+              reason: message.stopReason as "stop" | "toolUse",
+              message,
+            });
+            stream.end(message);
+          })
+          .catch((error: unknown) => {
+            const message: AssistantMessage = {
+              role: "assistant",
+              content: [],
+              provider: model.provider,
+              model: model.id,
+              api: model.api,
+              stopReason: "error",
+              errorMessage: String(error),
+              timestamp: Date.now(),
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+            };
+            stream.push({ type: "error", reason: "error", error: message });
+            stream.end(message);
           });
-          stream.end(reply);
-        });
         return stream;
       },
     });
     await runtime.setRuntimeApiKey("integration-test", "offline-runtime-key");
-    const scopedModels = (options.scopedModels ?? [
-      "integration-test/offline",
-      "integration-test/offline-alt",
-    ]).map((identity) => {
+    const scopedModels = (
+      options.scopedModels ?? ["integration-test/offline", "integration-test/offline-alt"]
+    ).map((identity) => {
       const slash = identity.indexOf("/");
       return { model: runtime.getModel(identity.slice(0, slash), identity.slice(slash + 1))! };
     });

@@ -305,6 +305,7 @@ test(
     await withOfflineHarness(
       {
         agentFiles: { offline: offlineAgent(), nested: nestedAgent() },
+        managerSettings: { maxLevels: 4 },
         onRequest(request) {
           assert.equal(request.path, CHILD_PATH);
           return { ...answer(CHILD_OUTPUT), model: request.modelId };

@@ -258,8 +258,8 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
         );
       await mirrorRuntimeAuth(providerId);
       const sourceModel =
-        scopedModels.find(({ model }) => model.provider === providerId && model.id === modelId)?.model ??
-        ctx.modelRegistry.find(providerId, modelId);
+        scopedModels.find(({ model }) => model.provider === providerId && model.id === modelId)
+          ?.model ?? ctx.modelRegistry.find(providerId, modelId);
       if (sourceModel?.api === "pi-virtual") {
         throw new Error(
           `Virtual model ${providerId}/${modelId} cannot be reproduced through the public registry API. Set this agent type's model to a physical provider/model-id.`,
@@ -307,6 +307,11 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
           ? `Your lexical parent is ${options.parentPath}; inherited conversation comes only from that parent.`
           : "You are an independent root thread with no inherited history.",
         "When finished, give your final answer normally so it can be handed back. To retain unfinished work without a final answer, call agent_pause (if available), then stop; resume only when instructed.",
+        ...(allowed.has("agent_spawn") && allowed.has("agent_wait")
+          ? [
+              "For independent parallel work, launch all siblings with agent_spawn wait:false before calling agent_wait. Children share the main conversation's depth and concurrency limits; waiting parents count as active. Do not delegate work beyond your assigned scope.",
+            ]
+          : []),
       ].join("\n\n"),
       appendSystemPromptOverride: () => [],
       extensionFactories: [
@@ -386,7 +391,8 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
       }
       const currentModel = session.model;
       if (!currentModel || modelIdentity(currentModel) !== preferredIdentity) {
-        const { provider: preferredProvider, id: preferredId } = parseModelIdentity(preferredIdentity);
+        const { provider: preferredProvider, id: preferredId } =
+          parseModelIdentity(preferredIdentity);
         await session.setModel(
           await resolveRuntimeModel(preferredProvider, preferredId, liveScopedModels),
         );
