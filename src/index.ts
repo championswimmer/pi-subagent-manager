@@ -1,9 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { buildSessionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  buildSessionContext,
+  getAgentDir,
+} from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { ConfigStore } from "./config.ts";
 import { ThreadManager } from "./manager.ts";
 import { DEFAULT_MANAGER_SETTINGS, loadManagerSettings } from "./settings.ts";
+import { configureAgents } from "./settings-ui.ts";
 import { createDriverFactory } from "./runtime.ts";
 import { agentTools } from "./tools.ts";
 import { editAgentTypes, showThreads, updateWidget } from "./ui.ts";
@@ -38,7 +45,10 @@ export default function piSubagent(pi: ExtensionAPI): void {
   let generation = 0;
   let persistenceSignature = "";
   const requireManager = () => {
-    if (!manager) throw new Error("Subagent threads are not initialized; start a Pi session first");
+    if (!manager)
+      throw new Error(
+        "Subagent threads are not initialized; start a Pi session first",
+      );
     return manager;
   };
   const requireContext = () => {
@@ -76,13 +86,19 @@ export default function piSubagent(pi: ExtensionAPI): void {
     const entries = ctx.sessionManager.getBranch();
     const delivered = new Set(
       entries.flatMap((entry) => {
-        if (entry.type !== "custom_message" || entry.customType !== "pi-subagent:update") return [];
-        const id = (entry.details as { mailboxId?: unknown } | undefined)?.mailboxId;
+        if (
+          entry.type !== "custom_message" ||
+          entry.customType !== "pi-subagent:update"
+        )
+          return [];
+        const id = (entry.details as { mailboxId?: unknown } | undefined)
+          ?.mailboxId;
         return typeof id === "string" ? [id] : [];
       }),
     );
     for (const entry of entries) {
-      if (entry.type !== "custom" || entry.customType !== ROOT_MAILBOX_ENTRY) continue;
+      if (entry.type !== "custom" || entry.customType !== ROOT_MAILBOX_ENTRY)
+        continue;
       const notification = entry.data as RootNotification | undefined;
       if (
         notification?.rootSessionId === ctx.sessionManager.getSessionId() &&
@@ -109,19 +125,27 @@ export default function piSubagent(pi: ExtensionAPI): void {
         const notification: RootNotification = {
           rootSessionId: requireContext().sessionManager.getSessionId(),
           content: message,
-          details: { mailboxId: randomUUID(), path: thread.path, state: thread.state },
+          details: {
+            mailboxId: randomUUID(),
+            path: thread.path,
+            state: thread.state,
+          },
         };
         // Root sendMessage can defer while streaming too. Accept durably before queueing;
         // the eventual transcript message carries its ID for branch-local recovery.
         pi.appendEntry(ROOT_MAILBOX_ENTRY, notification);
         sendRootNotification(notification);
-      } else void requireManager().deliver(event.recipient, message).catch(warnDelivery);
+      } else
+        void requireManager()
+          .deliver(event.recipient, message)
+          .catch(warnDelivery);
     } catch (error) {
       warnDelivery(error);
     }
   };
 
-  for (const tool of agentTools(requireManager, "/root", () => store.list())) pi.registerTool(tool);
+  for (const tool of agentTools(requireManager, "/root", () => store.list()))
+    pi.registerTool(tool);
   pi.on("before_agent_start", async (event) => ({
     systemPrompt: `${event.systemPrompt}\n\n## pi-subagent\nYou are /root. Thread paths determine context ancestry, independently of agent type. Name children with concise task-based kebab-case paths (e.g. /root/controller-security-research), not their type name. Children can pause WITHOUT handing back an answer; completed and paused sessions can both receive more work via agent_steer. Working child threads appear above the footer. The main conversation is L1; the maximum is ${limits.maxLevels} levels including L1. For independent work, spawn all siblings with wait:false before calling agent_wait; the same pattern applies inside child agents that have delegation tools. Waiting parents count toward the shared ${limits.maxConcurrent}-thread concurrency limit. Available types:\n${store
       .list()
@@ -146,7 +170,9 @@ export default function piSubagent(pi: ExtensionAPI): void {
     const instance = new ThreadManager({
       ...limits,
       createDriver: createDriverFactory(requireContext),
-      rootSnapshot: () => buildSessionContext(requireContext().sessionManager.getBranch()).messages,
+      rootSnapshot: () =>
+        buildSessionContext(requireContext().sessionManager.getBranch())
+          .messages,
       getType: (name) => store.get(name),
       toolsFor: (path) => agentTools(requireManager, path, () => store.list()),
       onEvent: (event) => {
@@ -160,7 +186,9 @@ export default function piSubagent(pi: ExtensionAPI): void {
     const entries = ctx.sessionManager.getBranch();
     const entry = [...entries]
       .reverse()
-      .find((item) => item.type === "custom" && item.customType === REGISTRY_ENTRY);
+      .find(
+        (item) => item.type === "custom" && item.customType === REGISTRY_ENTRY,
+      );
     if (entry?.type === "custom") {
       try {
         const data = entry.data as {
@@ -175,7 +203,10 @@ export default function piSubagent(pi: ExtensionAPI): void {
           instance.restore(data.threads);
         else persist();
       } catch (error) {
-        ctx.ui.notify(`Could not restore subagent registry: ${String(error)}`, "error");
+        ctx.ui.notify(
+          `Could not restore subagent registry: ${String(error)}`,
+          "error",
+        );
       }
     }
     restoreRootMailbox(ctx);
@@ -189,7 +220,8 @@ export default function piSubagent(pi: ExtensionAPI): void {
     if (!manager) return;
     for (const thread of manager.list()) {
       const state = manager.get(thread.path).state;
-      if (state === "starting" || state === "running") await manager.stop("/root", thread.path);
+      if (state === "starting" || state === "running")
+        await manager.stop("/root", thread.path);
     }
   };
   // Finish old-thread cancellation while appendEntry still points to the old branch/session.
@@ -205,7 +237,8 @@ export default function piSubagent(pi: ExtensionAPI): void {
     context = undefined;
   });
   pi.registerCommand("agents", {
-    description: "Inspect/resume retained threads, edit agent types or reload configuration",
+    description:
+      "Configure agent settings, edit definitions or inspect retained threads",
     getArgumentCompletions: (prefix) =>
       ["types", "reload", "thread"]
         .filter((value) => value.startsWith(prefix))
@@ -225,9 +258,29 @@ export default function piSubagent(pi: ExtensionAPI): void {
             : `Loaded ${store.list().length} agent types; maximum ${limits.maxLevels} levels`,
           diagnostics.length ? "warning" : "info",
         );
-      } else if (!command || command === "thread") {
-        await showThreads(ctx, requireManager().scope("/root"), rest.join(" ") || undefined);
-      } else ctx.ui.notify("Usage: /agents [types | reload | thread /root/name]", "warning");
+      } else if (!command) {
+        await configureAgents(ctx, {
+          store,
+          settings: limits,
+          agentDir: getAgentDir(),
+          apply: () => {
+            const diagnostics = loadLimits(ctx);
+            requireManager().setLimits(limits);
+            if (diagnostics.length)
+              ctx.ui.notify(diagnostics.join("\n"), "warning");
+          },
+        });
+      } else if (command === "thread") {
+        await showThreads(
+          ctx,
+          requireManager().scope("/root"),
+          rest.join(" ") || undefined,
+        );
+      } else
+        ctx.ui.notify(
+          "Usage: /agents [types | reload | thread /root/name]",
+          "warning",
+        );
     },
   });
 }

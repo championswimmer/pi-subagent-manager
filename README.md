@@ -96,7 +96,8 @@ Project types override global types. Malformed definitions and same-scope duplic
 
 - `/agents types`: create/edit agent types. Field dialogs edit YAML defaults while preserving the prompt. Model preferences use an ordered picker: add available models (scoped entries are marked), remove entries, and move them up/down to control preference order. The YAML editor edits the header together; **Open in external editor** edits the whole Markdown file using `$VISUAL`, `$EDITOR`, or `vi`.
 - `/agents reload`: reload definitions and show diagnostics.
-- `/agents`: pick a thread, inspect its output/transcript, send input/resume, or stop it.
+- `/agents`: open a bordered settings dialog. Edit level, concurrency and retained-thread limits, choose global or trusted-project scope, and save with **Ctrl+S**. Settings apply immediately without interrupting existing work. **Agent definitions** opens the type editor.
+- `/agents thread`: pick a retained thread, inspect its output/transcript, send input/resume, or stop it.
 - `/agents thread /root/controller-security-research`: open one thread directly.
 
 A compact, themed activity widget appears **below the editor, above pi's footer/status area**. Working threads are prioritized; excess rows are counted instead of taking over the screen. Each row shows a colored type pill and a matching foreground-only task path, with elapsed active time and cumulative input `↑` / output `↓` token counts on the right. Time refreshes every second while running; tokens refresh as the provider reports usage. Pauses freeze time; resuming accumulates it. The existing footer is unchanged.
@@ -116,7 +117,12 @@ A compact, themed activity widget appears **below the editor, above pi's footer/
 | `agent_output` | Page through final text using character offsets     |
 
 ```json
-{ "path": "controller-security-research", "type": "researcher", "task": "Investigate controller security", "wait": false }
+{
+  "path": "controller-security-research",
+  "type": "researcher",
+  "task": "Investigate controller security",
+  "wait": false
+}
 ```
 
 Choose concise kebab-case paths describing the task, independently of the type. Then use `agent_wait` or `agent_status` on `/root/controller-security-research`.
