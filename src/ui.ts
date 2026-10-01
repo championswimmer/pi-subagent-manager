@@ -5,12 +5,20 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parse as parseShell } from "shell-quote";
 import {
+  DynamicBorder,
   type ExtensionCommandContext,
   type ExtensionContext,
+  getSelectListTheme,
   type Theme,
   type ThemeColor,
 } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences, truncateToWidth } from "@earendil-works/pi-tui";
+import {
+  Container,
+  SelectList,
+  Text,
+  stripTerminalSequences,
+  truncateToWidth,
+} from "@earendil-works/pi-tui";
 import { AGENT_COLORS, ConfigStore, parseAgentType, serializeAgentType } from "./config.ts";
 import { editModelPreferences, MODEL_EDITOR_CANCEL } from "./model-picker.ts";
 import { getModelPreferences } from "./models.ts";
@@ -234,6 +242,106 @@ async function editToolList(
   if (type.tools && !Object.keys(type.tools).length) delete type.tools;
 }
 
+const AGENT_COLOR_PREVIEW = "/worker [running] Working";
+const AGENT_COLOR_DEFAULT = "__default__";
+const AGENT_COLOR_CANCEL = Symbol("agent-color-cancel");
+
+class AgentColorPickerComponent extends Container {
+  private readonly items: { value: string; label: string; description?: string }[];
+  private readonly preview: Text;
+  private readonly theme: Theme;
+  readonly selectList: SelectList;
+
+  constructor(
+    tui: { requestRender(force?: boolean): void },
+    theme: Theme,
+    currentColor: AgentType["color"] | undefined,
+    onSelect: (color: AgentType["color"] | undefined) => void,
+    onCancel: () => void,
+  ) {
+    super();
+    this.theme = theme;
+    this.items = [
+      {
+        value: AGENT_COLOR_DEFAULT,
+        label: "Default (inherit)",
+        description: "Use Pi default foreground color",
+      },
+      ...AGENT_COLORS.map((color) => ({
+        value: color,
+        label: theme.fg(color, `● ${color}`),
+        description: `Pi semantic foreground color: ${color}`,
+      })),
+    ];
+    this.preview = new Text();
+    this.selectList = new SelectList(this.items, 10, getSelectListTheme(), {
+      minPrimaryColumnWidth: 18,
+      maxPrimaryColumnWidth: 28,
+    });
+    const selectedIndex = this.items.findIndex(
+      (item) => item.value === (currentColor ?? AGENT_COLOR_DEFAULT),
+    );
+    this.selectList.setSelectedIndex(selectedIndex >= 0 ? selectedIndex : 0);
+    this.selectList.onSelectionChange = (item) => {
+      this.updatePreview(tui, item.value);
+    };
+    this.selectList.onSelect = (item) => {
+      onSelect(
+        item.value === AGENT_COLOR_DEFAULT ? undefined : (item.value as AgentType["color"]),
+      );
+    };
+    this.selectList.onCancel = onCancel;
+    this.addChild(new DynamicBorder((text) => theme.fg("muted", text)));
+    this.updatePreview(tui, this.items[selectedIndex >= 0 ? selectedIndex : 0]!.value);
+    this.addChild(this.preview);
+    this.addChild(this.selectList);
+    this.addChild(new DynamicBorder((text) => theme.fg("muted", text)));
+  }
+
+  getItems(): readonly { value: string; label: string; description?: string }[] {
+    return this.items;
+  }
+
+  getPreview(): Text {
+    return this.preview;
+  }
+
+  getSelectList(): SelectList {
+    return this.selectList;
+  }
+
+  handleInput(keyData: string): void {
+    this.selectList.handleInput(keyData);
+  }
+
+  private updatePreview(tui: { requestRender(force?: boolean): void }, value: string): void {
+    const preview =
+      value === AGENT_COLOR_DEFAULT
+        ? `Preview: ${AGENT_COLOR_PREVIEW}`
+        : this.theme.fg(value as ThemeColor, `Preview: ${AGENT_COLOR_PREVIEW}`);
+    this.preview.setText(preview);
+    tui.requestRender();
+  }
+}
+
+async function selectAgentColor(
+  ctx: ExtensionCommandContext,
+  currentColor: AgentType["color"] | undefined,
+): Promise<AgentType["color"] | undefined | typeof AGENT_COLOR_CANCEL> {
+  return ctx.ui.custom(
+    (tui, theme, _keys, done) => {
+      return new AgentColorPickerComponent(
+        tui,
+        theme,
+        currentColor,
+        (value) => done(value),
+        () => done(AGENT_COLOR_CANCEL),
+      );
+    },
+    { overlay: true },
+  );
+}
+
 async function editDocument(
   ctx: ExtensionCommandContext,
   type: AgentType,
@@ -376,12 +484,9 @@ export async function editAgentTypes(
           if (value === "Default (inherit)") delete candidate.thinkingLevel;
           else candidate.thinkingLevel = value as AgentType["thinkingLevel"];
         } else if (field === "color") {
-          const value = await ctx.ui.select("Pi semantic foreground color", [
-            "Default",
-            ...AGENT_COLORS,
-          ]);
-          if (!value) continue;
-          if (value === "Default") delete candidate.color;
+          const value = await selectAgentColor(ctx, candidate.color);
+          if (value === AGENT_COLOR_CANCEL) continue;
+          if (value === undefined) delete candidate.color;
           else candidate.color = value;
         } else if (field === "tools.allow" || field === "tools.block") {
           await editToolList(ctx, candidate, field === "tools.allow" ? "allow" : "block");

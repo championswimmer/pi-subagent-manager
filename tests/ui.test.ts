@@ -204,6 +204,9 @@ function editorContext(
 ) {
   const diagnostics: string[] = [];
   const scopes: string[][] = [];
+  const colorPickerTheme = {
+    fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+  } as unknown as Theme;
   const availableModels = options.availableModels ?? [];
   const scopedModels = (options.scopedModels ?? []).map((identity) => {
     const [provider, ...rest] = identity.split("/");
@@ -226,6 +229,32 @@ function editorContext(
         if (choice !== undefined)
           assert.ok(options.includes(choice), `Missing dialog option: ${choice}`);
         return choice;
+      },
+      custom: async (factory: Function) => {
+        return new Promise<any>((resolve, reject) => {
+          Promise.resolve(
+            factory(
+              { requestRender: () => {} },
+              colorPickerTheme,
+              {},
+              (result: unknown) => resolve(result),
+            ),
+          )
+            .then((component: any) => {
+              const items = component.getItems?.();
+              assert.ok(items, "expected color picker items");
+              const choice = choices.shift();
+              if (choice === undefined) {
+                component.getSelectList?.().onCancel?.();
+                return;
+              }
+              const item = items.find((entry: { value: string }) => entry.value === choice);
+              assert.ok(item, `Missing color picker option: ${choice}`);
+              component.getSelectList?.().onSelectionChange?.(item);
+              component.getSelectList?.().onSelect?.(item);
+            })
+            .catch(reject);
+        });
       },
       input: async () => inputs.shift(),
       notify: (message: string) => diagnostics.push(message),
@@ -393,6 +422,52 @@ test("saving model preferences stores canonical ordered models after add and reo
   }
 });
 
+test("color picker previews semantic tokens and supports default unsetting", async () => {
+  const { root, store } = await configFixture();
+  try {
+    const { ctx } = editorContext(root, ["worker", "color", "Save", "Global", undefined]);
+    const rendered = { options: [] as string[], preview: [] as string[] };
+    ctx.ui.custom = (async (factory: Function) => {
+      return new Promise<any>((resolve, reject) => {
+        Promise.resolve(
+          factory(
+            { requestRender: () => {} },
+            {
+              fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+            },
+            {},
+            (result: unknown) => resolve(result),
+          ),
+        )
+          .then((component: any) => {
+            const items = component.getItems();
+            const success = items.find((item: { value: string }) => item.value === "success");
+            assert.ok(success);
+            rendered.options = [success.label];
+            component.getSelectList().onSelectionChange?.(success);
+            rendered.preview = component.getPreview().render(80);
+            const defaultItem = items.find(
+              (item: { value: string }) => item.value === "__default__",
+            );
+            assert.ok(defaultItem);
+            component.getSelectList().onSelect?.(defaultItem);
+          })
+          .catch(reject);
+      });
+    }) as typeof ctx.ui.custom;
+    await editAgentTypes(ctx, store);
+    assert.equal(store.get("worker").color, undefined);
+    assert.ok(rendered.options.some((line) => line.includes("<success>● success</success>")));
+    assert.ok(
+      rendered.preview.some((line) =>
+        line.includes("<success>Preview: /worker [running] Working</success>"),
+      ),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("invalid field edits and untrusted project saves leave configuration unchanged", async () => {
   const { root, store, body } = await configFixture();
   try {
@@ -421,7 +496,7 @@ test("invalid field edits and untrusted project saves leave configuration unchan
   }
 });
 
-test("editing a noncanonical filename keeps the original file and stays loadable", async () => {
+test("editing a noncanonical filename copies into preferred storage and keeps the original file", async () => {
   const { root, store, agentDir, body } = await configFixture("custom.md");
   try {
     const { ctx } = editorContext(
@@ -431,11 +506,13 @@ test("editing a noncanonical filename keeps the original file and stays loadable
     );
     await editAgentTypes(ctx, store);
     assert.deepEqual(await readdir(join(agentDir, "agents")), ["custom.md"]);
+    assert.deepEqual(await readdir(join(agentDir, "subagent-manager", "agents")), ["worker.md"]);
     const saved = store.get("worker");
     assert.equal(saved.description, "Revised");
-    assert.equal(saved.filePath, join(agentDir, "agents", "custom.md"));
+    assert.equal(saved.filePath, join(agentDir, "subagent-manager", "agents", "worker.md"));
     assert.equal(saved.systemPrompt, body);
     assert.match(await readFile(saved.filePath!, "utf8"), /description: Revised/);
+    assert.match(await readFile(join(agentDir, "agents", "custom.md"), "utf8"), /description: Worker/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

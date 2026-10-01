@@ -78,6 +78,8 @@ const FIELDS = new Set([
   "color",
   "tools",
 ]);
+const SUBAGENT_MANAGER_DIR = "subagent-manager";
+const AGENTS_DIR = "agents";
 
 type AgentScope = "user" | "project";
 type SaveOrigin = Pick<AgentType, "name" | "source" | "filePath">;
@@ -88,7 +90,9 @@ function errorCode(error: unknown): string | undefined {
     : undefined;
 }
 
-function lstatIfPresent(path: string): ReturnType<typeof lstatSync> | undefined {
+function lstatIfPresent(
+  path: string,
+): ReturnType<typeof lstatSync> | undefined {
   try {
     return lstatSync(path);
   } catch (error) {
@@ -97,13 +101,18 @@ function lstatIfPresent(path: string): ReturnType<typeof lstatSync> | undefined 
   }
 }
 
-function assertNotSymlinkPath(path: string): ReturnType<typeof lstatSync> | undefined {
+function assertNotSymlinkPath(
+  path: string,
+): ReturnType<typeof lstatSync> | undefined {
   const stat = lstatIfPresent(path);
   if (stat?.isSymbolicLink()) throw new Error(`Unsafe symlink path: ${path}`);
   return stat;
 }
 
-function validatePreservedDestination(filePath: string, directory: string): string {
+function validatePreservedDestination(
+  filePath: string,
+  directory: string,
+): string {
   const resolved = resolve(filePath);
   if (dirname(resolved) !== directory || !resolved.endsWith(".md"))
     throw new Error(`Unsafe agent destination: ${resolved}`);
@@ -113,7 +122,9 @@ function validatePreservedDestination(filePath: string, directory: string): stri
 }
 
 function frontmatter(content: string): { yaml: string; body: string } {
-  const match = /^(?:\uFEFF)?---\r?\n([\s\S]*?)^---[ \t]*(?:\r?\n|$)/m.exec(content);
+  const match = /^(?:\uFEFF)?---\r?\n([\s\S]*?)^---[ \t]*(?:\r?\n|$)/m.exec(
+    content,
+  );
   if (!match || match.index !== 0)
     throw new Error("Expected YAML frontmatter enclosed by --- lines");
   return { yaml: match[1], body: content.slice(match[0].length) };
@@ -126,8 +137,13 @@ function record(value: unknown, label: string): Record<string, unknown> {
 }
 
 function toolNames(value: unknown, label: string): string[] {
-  if (!Array.isArray(value) || value.some((name) => typeof name !== "string" || !TOOL.test(name))) {
-    throw new Error(`${label} must be an array of exact tool names (no wildcards or patterns)`);
+  if (
+    !Array.isArray(value) ||
+    value.some((name) => typeof name !== "string" || !TOOL.test(name))
+  ) {
+    throw new Error(
+      `${label} must be an array of exact tool names (no wildcards or patterns)`,
+    );
   }
   if (new Set(value).size !== value.length)
     throw new Error(`${label} contains duplicate tool names`);
@@ -137,10 +153,13 @@ function toolNames(value: unknown, label: string): string[] {
 function toolPolicy(value: unknown): NonNullable<AgentType["tools"]> {
   const mapping = record(value, "tools");
   for (const key of Object.keys(mapping))
-    if (key !== "allow" && key !== "block") throw new Error(`Unknown tools field: ${key}`);
+    if (key !== "allow" && key !== "block")
+      throw new Error(`Unknown tools field: ${key}`);
   const result: NonNullable<AgentType["tools"]> = {};
-  if (Object.hasOwn(mapping, "allow")) result.allow = toolNames(mapping.allow, "tools.allow");
-  if (Object.hasOwn(mapping, "block")) result.block = toolNames(mapping.block, "tools.block");
+  if (Object.hasOwn(mapping, "allow"))
+    result.allow = toolNames(mapping.allow, "tools.allow");
+  if (Object.hasOwn(mapping, "block"))
+    result.block = toolNames(mapping.block, "tools.block");
   return result;
 }
 
@@ -148,10 +167,12 @@ export function parseAgentType(content: string, filePath?: string): AgentType {
   try {
     const { yaml, body } = frontmatter(content);
     const doc = parseDocument(yaml, { uniqueKeys: true });
-    if (doc.errors.length) throw new Error(doc.errors.map((error) => error.message).join("; "));
+    if (doc.errors.length)
+      throw new Error(doc.errors.map((error) => error.message).join("; "));
     const data = record(doc.toJS({ maxAliasCount: 0 }), "Frontmatter");
     for (const key of Object.keys(data))
-      if (!FIELDS.has(key)) throw new Error(`Unknown frontmatter field: ${key}`);
+      if (!FIELDS.has(key))
+        throw new Error(`Unknown frontmatter field: ${key}`);
     if (typeof data.name !== "string" || !NAME.test(data.name))
       throw new Error(
         "name must be a safe identifier using letters, numbers, underscores or hyphens",
@@ -169,13 +190,21 @@ export function parseAgentType(content: string, filePath?: string): AgentType {
     });
     if (models !== undefined) result.models = models;
     if (Object.hasOwn(data, "thinkingLevel")) {
-      if (!THINKING_LEVELS.includes(data.thinkingLevel as AgentType["thinkingLevel"] & string))
-        throw new Error(`thinkingLevel must be one of: ${THINKING_LEVELS.join(", ")}`);
+      if (
+        !THINKING_LEVELS.includes(
+          data.thinkingLevel as AgentType["thinkingLevel"] & string,
+        )
+      )
+        throw new Error(
+          `thinkingLevel must be one of: ${THINKING_LEVELS.join(", ")}`,
+        );
       result.thinkingLevel = data.thinkingLevel as AgentType["thinkingLevel"];
     }
     if (Object.hasOwn(data, "color")) {
       if (!AGENT_COLORS.includes(data.color as (typeof AGENT_COLORS)[number]))
-        throw new Error(`color must be a Pi foreground token: ${AGENT_COLORS.join(", ")}`);
+        throw new Error(
+          `color must be a Pi foreground token: ${AGENT_COLORS.join(", ")}`,
+        );
       result.color = data.color as string;
     }
     if (Object.hasOwn(data, "tools")) result.tools = toolPolicy(data.tools);
@@ -189,7 +218,8 @@ export function parseAgentType(content: string, filePath?: string): AgentType {
 }
 
 export function serializeAgentType(type: AgentType): string {
-  if (typeof type.systemPrompt !== "string") throw new Error("systemPrompt must be a string");
+  if (typeof type.systemPrompt !== "string")
+    throw new Error("systemPrompt must be a string");
   const data: Record<string, unknown> = {
     name: type.name,
     description: type.description,
@@ -203,13 +233,17 @@ export function serializeAgentType(type: AgentType): string {
   return content;
 }
 
-export function selectTools(policy: AgentType["tools"], available: string[]): string[] {
+export function selectTools(
+  policy: AgentType["tools"],
+  available: string[],
+): string[] {
   const validated = policy === undefined ? {} : toolPolicy(policy);
   const names = new Set(available);
   for (const name of [...(validated.allow ?? []), ...(validated.block ?? [])]) {
     if (!names.has(name)) throw new Error(`Unavailable tool name: ${name}`);
   }
-  const allow = validated.allow === undefined ? names : new Set(validated.allow);
+  const allow =
+    validated.allow === undefined ? names : new Set(validated.allow);
   const block = new Set(validated.block ?? []);
   return [...names].filter((name) => allow.has(name) && !block.has(name));
 }
@@ -235,11 +269,27 @@ export class ConfigStore {
     this.types.clear();
     this.diagnostics = [];
     const layers: [string, NonNullable<AgentType["source"]>][] = [
-      [this.options.bundledDir ?? fileURLToPath(new URL("../agents/", import.meta.url)), "bundled"],
-      [join(this.options.agentDir, "agents"), "user"],
+      [
+        this.options.bundledDir ??
+          fileURLToPath(new URL("../agents/", import.meta.url)),
+        "bundled",
+      ],
+      ...this.scopeDirectories("user").map(
+        (directory): [string, NonNullable<AgentType["source"]>] => [
+          directory,
+          "user",
+        ],
+      ),
     ];
     if (this.options.includeProject)
-      layers.push([join(this.options.cwd, ".pi", "agents"), "project"]);
+      layers.push(
+        ...this.scopeDirectories("project").map(
+          (directory): [string, NonNullable<AgentType["source"]>] => [
+            directory,
+            "project",
+          ],
+        ),
+      );
     for (const [directory, source] of layers) {
       let files: string[];
       try {
@@ -263,7 +313,9 @@ export class ConfigStore {
         let content = "";
         try {
           if (!lstatSync(filePath).isFile())
-            throw new Error("Agent definition must be a regular file, not a symlink");
+            throw new Error(
+              "Agent definition must be a regular file, not a symlink",
+            );
           content = readFileSync(filePath, "utf8");
           const type = parseAgentType(content, filePath);
           if (seenNames.has(type.name)) {
@@ -301,7 +353,9 @@ export class ConfigStore {
   }
 
   list(): AgentType[] {
-    return structuredClone([...this.types.values()].sort((a, b) => a.name.localeCompare(b.name)));
+    return structuredClone(
+      [...this.types.values()].sort((a, b) => a.name.localeCompare(b.name)),
+    );
   }
 
   get(name: string): AgentType {
@@ -314,27 +368,71 @@ export class ConfigStore {
     return this.options.includeProject;
   }
 
-  private scopeDirectory(scope: AgentScope): string {
-    if (scope !== "user" && scope !== "project") throw new Error("Invalid agent scope");
+  private preferredScopeDirectory(scope: AgentScope): string {
+    if (scope !== "user" && scope !== "project")
+      throw new Error("Invalid agent scope");
     if (scope === "project" && !this.options.includeProject)
       throw new Error("Project agents are not enabled/trusted");
     return scope === "user"
-      ? resolve(this.options.agentDir, "agents")
-      : resolve(this.options.cwd, ".pi", "agents");
+      ? resolve(this.options.agentDir, SUBAGENT_MANAGER_DIR, AGENTS_DIR)
+      : resolve(
+          this.options.cwd,
+          ".pi",
+          "agent",
+          SUBAGENT_MANAGER_DIR,
+          AGENTS_DIR,
+        );
+  }
+
+  private scopeDirectories(scope: AgentScope): string[] {
+    return scope === "user"
+      ? [
+          resolve(this.options.agentDir, AGENTS_DIR),
+          this.preferredScopeDirectory(scope),
+        ]
+      : [
+          resolve(this.options.cwd, ".pi", AGENTS_DIR),
+          this.preferredScopeDirectory(scope),
+        ];
   }
 
   private destinationBasePaths(scope: AgentScope, directory: string): string[] {
-    const base = resolve(scope === "user" ? this.options.agentDir : this.options.cwd);
-    return scope === "user" ? [base, directory] : [base, join(base, ".pi"), directory];
+    if (scope === "user") {
+      const base = resolve(this.options.agentDir);
+      return [base, join(base, SUBAGENT_MANAGER_DIR), directory];
+    }
+    const base = resolve(this.options.cwd);
+    const projectPi = join(base, ".pi");
+    const projectAgent = join(projectPi, "agent");
+    return [
+      base,
+      projectPi,
+      projectAgent,
+      join(projectAgent, SUBAGENT_MANAGER_DIR),
+      directory,
+    ];
+  }
+
+  private canPreserveDestination(
+    name: string,
+    scope: AgentScope,
+    original?: SaveOrigin,
+  ): boolean {
+    return (
+      original?.name === name &&
+      original.source === scope &&
+      typeof original.filePath === "string" &&
+      dirname(resolve(original.filePath)) ===
+        this.preferredScopeDirectory(scope)
+    );
   }
 
   destination(name: string, scope: AgentScope, original?: SaveOrigin): string {
     if (!NAME.test(name)) throw new Error("Unsafe agent name");
-    const directory = this.scopeDirectory(scope);
+    const directory = this.preferredScopeDirectory(scope);
     if (
-      original?.name === name &&
-      original.source === scope &&
-      typeof original.filePath === "string"
+      this.canPreserveDestination(name, scope, original) &&
+      typeof original?.filePath === "string"
     ) {
       return validatePreservedDestination(original.filePath, directory);
     }
@@ -347,13 +445,19 @@ export class ConfigStore {
     const filePath = this.destination(validated.name, scope, original);
     const directory = dirname(filePath);
     // Reject redirected destination directories and files before writing.
-    for (const path of [...this.destinationBasePaths(scope, directory), filePath]) {
+    for (const path of [
+      ...this.destinationBasePaths(scope, directory),
+      filePath,
+    ]) {
       const stat = assertNotSymlinkPath(path);
       if (path === filePath && stat && !stat.isFile())
         throw new Error(`Unsafe agent destination: ${filePath}`);
     }
     mkdirSync(directory, { recursive: true });
-    const temporary = join(dirname(filePath), `.${validated.name}.${randomUUID()}.tmp`);
+    const temporary = join(
+      dirname(filePath),
+      `.${validated.name}.${randomUUID()}.tmp`,
+    );
     try {
       writeFileSync(temporary, content, { flag: "wx", mode: 0o600 });
       renameSync(temporary, filePath);

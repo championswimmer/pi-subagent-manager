@@ -34,10 +34,27 @@ function fixture(t: TestContext) {
   const cwd = join(root, "project");
   const agentDir = join(root, "user");
   const bundledDir = join(root, "bundled");
-  const project = join(cwd, ".pi", "agents");
-  const user = join(agentDir, "agents");
-  for (const directory of [project, user, bundledDir]) mkdirSync(directory, { recursive: true });
-  return { cwd, agentDir, bundledDir, project, user };
+  const projectLegacy = join(cwd, ".pi", "agents");
+  const project = join(cwd, ".pi", "agent", "subagent-manager", "agents");
+  const userLegacy = join(agentDir, "agents");
+  const user = join(agentDir, "subagent-manager", "agents");
+  for (const directory of [
+    projectLegacy,
+    project,
+    userLegacy,
+    user,
+    bundledDir,
+  ])
+    mkdirSync(directory, { recursive: true });
+  return {
+    cwd,
+    agentDir,
+    bundledDir,
+    project,
+    projectLegacy,
+    user,
+    userLegacy,
+  };
 }
 
 test("parse and serialize round-trip all fields and exact Markdown body", () => {
@@ -52,7 +69,10 @@ test("parse and serialize round-trip all fields and exact Markdown body", () => 
   assert.equal(parseAgentType(markdown(), "example.md").filePath, "example.md");
   const crlf = markdown().replaceAll("\n", "\r\n");
   assert.equal(parseAgentType(crlf).systemPrompt, "Body\r\n");
-  assert.equal(parseAgentType("---\nname: empty\ndescription: Empty\n---").systemPrompt, "");
+  assert.equal(
+    parseAgentType("---\nname: empty\ndescription: Empty\n---").systemPrompt,
+    "",
+  );
 });
 
 test("legacy model frontmatter parses as models and serializes canonically", () => {
@@ -150,7 +170,8 @@ test("validate scalar fields, safe names, model preferences and exact tool polic
     assert.equal(parseAgentType(markdown(`color: ${color}\n`)).color, color);
   for (const thinkingLevel of THINKING_LEVELS)
     assert.equal(
-      parseAgentType(markdown(`thinkingLevel: ${thinkingLevel}\n`)).thinkingLevel,
+      parseAgentType(markdown(`thinkingLevel: ${thinkingLevel}\n`))
+        .thinkingLevel,
       thinkingLevel,
     );
 });
@@ -160,8 +181,14 @@ test("selectTools has exact names, empty allow, block wins and stable available 
   assert.deepEqual(selectTools(undefined, available), available);
   assert.deepEqual(selectTools({}, available), available);
   assert.deepEqual(selectTools({ allow: [] }, available), []);
-  assert.deepEqual(selectTools({ allow: ["bash", "read"], block: ["bash"] }, available), ["read"]);
-  assert.deepEqual(selectTools({ block: ["bash"] }, available), ["read", "agent_update"]);
+  assert.deepEqual(
+    selectTools({ allow: ["bash", "read"], block: ["bash"] }, available),
+    ["read"],
+  );
+  assert.deepEqual(selectTools({ block: ["bash"] }, available), [
+    "read",
+    "agent_update",
+  ]);
   for (const policy of [
     { allow: ["Read"] },
     { block: ["missing"] },
@@ -171,12 +198,17 @@ test("selectTools has exact names, empty allow, block wins and stable available 
     assert.throws(() => selectTools(policy, available));
 });
 
-test("bundled defaults are loaded with researcher restricted and worker unfiltered", () => {
+test("bundled defaults include architect, researcher and worker", () => {
   const store = new ConfigStore({
     cwd: "/nonexistent-project",
     agentDir: "/nonexistent-user",
     includeProject: false,
   });
+  const bundled = store.list().map((type) => type.name);
+  assert.ok(bundled.length >= 3);
+  for (const name of ["architect", "researcher", "worker"])
+    assert.ok(bundled.includes(name));
+  assert.equal(store.get("architect").source, "bundled");
   assert.equal(store.get("researcher").source, "bundled");
   assert.deepEqual(store.get("researcher").tools?.allow, [
     "read",
@@ -207,7 +239,10 @@ test("precedence, source, filePath, trust switch and defensive copies", (t) => {
   store.get("example").description = "changed";
   store.list()[0].description = "changed";
   assert.equal(store.get("example").description, "project");
-  assert.equal(new ConfigStore({ ...f, includeProject: false }).get("example").source, "user");
+  assert.equal(
+    new ConfigStore({ ...f, includeProject: false }).get("example").source,
+    "user",
+  );
   assert.throws(() => store.get("missing"), /Unknown or invalid/);
 
   writeFileSync(join(f.bundledDir, "worker.md"), markdown("", "worker"));
@@ -231,12 +266,18 @@ test("precedence, source, filePath, trust switch and defensive copies", (t) => {
 
 test("malformed overrides block both filename and declared name while other files load", (t) => {
   const f = fixture(t);
-  writeFileSync(join(f.bundledDir, "example.md"), serializeAgentType(definition));
+  writeFileSync(
+    join(f.bundledDir, "example.md"),
+    serializeAgentType(definition),
+  );
   writeFileSync(
     join(f.bundledDir, "other.md"),
     serializeAgentType({ ...definition, name: "other" }),
   );
-  writeFileSync(join(f.project, "example.md"), markdown("unsupported: true\n", "other"));
+  writeFileSync(
+    join(f.project, "example.md"),
+    markdown("unsupported: true\n", "other"),
+  );
   writeFileSync(join(f.project, "good.md"), markdown("", "good"));
   const store = new ConfigStore({ ...f, includeProject: true });
   assert.throws(() => store.get("example"));
@@ -264,27 +305,116 @@ test("duplicate declared names in malformed file cannot resurrect lower policy",
   assert.match(store.diagnostics[0], /unique|duplicate/i);
 });
 
+test("legacy and bundled edits copy on write into preferred storage", (t) => {
+  const f = fixture(t);
+  writeFileSync(
+    join(f.bundledDir, "bundled-only.md"),
+    serializeAgentType({
+      ...definition,
+      name: "bundled-only",
+      description: "Bundled only",
+    }),
+  );
+  writeFileSync(
+    join(f.userLegacy, "example.md"),
+    serializeAgentType({ ...definition, description: "Legacy user" }),
+  );
+  writeFileSync(
+    join(f.projectLegacy, "project-only.md"),
+    serializeAgentType({
+      ...definition,
+      name: "project-only",
+      description: "Legacy project",
+    }),
+  );
+  const store = new ConfigStore({ ...f, includeProject: true });
+
+  const bundled = store.get("bundled-only");
+  const savedBundled = store.save(
+    { ...bundled, description: "Bundled override" },
+    "user",
+    bundled,
+  );
+  assert.equal(savedBundled.filePath, join(f.user, "bundled-only.md"));
+  assert.equal(
+    parseAgentType(readFileSync(join(f.bundledDir, "bundled-only.md"), "utf8"))
+      .description,
+    "Bundled only",
+  );
+
+  const legacyUser = store.get("example");
+  assert.equal(legacyUser.filePath, join(f.userLegacy, "example.md"));
+  const savedUser = store.save(
+    { ...legacyUser, description: "Preferred user" },
+    "user",
+    legacyUser,
+  );
+  assert.equal(savedUser.filePath, join(f.user, "example.md"));
+  assert.equal(
+    parseAgentType(readFileSync(join(f.userLegacy, "example.md"), "utf8"))
+      .description,
+    "Legacy user",
+  );
+  assert.equal(store.get("example").description, "Preferred user");
+  assert.equal(store.get("example").filePath, join(f.user, "example.md"));
+
+  const legacyProject = store.get("project-only");
+  assert.equal(
+    legacyProject.filePath,
+    join(f.projectLegacy, "project-only.md"),
+  );
+  const savedProject = store.save(
+    { ...legacyProject, description: "Preferred project" },
+    "project",
+    legacyProject,
+  );
+  assert.equal(savedProject.filePath, join(f.project, "project-only.md"));
+  assert.equal(
+    parseAgentType(
+      readFileSync(join(f.projectLegacy, "project-only.md"), "utf8"),
+    ).description,
+    "Legacy project",
+  );
+  assert.equal(store.get("project-only").description, "Preferred project");
+  assert.equal(
+    store.get("project-only").filePath,
+    join(f.project, "project-only.md"),
+  );
+});
+
 test("save validates and atomically writes user/project definitions and reloads", (t) => {
   const f = fixture(t);
   const store = new ConfigStore({ ...f, includeProject: true });
   const saved = store.save({ ...definition, tools: { allow: [] } }, "user");
   assert.equal(saved.source, "user");
-  assert.deepEqual(parseAgentType(readFileSync(saved.filePath!, "utf8")).tools, { allow: [] });
+  assert.deepEqual(
+    parseAgentType(readFileSync(saved.filePath!, "utf8")).tools,
+    { allow: [] },
+  );
   store.save({ ...definition, description: "Project" }, "project");
   assert.equal(store.get("example").description, "Project");
   assert.deepEqual(readdirSync(f.user), ["example.md"]);
   assert.deepEqual(readdirSync(f.project), ["example.md"]);
+  assert.deepEqual(readdirSync(f.userLegacy), []);
+  assert.deepEqual(readdirSync(f.projectLegacy), []);
   assert.throws(() => store.save({ ...definition, name: "../escape" }, "user"));
   assert.throws(() => store.save({ ...definition, color: "red" }, "user"));
   assert.throws(
-    () => new ConfigStore({ ...f, includeProject: false }).save(definition, "project"),
+    () =>
+      new ConfigStore({ ...f, includeProject: false }).save(
+        definition,
+        "project",
+      ),
     /not enabled\/trusted/,
   );
 });
 
 test("symlink definitions fail closed and symlink save destinations are rejected", (t) => {
   const f = fixture(t);
-  writeFileSync(join(f.bundledDir, "example.md"), serializeAgentType(definition));
+  writeFileSync(
+    join(f.bundledDir, "example.md"),
+    serializeAgentType(definition),
+  );
   symlinkSync(join(f.bundledDir, "example.md"), join(f.user, "example.md"));
   const store = new ConfigStore({ ...f, includeProject: false });
   assert.throws(() => store.get("example"));
@@ -292,7 +422,10 @@ test("symlink definitions fail closed and symlink save destinations are rejected
 
   rmSync(join(f.user, "example.md"));
   symlinkSync(join(f.user, "missing.md"), join(f.user, "worker.md"));
-  assert.throws(() => store.save({ ...definition, name: "worker" }, "user"), /Unsafe symlink path/);
+  assert.throws(
+    () => store.save({ ...definition, name: "worker" }, "user"),
+    /Unsafe symlink path/,
+  );
 
   rmSync(f.user, { recursive: true });
   symlinkSync(join(f.agentDir, "missing-agents"), f.user);
@@ -310,5 +443,8 @@ test("symlink definitions fail closed and symlink save destinations are rejected
   assert.throws(() => trusted.get("example"));
   assert.equal(trusted.diagnostics.length, 1);
   assert.match(trusted.diagnostics[0], /Unsafe symlink path/);
-  assert.throws(() => trusted.save(definition, "project"), /Unsafe symlink path/);
+  assert.throws(
+    () => trusted.save(definition, "project"),
+    /Unsafe symlink path/,
+  );
 });
