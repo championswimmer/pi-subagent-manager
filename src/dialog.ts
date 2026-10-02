@@ -562,9 +562,11 @@ function scopeDialogContext(
       session.restoreFocus(),
     );
   }) as ExtensionUIContext["custom"];
-  const scoped = Object.create(ctx) as ExtensionCommandContext;
-  scoped.ui = ui;
-  return scoped;
+  // Pi exposes ctx.ui as a getter; assignment cannot shadow an inherited accessor.
+  // Define an own property while keeping the remaining context getters live.
+  return Object.create(ctx, {
+    ui: { value: ui, writable: true, enumerable: true, configurable: true },
+  }) as ExtensionCommandContext;
 }
 
 /**

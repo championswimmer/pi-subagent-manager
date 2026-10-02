@@ -114,6 +114,58 @@ test(
 );
 
 test(
+  "withDialogSession shadows getter-only ui without mutating the original context",
+  { timeout: 8000 },
+  async () => {
+    const driver = createDialogDriver({ theme, timeoutMs: 3000 });
+    driver.onChild = () => true;
+    const notifications: string[] = [];
+    const ui = {
+      custom: driver.custom,
+      notify(message: string) {
+        notifications.push(message);
+      },
+    };
+    let cwd = "/original";
+    const ctx = Object.freeze({
+      hasUI: true,
+      mode: "tui",
+      get ui() {
+        return ui;
+      },
+      get cwd() {
+        return cwd;
+      },
+    }) as unknown as ExtensionCommandContext;
+
+    await withDialogSession(ctx, async (sessionCtx) => {
+      assert.notEqual(sessionCtx, ctx);
+      assert.notEqual(sessionCtx.ui, ui);
+      assert.equal(ctx.ui, ui);
+      sessionCtx.ui.notify("scoped notification");
+      assert.deepEqual(notifications, ["scoped notification"]);
+      assert.equal(sessionCtx.cwd, "/original");
+      cwd = "/updated";
+      assert.equal(sessionCtx.cwd, "/updated", "other context getters stay live");
+      await withDialogSession(sessionCtx, async (nestedCtx) => {
+        assert.equal(nestedCtx, sessionCtx);
+        const result = await nestedCtx.ui.custom((_host, _theme, _keys, done) => {
+          done("ok");
+          return { invalidate() {}, render: () => ["child"] };
+        }, DIALOG_OPTIONS);
+        assert.equal(result, "ok");
+      });
+    });
+
+    assert.equal(ctx.ui, ui);
+    assert.equal(ctx.ui.custom, driver.custom);
+    assert.equal(Object.getOwnPropertyDescriptor(ctx, "ui")?.set, undefined);
+    assert.equal(driver.stats.outerOpens, 1);
+    assert.equal(driver.stats.outerCompletions, 1);
+  },
+);
+
+test(
   "withDialogSession closes the outer overlay when the flow throws",
   { timeout: 8000 },
   async () => {
