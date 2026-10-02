@@ -54,6 +54,27 @@ A forked **main** session gets a fresh registry, so separate parents never write
 
 ## Agent types
 
+### Shipped task-specialized defaults
+
+| Type         | Thinking | Intended work                                                             |
+| ------------ | -------- | ------------------------------------------------------------------------- |
+| `explorer`   | `low`    | Fast repository lookup and behavior tracing, not audits or implementation |
+| `tasker`     | `low`    | Short, bounded execution with clear acceptance criteria                   |
+| `coder`      | `high`   | Sustained implementation, debugging, and refactoring                      |
+| `reviewer`   | `high`   | Independent, evidence-led review; no unsolicited fixes                    |
+| `researcher` | `high`   | Source-backed research and synthesis, subject to retrieval access         |
+| `writer`     | `medium` | Creative long-form writing and voice-preserving revision                  |
+| `designer`   | `medium` | Frontend visual hierarchy, interaction, and responsive/accessibility work |
+| `architect`  | `high`   | Architecture, tradeoffs, planning, and explicitly authorized coordination |
+
+All defaults **inherit the parent/default model** rather than pinning vendors that may be unavailable in `/scoped-models`. Customize model preferences per role with `/agents types`; thinking levels are explicit workload defaults, mapped by the SDK to model support. Each role has an explicit tool allowlist; only architect can delegate, and a planning request does not authorize execution.
+
+Children do **not** inherit the parent's web/browser/MCP tools or skills. Researcher needs supplied sources or an available, authorized shell retrieval workflow for live research; otherwise it pauses for access. Designer must not claim visual/browser QA without actually available tooling and rendered inspection. Shell access is not enforced read-only: tool policies are **not an OS sandbox**.
+
+Migration: replace generic `worker` with tasker for bounded jobs or coder for sustained work; use explorer for code lookup formerly assigned to researcher. Architect/researcher keep their names but have rewritten contracts. Custom overrides and retained threads are not renamed or overwritten.
+
+See [task taxonomy, benchmark limitations, model recommendations, and evaluation guidance](docs/default-agents.md). Quantitative analysis is documented as an optional analyst specialization rather than another overlapping default.
+
 Definitions are Markdown files with YAML frontmatter:
 
 ```markdown
@@ -86,7 +107,7 @@ If `models`/`model` is omitted, the agent inherits the effective parent/default 
 
 Discovery precedence:
 
-1. Bundled `researcher` and `worker` defaults.
+1. The eight bundled task-specialized defaults listed above.
 2. `<pi-agent-dir>/agents/*.md` (normally `~/.pi/agent/agents/`).
 3. `<cwd>/.pi/agents/*.md`, only when pi trusts the project.
 
@@ -132,7 +153,7 @@ Choose concise kebab-case paths describing the task, independently of the type. 
 
 Launch **all independent siblings with `wait: false` before waiting**. For example, `/root` can launch `team-a` and `team-b`, then each team can launch `worker-a` and `worker-b` the same way. This works even if tool calls are delivered sequentially: detached children run in separate SDK sessions. Same-turn foreground calls also overlap when pi executes their tool batch in parallel, but spawning one foreground child and awaiting it before launching the next is sequential.
 
-Use a delegating type such as `worker` or `architect` for team coordinators. A custom allow list must include `agent_spawn` and `agent_wait`; the bundled read-only `researcher` intentionally does not have delegation tools. Children never bypass their tool policy or the shared limits.
+Use the bundled `architect` for explicitly authorized team coordination. Other bundled roles intentionally do not delegate. A custom coordinating type's allow list must include `agent_spawn` and `agent_wait`. Children never bypass their tool policy or the shared limits; delegation does not provide unavailable web/browser capabilities.
 
 ### Manager settings
 

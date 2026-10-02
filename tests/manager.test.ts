@@ -2,7 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { ThreadManager } from "../src/manager.ts";
-import type { AgentDriver, DriverOptions, ManagerOptions, ThreadEvent } from "../src/types.ts";
+import type {
+  AgentDriver,
+  AgentType,
+  DriverOptions,
+  ManagerOptions,
+  ThreadEvent,
+} from "../src/types.ts";
 
 const user = (text: string): AgentMessage => ({
   role: "user",
@@ -425,6 +431,57 @@ test("save/restore retains definition snapshot and reopens JSONL on resume", asy
   await third.manager.wait("/root", "worker");
   await third.manager.shutdown();
 });
+
+for (const name of ["worker", "researcher"]) {
+  test(`retained ${name} resumes its saved contract after bundled defaults are replaced`, async () => {
+    const original: AgentType = {
+      name,
+      description: `Legacy ${name}`,
+      systemPrompt: `Original ${name} prompt`,
+      thinkingLevel: "low",
+      tools: { allow: ["read", "agent_update", "agent_pause"] },
+    };
+    const first = fixture({ getType: () => original });
+    await first.manager.spawn("/root", {
+      path: name,
+      type: name,
+      task: "legacy work",
+      wait: false,
+    });
+    await tick();
+    const saved = first.manager.saved();
+    await first.manager.shutdown();
+
+    let lookups = 0;
+    const second = fixture({
+      getType: (type) => {
+        lookups++;
+        if (type === "worker") throw new Error("worker is no longer bundled");
+        return {
+          name: type,
+          description: "New research contract",
+          systemPrompt: "New evidence research prompt",
+          thinkingLevel: "high",
+          tools: { allow: ["read", "bash", "agent_update", "agent_pause"] },
+        };
+      },
+    });
+    try {
+      second.manager.restore(saved);
+      await second.manager.steer("/root", name, "continue legacy work");
+      await tick();
+      const driver = second.drivers.get(`/root/${name}`)!;
+      assert.equal(lookups, 0, "resume must not resolve the replacement or removed definition");
+      assert.deepEqual(driver.options.type, original);
+      assert.deepEqual(second.manager.saved()[0].definition, original);
+      assert.equal(driver.options.sessionFile, saved[0].view.sessionFile);
+      driver.finish();
+      assert.equal((await second.manager.wait("/root", name)).state, "completed");
+    } finally {
+      await second.manager.shutdown();
+    }
+  });
+}
 
 test("restored nested child opens parent first but keeps its saved inherited snapshot", async () => {
   const order: string[] = [];

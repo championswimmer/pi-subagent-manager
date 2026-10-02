@@ -198,27 +198,16 @@ test("selectTools has exact names, empty allow, block wins and stable available 
     assert.throws(() => selectTools(policy, available));
 });
 
-test("bundled defaults include architect, researcher and worker", () => {
+test("bundled defaults are the eight specialist roles", () => {
   const store = new ConfigStore({
     cwd: "/nonexistent-project",
     agentDir: "/nonexistent-user",
     includeProject: false,
   });
-  const bundled = store.list().map((type) => type.name);
-  assert.ok(bundled.length >= 3);
-  for (const name of ["architect", "researcher", "worker"])
-    assert.ok(bundled.includes(name));
-  assert.equal(store.get("architect").source, "bundled");
-  assert.equal(store.get("researcher").source, "bundled");
-  assert.deepEqual(store.get("researcher").tools?.allow, [
-    "read",
-    "grep",
-    "find",
-    "ls",
-    "agent_update",
-    "agent_pause",
-  ]);
-  assert.equal(store.get("worker").tools, undefined);
+  assert.deepEqual(
+    store.list().map((type) => type.name),
+    ["architect", "coder", "designer", "explorer", "researcher", "reviewer", "tasker", "writer"],
+  );
 });
 
 test("precedence, source, filePath, trust switch and defensive copies", (t) => {
