@@ -238,18 +238,14 @@ The code is deliberately layered:
 
 ## Publishing
 
-Releases are published manually from a clean checkout of the version tag. Tag pushes
-only validate the release and upload an npm tarball in GitHub Actions; they never
-publish to npm.
+Pushing a `v<version>` tag runs [`.github/workflows/release.yml`](.github/workflows/release.yml)
+to verify the tag matches `package.json`, typecheck, test, upload an npm tarball,
+and publish to npm with provenance using GitHub Actions OIDC. No `NPM_TOKEN` secret
+is required.
 
-```sh
-npm ci
-npm run check
-npm test
-npm pack --dry-run
-npm login
-npm publish --access public
-```
+Configure an npm trusted publisher for `pi-subagent-manager` with GitHub owner
+`championswimmer`, repository `pi-subagent-manager`, and workflow filename
+`release.yml`. Leave the environment field empty (the workflow uses no environment).
 
 `npm publish` automatically reruns typechecking and tests via `prepublishOnly`. The
 package ships TypeScript sources and bundled agent definitions; pi loads them directly,
@@ -257,6 +253,6 @@ so no build step is needed. Check the `files` list in `package.json` when adding
 
 For the next release, update `package.json` and `package-lock.json` together (for
 example, `npm version minor --no-git-tag-version`), validate, commit, create an
-annotated `v<version>` tag, and push the commit and tag before publishing.
+annotated `v<version>` tag, and push the commit and tag to trigger publishing.
 
 The initial design is kept in [`.agents/plans`](https://github.com/championswimmer/pi-subagent-manager/tree/main/.agents/plans); superseded review snapshots have been removed. Research came before implementation: [Claude](docs/research-claude.md) and [Codex](docs/research-codex.md).

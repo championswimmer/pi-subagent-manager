@@ -1,6 +1,7 @@
-name: Validate release
+name: Release to npm
 
-# Tag pushes validate and package the release. npm publishing remains manual.
+# Publishes on version tag pushes using npm trusted publishing (OIDC).
+# No NPM_TOKEN secret is required.
 on:
   push:
     tags:
@@ -11,8 +12,11 @@ permissions:
   contents: read
 
 jobs:
-  validate:
+  publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # enables npm trusted publishing and provenance
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,7 +25,11 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: "24"
+          registry-url: "https://registry.npmjs.org"
           cache: npm
+
+      - name: Ensure npm supports trusted publishing
+        run: npm install --global npm@11
 
       - name: Verify tag matches package.json version
         run: |
@@ -52,3 +60,6 @@ jobs:
           name: npm-package
           path: "*.tgz"
           if-no-files-found: error
+
+      - name: Publish to npm with trusted publishing
+        run: npm publish --access public --provenance
