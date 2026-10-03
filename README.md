@@ -9,6 +9,12 @@ A pi extension for named, steerable subagent threads. Agent **types** describe a
 Requires pi **0.99.2+**. No build step.
 
 ```sh
+pi install npm:pi-subagent-manager
+```
+
+For local development:
+
+```sh
 pi install /absolute/path/to/pi-subagent
 # Or try it without installing:
 pi -e ./src/index.ts
@@ -209,7 +215,7 @@ Wait timeouts and cancellation do **not** kill detached children. Progress/settl
 ## Development
 
 ```sh
-npm install
+npm ci
 npm run check
 npm test
 npm run format:check
@@ -230,4 +236,27 @@ The code is deliberately layered:
 - `ui.ts`: configuration dialogs and activity/thread UI.
 - `index.ts`: parent-session lifecycle and extension wiring.
 
-The initial design is kept in [`.agents/plans`](.agents/plans); superseded review snapshots have been removed. Research came before implementation: [Claude](docs/research-claude.md) and [Codex](docs/research-codex.md).
+## Publishing
+
+Releases are published manually from a clean checkout of the version tag. Tag pushes
+only validate the release and upload an npm tarball in GitHub Actions; they never
+publish to npm.
+
+```sh
+npm ci
+npm run check
+npm test
+npm pack --dry-run
+npm login
+npm publish --access public
+```
+
+`npm publish` automatically reruns typechecking and tests via `prepublishOnly`. The
+package ships TypeScript sources and bundled agent definitions; pi loads them directly,
+so no build step is needed. Check the `files` list in `package.json` when adding assets.
+
+For the next release, update `package.json` and `package-lock.json` together (for
+example, `npm version minor --no-git-tag-version`), validate, commit, create an
+annotated `v<version>` tag, and push the commit and tag before publishing.
+
+The initial design is kept in [`.agents/plans`](https://github.com/championswimmer/pi-subagent-manager/tree/main/.agents/plans); superseded review snapshots have been removed. Research came before implementation: [Claude](docs/research-claude.md) and [Codex](docs/research-codex.md).

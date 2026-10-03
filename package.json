@@ -1,8 +1,11 @@
 {
   "name": "pi-subagent-manager",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Hierarchical, steerable subagent threads for pi",
   "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "keywords": [
     "pi-package",
     "pi",
@@ -24,9 +27,7 @@
   "files": [
     "src",
     "agents",
-    "docs/default-agents.md",
-    "docs/research-model-roles-coding.md",
-    "docs/research-model-roles-writing.md",
+    "docs",
     "README.md"
   ],
   "pi": {
@@ -37,6 +38,7 @@
   "scripts": {
     "check": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
+    "prepublishOnly": "npm run check && npm test",
     "format": "prettier --write --print-width 100 src tests agents docs/default-agents.md README.md",
     "format:check": "prettier --check --print-width 100 src tests agents docs/default-agents.md README.md"
   },

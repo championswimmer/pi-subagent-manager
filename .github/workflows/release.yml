@@ -1,20 +1,18 @@
-name: Release to npm
+name: Validate release
 
-# Publishes the package to npm whenever a semver tag like v1.0.0 is pushed.
-# Uses npm trusted publishing via GitHub Actions OIDC; no NPM_TOKEN secret is required.
-
+# Tag pushes validate and package the release. npm publishing remains manual.
 on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
       - "v[0-9]+.[0-9]+.[0-9]+-*"
 
+permissions:
+  contents: read
+
 jobs:
-  publish:
+  validate:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write # enables npm provenance
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,8 +21,7 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: "24"
-          registry-url: "https://registry.npmjs.org"
-          package-manager-cache: false
+          cache: npm
 
       - name: Verify tag matches package.json version
         run: |
@@ -38,10 +35,20 @@ jobs:
           fi
 
       - name: Install dependencies
-        run: npm install --ignore-scripts
+        run: npm ci
 
-      - name: Build
-        run: npm run build --if-present
+      - name: Typecheck
+        run: npm run check
 
-      - name: Publish to npm with trusted publishing
-        run: npm publish --access public --provenance
+      - name: Run tests
+        run: npm test
+
+      - name: Pack npm release
+        run: npm pack
+
+      - name: Upload npm tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-package
+          path: "*.tgz"
+          if-no-files-found: error
