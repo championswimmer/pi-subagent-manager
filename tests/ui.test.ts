@@ -293,7 +293,7 @@ test("widget clears when empty and resolves theme dynamically at render", () => 
       status: "Working",
     }),
   ]);
-  assert.deepEqual(options, { placement: "belowEditor" });
+  assert.deepEqual(options, { placement: "aboveEditor" });
   const tui = { requestRender() {} };
   const widget = (
     content as (injected: typeof tui) => {
@@ -302,21 +302,25 @@ test("widget clears when empty and resolves theme dynamically at render", () => 
     }
   )(tui);
   const first = widget.render(200);
-  assert.match(first[0]!, /^first<bg:/);
-  assert.match(first[0]!, /first<fg:success>\/worker<\/fg>/);
-  assert.match(first[0]!, /first<fg:accent>\[running\]<\/fg> Working/);
-  assert.match(first[0]!, /first<fg:muted>0s ↑0 ↓0<\/fg>$/);
+  const firstWorker = first.find((line) =>
+    line.includes("first<fg:success>/worker</fg>"),
+  )!;
+  assert.match(first[0]!, /first<fg:accent>Agents<\/fg>/);
+  assert.match(firstWorker, /first<bg:/);
+  assert.match(firstWorker, /first<fg:accent>\[running\]<\/fg> Task/);
+  assert.match(firstWorker, /first<fg:muted>0s ↑0 ↓0<\/fg>$/);
+  assert.match(first[first.indexOf(firstWorker) + 1]!, /first<fg:muted>Working<\/fg>/);
   marker = "second";
   const second = widget.render(200);
-  assert.match(second[0]!, /^second<bg:/);
+  assert.match(second[0]!, /second<fg:accent>Agents<\/fg>/);
   assert.match(
     second[1]!,
-    /second<bg:1> \[fallback\] <\/bg> second<fg:accent>\/fallback<\/fg> second<fg:accent>\[running\]<\/fg> Working/,
+    /second<bg:1> \[fallback\] <\/bg> second<fg:accent>\/fallback<\/fg> second<fg:accent>\[running\]<\/fg> Task/,
   );
   assert.match(second[1]!, /second<fg:muted>0s ↑0 ↓0<\/fg>$/);
   assert.deepEqual(
     styleCalls.map((call) => call.text),
-    [" [worker] ", " [fallback] ", " [worker] ", " [fallback] "],
+    [" [fallback] ", " [worker] ", " [fallback] ", " [worker] "],
   );
   assert.deepEqual(
     styleCalls.map((call) => call.marker),
@@ -327,7 +331,7 @@ test("widget clears when empty and resolves theme dynamically at render", () => 
   const accentBg = `${tokenColor("accent").r},8,9`;
   assert.deepEqual(
     styleCalls.map((call) => call.bg),
-    [successBg, accentBg, successBg, accentBg],
+    [accentBg, successBg, accentBg, successBg],
   );
   assert.deepEqual(
     styleCalls.map((call) => call.fg),
@@ -340,18 +344,26 @@ test("widget clears when empty and resolves theme dynamically at render", () => 
   assert.deepEqual(
     fgCalls.map((call) => ({ color: call.color, text: call.text })),
     [
-      { color: "success", text: "/worker" },
-      { color: "accent", text: "[running]" },
-      { color: "muted", text: "0s ↑0 ↓0" },
+      { color: "accent", text: "Agents" },
+      { color: "muted", text: "2 live · 0 paused" },
       { color: "accent", text: "/fallback" },
       { color: "accent", text: "[running]" },
       { color: "muted", text: "0s ↑0 ↓0" },
+      { color: "muted", text: "Working" },
       { color: "success", text: "/worker" },
       { color: "accent", text: "[running]" },
       { color: "muted", text: "0s ↑0 ↓0" },
+      { color: "muted", text: "Working" },
+      { color: "accent", text: "Agents" },
+      { color: "muted", text: "2 live · 0 paused" },
       { color: "accent", text: "/fallback" },
       { color: "accent", text: "[running]" },
       { color: "muted", text: "0s ↑0 ↓0" },
+      { color: "muted", text: "Working" },
+      { color: "success", text: "/worker" },
+      { color: "accent", text: "[running]" },
+      { color: "muted", text: "0s ↑0 ↓0" },
+      { color: "muted", text: "Working" },
     ],
   );
   widget.dispose();
@@ -1046,7 +1058,12 @@ test("widget timer rerenders live elapsed and does not run when settled or headl
         },
       },
     } as unknown as ExtensionContext;
-    const line = () => stripTerminalSequences(component!.render(100)[0]!);
+    const line = () =>
+      stripTerminalSequences(
+        component!.render(100).find((row) =>
+          stripTerminalSequences(row).includes("↑"),
+        ) ?? "",
+      );
 
     updateWidget(ctx, [
       thread("/root/job", {

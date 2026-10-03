@@ -122,7 +122,7 @@ Project types override global types. Malformed definitions and same-scope duplic
 - `/agents thread`: pick a retained thread, inspect its output/transcript, send input/resume, or stop it.
 - `/agents thread /root/controller-security-research`: open one thread directly.
 
-A compact, themed activity widget appears **below the editor, above pi's footer/status area**. Working threads are prioritized; excess rows are counted instead of taking over the screen. Each row shows a colored type pill and a matching foreground-only task path, with elapsed active time and cumulative input `↑` / output `↓` token counts on the right. Time refreshes every second while running; tokens refresh as the provider reports usage. Pauses freeze time; resuming accumulates it. The existing footer is unchanged.
+A compact, themed **Agents** tree appears **above pi's input editor**. Nested subagents are indented beneath their parents; active branches are prioritized, and excess agents are counted instead of taking over the screen. Each agent shows a colored type pill, task path, state and task, with elapsed active time and cumulative input `↑` / output `↓` token counts on the right. An indented line shows its latest activity. The widget uses at most ten lines; `/agents status` opens the full tree. Time refreshes every second while running; tokens refresh as the provider reports usage. Pauses freeze time; resuming accumulates it. The existing editor and footer are unchanged.
 
 ## Model-facing tools
 

@@ -38,6 +38,7 @@ import {
   withDialogSession,
 } from "./dialog.ts";
 import { getModelPreferences } from "./models.ts";
+import { buildStatusTree, type StatusRow } from "./thread-tree.ts";
 import {
   THINKING_LEVELS,
   type AgentType,
@@ -215,13 +216,254 @@ export function renderThreads(
   return lines;
 }
 
+const WIDGET_ROOT = "/root";
+const MAX_WIDGET_LINES = 10;
+const AGENT_WIDGET_PLACEMENT = { placement: "aboveEditor" as const };
+
+function statePriority(state: ThreadView["state"] | undefined): number {
+  if (state === "starting" || state === "running") return 0;
+  if (state === "paused") return 1;
+  return 2;
+}
+
+function explicitParent(
+  path: string,
+  threadsByPath: Map<string, ThreadView>,
+): string | null {
+  if (path === WIDGET_ROOT) return null;
+  const thread = threadsByPath.get(path);
+  if (thread)
+    return thread.parent && thread.parent !== path ? thread.parent : null;
+  const index = path.lastIndexOf("/");
+  return index > 0 ? path.slice(0, index) : null;
+}
+
+/** Lowest state in the branch. Parent links define ancestry; cycles are guarded. */
+function branchPriorityComparator(
+  threads: ThreadView[],
+): (a: string, b: string) => number {
+  const threadsByPath = new Map<string, ThreadView>();
+  for (const thread of threads) {
+    if (thread?.path && !threadsByPath.has(thread.path))
+      threadsByPath.set(thread.path, thread);
+  }
+  const children = new Map<string, string[]>();
+  const link = (path: string, seen: Set<string>) => {
+    if (!path || seen.has(path)) return;
+    seen.add(path);
+    const parent = explicitParent(path, threadsByPath);
+    if (!parent || parent === path) return;
+    const list = children.get(parent) ?? [];
+    if (!list.includes(path)) list.push(path);
+    children.set(parent, list);
+    link(parent, seen);
+  };
+  link(WIDGET_ROOT, new Set());
+  for (const path of threadsByPath.keys()) link(path, new Set());
+
+  const subtree = new Map<string, number>();
+  const ancestors = new Map<string, number>();
+  const subtreeOf = (path: string, stack: Set<string>): number => {
+    const cached = subtree.get(path);
+    if (cached !== undefined) return cached;
+    const own = statePriority(threadsByPath.get(path)?.state);
+    if (stack.has(path)) return own;
+    stack.add(path);
+    let best = own;
+    for (const child of children.get(path) ?? [])
+      best = Math.min(best, subtreeOf(child, stack));
+    stack.delete(path);
+    subtree.set(path, best);
+    return best;
+  };
+  const ancestorOf = (path: string): number => {
+    const cached = ancestors.get(path);
+    if (cached !== undefined) return cached;
+    let best = 2;
+    const seen = new Set<string>();
+    let current: string | null = path;
+    while (current && !seen.has(current)) {
+      seen.add(current);
+      best = Math.min(best, statePriority(threadsByPath.get(current)?.state));
+      current = explicitParent(current, threadsByPath);
+    }
+    ancestors.set(path, best);
+    return best;
+  };
+  return (a, b) =>
+    subtreeOf(a, new Set()) - subtreeOf(b, new Set()) ||
+    ancestorOf(a) - ancestorOf(b) ||
+    (a < b ? -1 : a > b ? 1 : 0);
+}
+
+function activityIndent(prefix: string): string {
+  if (prefix.endsWith("├─ ")) return prefix.slice(0, -3) + "│  ";
+  if (prefix.endsWith("└─ ")) return prefix.slice(0, -3) + "   ";
+  return " ".repeat(prefix.length + 3);
+}
+
+function agentStateColor(
+  state: ThreadView["state"],
+): "error" | "warning" | "accent" {
+  return state === "failed"
+    ? "error"
+    : state === "paused"
+      ? "warning"
+      : "accent";
+}
+
+function agentLine(
+  row: StatusRow,
+  width: number,
+  theme: AgentBadgeTheme,
+): string {
+  const thread = row.thread!;
+  const left = `${row.prefix}${agentTypeBadge(thread.type, thread.color, theme)} ${agentPath(thread.path, thread.color, theme)} ${theme.fg(agentStateColor(thread.state), `[${sanitizeText(thread.state)}]`)} ${sanitizeText(thread.task)}`;
+  return fitLine(left, theme.fg("muted", threadMetrics(thread)), width);
+}
+
+function activityLine(
+  row: StatusRow,
+  width: number,
+  theme: AgentBadgeTheme,
+): string {
+  const thread = row.thread!;
+  return truncateToWidth(
+    `${activityIndent(row.prefix)}${theme.fg("muted", sanitizeText(thread.status || thread.task))}`,
+    width,
+    "",
+  );
+}
+
+function placeholderLine(
+  row: StatusRow,
+  width: number,
+  theme: AgentBadgeTheme,
+): string {
+  return truncateToWidth(
+    `${row.prefix}${theme.fg("muted", `${sanitizeText(row.path)}  missing parent`)}`,
+    width,
+    "",
+  );
+}
+
+function takeWidgetRows(rows: StatusRow[], budget: number): StatusRow[] {
+  const parents = new Map<number, number[]>();
+  const stack: number[] = [];
+  for (const [index, row] of rows.entries()) {
+    while (
+      stack.length &&
+      rows[stack[stack.length - 1]!]!.prefix.length >= row.prefix.length
+    )
+      stack.pop();
+    parents.set(index, [...stack]);
+    stack.push(index);
+  }
+  const rowCost = (row: StatusRow) =>
+    row.path === WIDGET_ROOT ? 0 : row.thread ? 2 : 1;
+  const candidates = rows
+    .map((row, index) => ({ row, index }))
+    .filter(({ row }) => row.thread && row.path !== WIDGET_ROOT)
+    .sort(
+      (a, b) =>
+        statePriority(a.row.thread!.state) -
+          statePriority(b.row.thread!.state) || a.index - b.index,
+    );
+  const chosen = new Set<number>();
+  let used = 0;
+  for (const { index } of candidates) {
+    const needed = [...parents.get(index)!, index].filter(
+      (ancestor) => !chosen.has(ancestor),
+    );
+    const cost = needed.reduce(
+      (total, ancestor) => total + rowCost(rows[ancestor]!),
+      0,
+    );
+    if (used + cost > budget) continue;
+    for (const ancestor of needed) chosen.add(ancestor);
+    used += cost;
+  }
+  // If a missing-parent chain cannot fit its agent, retain a useful tree prefix.
+  if (!chosen.size) {
+    for (const [index, row] of rows.entries()) {
+      const cost = rowCost(row);
+      if (used + cost > budget) break;
+      chosen.add(index);
+      used += cost;
+    }
+  }
+  return rows.filter(
+    (row, index) => row.path !== WIDGET_ROOT && chosen.has(index),
+  );
+}
+
+/** Themed agent tree above the editor. Synthetic /root is the main conversation and is omitted. */
+export function renderAgentTree(
+  threads: ThreadView[],
+  width: number,
+  theme: AgentBadgeTheme,
+): string[] {
+  const columns = Math.max(0, width);
+  const rows = buildStatusTree(
+    threads,
+    new Set(),
+    branchPriorityComparator(threads),
+  );
+  const agents = rows.filter((row) => row.thread && row.path !== WIDGET_ROOT);
+  if (!agents.length) return [];
+  const live = agents.filter(
+    (row) =>
+      row.thread!.state === "starting" || row.thread!.state === "running",
+  ).length;
+  const paused = agents.filter((row) => row.thread!.state === "paused").length;
+  const heading = fitLine(
+    theme.fg("accent", "Agents"),
+    theme.fg("muted", `${live} live · ${paused} paused`),
+    columns,
+  );
+  let visible = takeWidgetRows(rows, MAX_WIDGET_LINES - 1);
+  let omitted = agents.length - visible.filter((row) => row.thread).length;
+  if (omitted > 0) {
+    visible = takeWidgetRows(rows, MAX_WIDGET_LINES - 2);
+    omitted = agents.length - visible.filter((row) => row.thread).length;
+  }
+  const lines = [heading];
+  for (const row of visible) {
+    if (!row.thread) {
+      lines.push(placeholderLine(row, columns, theme));
+      continue;
+    }
+    lines.push(agentLine(row, columns, theme));
+    lines.push(activityLine(row, columns, theme));
+  }
+  if (omitted > 0) {
+    lines.push(
+      truncateToWidth(
+        theme.fg("muted", `+${omitted} more agents · /agents status`),
+        columns,
+        "",
+      ),
+    );
+  }
+  return lines;
+}
+
 export function updateWidget(
   ctx: ExtensionContext,
   threads: ThreadView[],
 ): void {
   if (!ctx.hasUI) return;
   if (!threads.some((thread) => thread.path !== "/root")) {
-    ctx.ui.setWidget("pi-subagent", undefined, { placement: "belowEditor" });
+    ctx.ui.setWidget("pi-subagent", undefined, AGENT_WIDGET_PLACEMENT);
+    return;
+  }
+  // RPC hosts accept string widgets only; a component factory is ignored.
+  if (ctx.mode === "rpc") {
+    ctx.ui.setWidget(
+      "pi-subagent",
+      renderAgentTree(threads, 80, ctx.ui.theme),
+      AGENT_WIDGET_PLACEMENT,
+    );
     return;
   }
   const snapshot = threads.map((thread) => ({ ...thread }));
@@ -234,7 +476,7 @@ export function updateWidget(
         timer.unref();
       }
       return {
-        render: (width) => renderThreads(snapshot, width, ctx.ui.theme),
+        render: (width) => renderAgentTree(snapshot, width, ctx.ui.theme),
         invalidate: () => {},
         dispose: () => {
           if (timer) clearInterval(timer);
@@ -242,7 +484,7 @@ export function updateWidget(
         },
       };
     },
-    { placement: "belowEditor" },
+    AGENT_WIDGET_PLACEMENT,
   );
 }
 
