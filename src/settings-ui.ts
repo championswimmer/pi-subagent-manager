@@ -31,6 +31,12 @@ const FIELDS = [
   },
 ] as const;
 
+const SCOPED_MODEL_FILTERING = {
+  id: "scopedModelFiltering",
+  label: "Scoped model filtering",
+  help: "On matches /scoped-models only. Off allows any available model. Draft only until save.",
+} as const;
+
 export async function configureAgents(
   ctx: ExtensionCommandContext,
   options: {
@@ -68,6 +74,12 @@ async function configureAgentsDialog(
           ...field,
           value: String(draft[field.id]),
         })),
+        {
+          id: SCOPED_MODEL_FILTERING.id,
+          label: SCOPED_MODEL_FILTERING.label,
+          value: draft.scopedModelFiltering ? "on" : "off",
+          help: SCOPED_MODEL_FILTERING.help,
+        },
         {
           id: "scope",
           label: "Save scope",
@@ -123,6 +135,8 @@ async function configureAgentsDialog(
         )
           throw new Error(field.help);
         draft[field.id] = number;
+      } else if (action === "scopedModelFiltering") {
+        draft.scopedModelFiltering = !draft.scopedModelFiltering;
       } else if (action === "scope") {
         if (!ctx.isProjectTrusted())
           ctx.ui.notify(

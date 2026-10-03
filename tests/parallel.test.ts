@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { ThreadManager } from "../src/manager.ts";
+import { DEFAULT_MANAGER_SETTINGS } from "../src/settings.ts";
 import type { ManagerOptions } from "../src/types.ts";
 import { registry, withOfflineHarness } from "./helpers/integrationHarness.ts";
 
@@ -79,13 +80,13 @@ test("updated limits affect future spawns without cancelling existing threads", 
   const { manager, spawn } = fixture(t);
   await spawn("/root", "a");
   await tick();
-  manager.setLimits({ maxLevels: 2, maxConcurrent: 2, maxThreads: 3 });
+  manager.setLimits({ ...DEFAULT_MANAGER_SETTINGS, maxLevels: 2, maxConcurrent: 2, maxThreads: 3 });
   await assert.rejects(spawn("/root/a", "b"), /depth limit/);
   await spawn("/root", "b");
   await tick();
   assert.equal(manager.get("/root/a").state, "running");
   await assert.rejects(spawn("/root", "c"), /concurrent/i);
-  manager.setLimits({ maxLevels: 3, maxConcurrent: 4, maxThreads: 3 });
+  manager.setLimits({ ...DEFAULT_MANAGER_SETTINGS, maxLevels: 3, maxConcurrent: 4, maxThreads: 3 });
   await spawn("/root/a", "b");
   await assert.rejects(spawn("/root", "c"), /thread limit/i);
 });

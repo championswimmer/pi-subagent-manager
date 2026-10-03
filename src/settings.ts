@@ -17,15 +17,17 @@ export interface ManagerSettings {
   maxLevels: number;
   maxConcurrent: number;
   maxThreads: number;
+  scopedModelFiltering: boolean;
 }
 
 export const DEFAULT_MANAGER_SETTINGS: ManagerSettings = {
   maxLevels: 3,
   maxConcurrent: 16,
   maxThreads: 64,
+  scopedModelFiltering: true,
 };
 
-const KEYS = ["maxLevels", "maxConcurrent", "maxThreads"] as const;
+const KEYS = ["maxLevels", "maxConcurrent", "maxThreads", "scopedModelFiltering"] as const;
 const MAX_LEVELS = 32;
 
 function errorCode(error: unknown): string | undefined {
@@ -61,6 +63,12 @@ function positiveSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
+function requirement(key: (typeof KEYS)[number]): string {
+  return key === "scopedModelFiltering"
+    ? "scopedModelFiltering must be a boolean"
+    : `${key} must be a positive safe integer`;
+}
+
 function parseSettings(content: string): Partial<ManagerSettings> {
   let parsed: unknown;
   try {
@@ -80,10 +88,13 @@ function parseSettings(content: string): Partial<ManagerSettings> {
   for (const key of KEYS) {
     if (!Object.hasOwn(record, key)) continue;
     const value = record[key];
-    if (!positiveSafeInteger(value))
-      throw new Error(`${key} must be a positive safe integer`);
-    if (key === "maxLevels" && value > MAX_LEVELS)
-      throw new Error("maxLevels must be <= 32");
+    if (key === "scopedModelFiltering") {
+      if (typeof value !== "boolean") throw new Error(requirement(key));
+      layer.scopedModelFiltering = value;
+      continue;
+    }
+    if (!positiveSafeInteger(value)) throw new Error(requirement(key));
+    if (key === "maxLevels" && value > MAX_LEVELS) throw new Error("maxLevels must be <= 32");
     layer[key] = value;
   }
   return layer;
@@ -156,22 +167,19 @@ function serializedSettings(settings: ManagerSettings): string {
   }
   const parsed = parseSettings(JSON.stringify(settings));
   for (const key of KEYS) {
-    if (!Object.hasOwn(parsed, key))
-      throw new Error(`${key} must be a positive safe integer`);
+    if (!Object.hasOwn(parsed, key)) throw new Error(requirement(key));
   }
   const serialized = `${JSON.stringify(parsed, null, 2)}\n`;
   const confirmed = parseSettings(serialized);
   for (const key of KEYS) {
-    if (confirmed[key] !== parsed[key])
-      throw new Error(`${key} must be a positive safe integer`);
+    if (confirmed[key] !== parsed[key]) throw new Error(requirement(key));
   }
   return serialized;
 }
 
 function assertExistingDirectory(directory: string): void {
   const stat = assertNotSymlinkPath(directory);
-  if (!stat?.isDirectory())
-    throw new Error(`Settings directory must be a directory: ${directory}`);
+  if (!stat?.isDirectory()) throw new Error(`Settings directory must be a directory: ${directory}`);
 }
 
 function ensureOwnedDirectory(directory: string): void {
@@ -184,8 +192,7 @@ function ensureOwnedDirectory(directory: string): void {
     }
     stat = assertNotSymlinkPath(directory);
   }
-  if (!stat?.isDirectory())
-    throw new Error(`Settings directory must be a directory: ${directory}`);
+  if (!stat?.isDirectory()) throw new Error(`Settings directory must be a directory: ${directory}`);
 }
 
 function ensureScopeDirectories(directories: string[]): void {
@@ -203,12 +210,7 @@ function assertRegularFileOrAbsent(filePath: string): void {
 }
 
 function exclusiveCreateFlags(): number {
-  return (
-    constants.O_WRONLY |
-    constants.O_CREAT |
-    constants.O_EXCL |
-    (constants.O_NOFOLLOW || 0)
-  );
+  return constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW || 0);
 }
 
 function writeAtomically(entry: SettingsLayer, content: string): void {
@@ -216,8 +218,7 @@ function writeAtomically(entry: SettingsLayer, content: string): void {
   const temporary = join(dirname(filePath), `.settings.${randomUUID()}.tmp`);
   let created = false;
   try {
-    for (const directory of entry.directories)
-      assertExistingDirectory(directory);
+    for (const directory of entry.directories) assertExistingDirectory(directory);
     assertRegularFileOrAbsent(filePath);
     const fd = openSync(temporary, exclusiveCreateFlags(), 0o600);
     created = true;
@@ -227,8 +228,7 @@ function writeAtomically(entry: SettingsLayer, content: string): void {
     } finally {
       closeSync(fd);
     }
-    for (const directory of entry.directories)
-      assertExistingDirectory(directory);
+    for (const directory of entry.directories) assertExistingDirectory(directory);
     assertRegularFileOrAbsent(filePath);
     const tempStat = assertNotSymlinkPath(temporary);
     if (!tempStat?.isFile())

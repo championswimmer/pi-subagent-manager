@@ -9,6 +9,7 @@ import { dialogHeight, type DialogHost } from "../src/dialog.ts";
 import {
   buildStatusTree,
   showAgentStatus,
+  showAgentTree,
   StatusDialog,
 } from "../src/status-ui.ts";
 import type { ThreadService, ThreadState, ThreadView } from "../src/types.ts";
@@ -600,4 +601,434 @@ test("showAgentStatus falls back to thread inspection and declines non-TUI", asy
     service(() => []),
   );
   assert.equal(opened, 2);
+});
+
+function trackIntervals() {
+  const timers = new Set<ReturnType<typeof setInterval>>();
+  const originalSet = globalThis.setInterval;
+  const originalClear = globalThis.clearInterval;
+  let refresh = () => {};
+  let delay = 0;
+  globalThis.setInterval = ((fn: () => void, ms?: number) => {
+    refresh = fn;
+    delay = ms ?? 0;
+    const timer = originalSet(fn, ms);
+    timers.add(timer);
+    return timer;
+  }) as typeof setInterval;
+  globalThis.clearInterval = ((timer: ReturnType<typeof setInterval>) => {
+    timers.delete(timer);
+    return originalClear(timer);
+  }) as typeof clearInterval;
+  return {
+    timers,
+    get delay() {
+      return delay;
+    },
+    refresh() {
+      refresh();
+    },
+    restore() {
+      globalThis.setInterval = originalSet;
+      globalThis.clearInterval = originalClear;
+      for (const timer of timers) originalClear(timer);
+      timers.clear();
+    },
+  };
+}
+
+async function until<T>(read: () => T | undefined, label: string): Promise<T> {
+  const start = Date.now();
+  for (;;) {
+    const value = read();
+    if (value !== undefined) return value;
+    if (Date.now() - start > 2000) throw new Error(`timed out waiting for ${label}`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+function treeTitle(lines: string[]): {
+  agents: number;
+  start: number;
+  end: number;
+  total: number;
+} {
+  const title = stripTerminalSequences(lines[0] ?? "");
+  const match = title.match(/Agents tree\s+(\d+) agents?\s+(\d+)-(\d+)\/(\d+)/);
+  assert.ok(match, title);
+  return {
+    agents: Number(match[1]),
+    start: Number(match[2]),
+    end: Number(match[3]),
+    total: Number(match[4]),
+  };
+}
+
+function launchTree(list: () => ThreadView[], selectedPath?: string, rows = 16) {
+  const mounted: StatusDialog[] = [];
+  const selectTitles: string[] = [];
+  let opens = 0;
+  let renders = 0;
+  let releaseSelect = (_value: string | undefined) => {};
+  let markSelected = () => {};
+  const selectReady = new Promise<void>((resolve) => {
+    markSelected = resolve;
+  });
+  let session: { getComponent(): unknown } | undefined;
+  const ctx = {
+    hasUI: true,
+    mode: "tui" as const,
+    ui: {
+      notify() {},
+      select(title: string) {
+        selectTitles.push(title);
+        markSelected();
+        return new Promise<string | undefined>((resolve) => {
+          releaseSelect = resolve;
+        });
+      },
+      custom(factory: Function, options: { overlay: boolean; overlayOptions: { anchor: string } }) {
+        opens++;
+        assert.equal(options.overlay, true);
+        assert.equal(options.overlayOptions.anchor, "center");
+        return new Promise<void>((resolve) => {
+          session = factory(
+            {
+              requestRender() {
+                renders++;
+                const next = session?.getComponent();
+                if (next && next !== mounted.at(-1)) mounted.push(next as StatusDialog);
+              },
+              setFocus() {},
+              terminal: { rows },
+            },
+            theme,
+            {},
+            resolve,
+          ) as { getComponent(): unknown };
+        });
+      },
+    },
+  } as unknown as ExtensionCommandContext;
+  const done = showAgentTree(
+    ctx,
+    {
+      list,
+      get(path: string) {
+        const found = list().find((item) => item.path === path);
+        if (!found) throw new Error(`No thread ${path}`);
+        return found;
+      },
+    } as ThreadService,
+    selectedPath,
+  );
+  return {
+    mounted,
+    selectTitles,
+    selectReady,
+    done,
+    releaseSelect: (value: string | undefined) => releaseSelect(value),
+    get opens() {
+      return opens;
+    },
+    get renders() {
+      return renders;
+    },
+    get session() {
+      return session;
+    },
+  };
+}
+
+function wideTree(): ThreadView[] {
+  // Compact widget keeps at most 10 lines, so this list is omitted there.
+  return [
+    ...Array.from({ length: 18 }, (_, index) =>
+      thread(`/root/item-${String(index + 1).padStart(2, "0")}`, {
+        parent: "/root",
+        state: "completed",
+        status: "done",
+      }),
+    ),
+    thread("/root/zzz/a/b/leaf", {
+      parent: "/root/zzz/a/b",
+      state: "paused",
+      status: "deep\x1b[31m-hold",
+    }),
+  ];
+}
+
+test("showAgentTree uses one dialog session, shows live updates, and returns to the same selection", async () => {
+  const clock = trackIntervals();
+  let threads = [
+    thread("/root/child", {
+      parent: "/root",
+      state: "paused",
+      status: "hold",
+    }),
+    thread("/root/child/deep", {
+      parent: "/root/child",
+      state: "running",
+      status: "digging",
+    }),
+  ];
+  const tree = launchTree(() => threads);
+  try {
+    const dialog = await until(() => tree.mounted[0], "tree");
+    assert.equal(tree.opens, 1);
+    assert.equal(typeof tree.session?.getComponent, "function");
+    assert.equal(clock.delay, 1000);
+    assert.equal(clock.timers.size, 1);
+    const first = treeTitle(dialog.render(100));
+    assert.equal(first.agents, 2);
+    assert.equal(first.start, 1);
+
+    moveTo(dialog, "/root/child");
+    dialog.handleInput(LEFT);
+    assert.equal(plain(dialog.render(100)).includes("/root/child/deep"), false);
+    threads = threads.map((item) =>
+      item.path === "/root/child" ? { ...item, status: "updated-hold" } : item,
+    );
+    const before = tree.renders;
+    clock.refresh();
+    assert.equal(tree.renders, before + 1);
+    const refreshed = plain(dialog.render(100));
+    assert.match(refreshed, /updated-hold/);
+    assert.equal(refreshed.includes("/root/child/deep"), false);
+    assert.match(refreshed, /▸/);
+    assert.equal(tree.mounted.length, 1);
+
+    dialog.handleInput(ENTER);
+    await tree.selectReady;
+    assert.equal(clock.timers.size, 0);
+    assert.equal(tree.opens, 1);
+    assert.match(tree.selectTitles[0] ?? "", /\/root\/child/);
+    tree.releaseSelect("Back");
+    const restored = await until(() => tree.mounted[1], "restored tree");
+    assert.equal(tree.opens, 1);
+    assert.ok(showsPath(selectedLine(restored.render(100)), "/root/child"));
+    assert.equal(clock.timers.size, 1);
+    restored.handleInput(ESC);
+    await tree.done;
+    assert.equal(clock.timers.size, 0);
+    assert.equal(tree.opens, 1);
+  } finally {
+    tree.releaseSelect("Back");
+    tree.mounted.at(-1)?.handleInput(ESC);
+    await tree.done.catch(() => {});
+    clock.restore();
+  }
+});
+
+test("showAgentTree scrolls every node past the widget limit, including the last deep leaf", async () => {
+  const threads = wideTree();
+  const expected = buildStatusTree(threads, new Set()).map((row) => row.path);
+  const tree = launchTree(() => threads, undefined, 12);
+  try {
+    const dialog = await until(() => tree.mounted[0], "tree");
+    assert.ok(expected.length > 10);
+    const seen: string[] = [];
+    dialog.handleInput(HOME);
+    for (let step = 0; step < expected.length; step++) {
+      const line = selectedLine(dialog.render(120));
+      const path = [...expected]
+        .sort((left, right) => right.length - left.length)
+        .find((item) => line.includes(item));
+      assert.ok(path, line);
+      seen.push(path);
+      if (step < expected.length - 1) dialog.handleInput(DOWN);
+    }
+    assert.deepEqual(seen, expected);
+    dialog.handleInput(HOME);
+    dialog.handleInput(END);
+    const leaf = "/root/zzz/a/b/leaf";
+    assert.ok(showsPath(selectedLine(dialog.render(120)), leaf));
+    const endView = plain(dialog.render(100));
+    assert.match(endView, /deep-hold/);
+    assert.equal(endView.includes("\x1b"), false);
+    assert.doesNotMatch(endView, /item-01  /);
+    const range = treeTitle(dialog.render(100));
+    assert.equal(range.agents, 19);
+    assert.equal(range.total, expected.length);
+    assert.equal(range.end, range.total);
+    assert.ok(range.start > 1);
+    dialog.handleInput(ESC);
+    await tree.done;
+    assert.equal(tree.opens, 1);
+  } finally {
+    tree.mounted.at(-1)?.handleInput(ESC);
+    await tree.done.catch(() => {});
+  }
+});
+
+test("showAgentTree opens on the requested path and reports agent count and row range", async () => {
+  const threads = wideTree();
+  const leaf = "/root/zzz/a/b/leaf";
+  const tree = launchTree(() => threads, leaf, 12);
+  try {
+    const dialog = await until(() => tree.mounted[0], "tree");
+    assert.ok(showsPath(selectedLine(dialog.render(120)), leaf));
+    const range = treeTitle(dialog.render(100));
+    assert.equal(range.agents, 19);
+    assert.equal(range.end, range.total);
+    assert.ok(range.start > 1);
+    assert.match(plain(dialog.render(100)), /Agents tree/);
+    dialog.handleInput(ESC);
+    await tree.done;
+  } finally {
+    tree.mounted.at(-1)?.handleInput(ESC);
+    await tree.done.catch(() => {});
+  }
+});
+
+test("agents tree keeps collapse across refresh and stays inside the terminal", () => {
+  let threads = [
+    thread("/root/run", {
+      parent: "/root",
+      status: "bad\x1b[31mred\x00",
+    }),
+    thread("/root/run/pause", { parent: "/root/run", state: "paused" }),
+  ];
+  const dialog = new StatusDialog(
+    host(24),
+    theme,
+    service(() => threads),
+    () => {},
+    undefined,
+    "Agents tree",
+  );
+  const opened = plain(dialog.render(80));
+  assert.match(opened, /Agents tree  2 agents  1-\d+\/3/);
+  assert.match(opened, /badred/);
+  assert.equal(opened.includes("\x1b"), false);
+  assert.equal(opened.includes("\x00"), false);
+  moveTo(dialog, "/root/run");
+  dialog.handleInput(LEFT);
+  threads = threads.map((item) =>
+    item.path === "/root/run" ? { ...item, status: "still-folded" } : item,
+  );
+  const folded = plain(dialog.render(80));
+  assert.match(folded, /still-folded/);
+  assert.equal(folded.includes("/root/run/pause"), false);
+  assert.match(folded, /▸/);
+  const range = treeTitle(dialog.render(80));
+  assert.equal(range.agents, 2);
+  assert.ok(range.total < 3);
+
+  const escaped = [
+    thread("/root/run", {
+      parent: "/root",
+      status: "bad\x1b[31mred\x00",
+    }),
+  ];
+  for (const width of [0, 1, 3, 20, 40, 80]) {
+    for (const rows of [1, 3, 4, 8, 24]) {
+      const lines = new StatusDialog(
+        host(rows),
+        theme,
+        service(() => escaped),
+        () => {},
+        "/root/run",
+        "Agents tree",
+      ).render(width);
+      const height = dialogHeight(host(rows));
+      assert.ok(lines.length <= height, `${width}x${rows}`);
+      for (const line of lines) assert.ok(visibleWidth(line) <= width, `${width}x${rows} ${line}`);
+      const text = plain(lines);
+      assert.equal(text.includes("\x1b"), false);
+      assert.equal(text.includes("\x00"), false);
+    }
+  }
+});
+
+test("showAgentTree declines RPC and non-TUI without opening a dialog", async () => {
+  let opens = 0;
+  const notifications: string[] = [];
+  const ctx = {
+    hasUI: true,
+    mode: "rpc",
+    ui: {
+      notify(text: string) {
+        notifications.push(text);
+      },
+      custom() {
+        opens++;
+        return Promise.resolve();
+      },
+    },
+  } as unknown as ExtensionCommandContext;
+  await showAgentTree(
+    ctx,
+    service(() => []),
+  );
+  assert.equal(opens, 0);
+  assert.match(notifications.at(-1) ?? "", /TUI mode/);
+  ctx.hasUI = false;
+  await showAgentTree(
+    ctx,
+    service(() => []),
+    "/root/child",
+  );
+  assert.equal(opens, 0);
+});
+
+test("showAgentTree clears the refresh timer on dispose, close, and open failure", async () => {
+  const clock = trackIntervals();
+  const tree = launchTree(() => [thread("/root/child", { parent: "/root", status: "hold" })]);
+  try {
+    const dialog = await until(() => tree.mounted[0], "tree");
+    assert.equal(clock.timers.size, 1);
+    dialog.dispose();
+    assert.equal(clock.timers.size, 0);
+    dialog.dispose();
+    assert.equal(clock.timers.size, 0);
+    clock.refresh();
+    assert.equal(clock.timers.size, 0);
+    dialog.handleInput(ESC);
+    await tree.done;
+    assert.equal(clock.timers.size, 0);
+    assert.equal(tree.opens, 1);
+  } finally {
+    tree.mounted.at(-1)?.handleInput(ESC);
+    await tree.done.catch(() => {});
+    clock.restore();
+  }
+
+  const originalSet = globalThis.setInterval;
+  globalThis.setInterval = (() => {
+    throw new Error("interval failed");
+  }) as typeof setInterval;
+  try {
+    const ctx = {
+      hasUI: true,
+      mode: "tui",
+      ui: {
+        notify() {},
+        custom(factory: Function) {
+          return new Promise((resolve) => {
+            factory(
+              {
+                requestRender() {},
+                setFocus() {},
+                terminal: { rows: 24 },
+              },
+              theme,
+              {},
+              resolve,
+            );
+          });
+        },
+      },
+    } as unknown as ExtensionCommandContext;
+    await assert.rejects(
+      () =>
+        showAgentTree(
+          ctx,
+          service(() => []),
+        ),
+      /interval failed/,
+    );
+  } finally {
+    globalThis.setInterval = originalSet;
+  }
 });

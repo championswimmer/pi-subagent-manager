@@ -32,3 +32,42 @@ test("agent_types exposes ordered preferences and normalizes retained legacy def
   assert.deepEqual(types[0]?.models, ["provider/second", "provider/first"]);
   assert.equal(types[1]?.model, "provider/legacy", "discovery must not mutate saved definitions");
 });
+
+test("agent_types lists modelSuggestions independently from model pins", async () => {
+  const suggested = definition({ modelSuggestions: ["Claude Opus", "GPT"] });
+  const both = definition({
+    name: "both",
+    models: ["provider/pinned"],
+    modelSuggestions: ["Sonnet"],
+  });
+  const empty = definition({ name: "empty", modelSuggestions: [] });
+  const inherited = definition({ name: "inherited" });
+  const types = [suggested, both, empty, inherited];
+  const tool = agentTools(
+    () => {
+      throw new Error("Listing types must not require a running manager");
+    },
+    "/root",
+    () => types,
+  ).find((entry) => entry.name === "agent_types")!;
+  const output = await tool.execute("list-types", {}, undefined, undefined, {} as never);
+  const entries = output.details as {
+    name: string;
+    models?: string[];
+    modelSuggestions?: string[];
+    model?: string;
+  }[];
+  assert.equal(entries[0]?.models, undefined);
+  assert.deepEqual(entries[0]?.modelSuggestions, ["Claude Opus", "GPT"]);
+  assert.deepEqual(entries[1]?.models, ["provider/pinned"]);
+  assert.deepEqual(entries[1]?.modelSuggestions, ["Sonnet"]);
+  assert.deepEqual(entries[2]?.modelSuggestions, []);
+  assert.equal(entries[3]?.models, undefined);
+  assert.equal(entries[3]?.modelSuggestions, undefined);
+  assert.ok(entries.every((entry) => !("model" in entry)));
+  entries[0]?.modelSuggestions?.push("mutated");
+  assert.deepEqual(suggested.modelSuggestions, ["Claude Opus", "GPT"]);
+  const text = output.content[0]?.type === "text" ? output.content[0].text : "";
+  assert.match(text, /Claude Opus/);
+  assert.doesNotMatch(text, /"model":/);
+});

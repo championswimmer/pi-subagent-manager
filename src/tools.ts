@@ -40,17 +40,20 @@ export function agentTools(
   return [
     make(
       "agent_types",
-      "List current agent types and their task descriptions. Reflects configuration reloads; call this before choosing a type.",
+      "List current agent types and their task descriptions. Reflects configuration reloads; call this before choosing a type. modelSuggestions are advisory display names, not model pins.",
       Type.Object({}),
       () =>
         result(
-          getTypes().map(({ name, description, thinkingLevel, color, ...type }) => ({
-            name,
-            description,
-            models: getModelPreferences(type),
-            thinkingLevel,
-            color,
-          })),
+          getTypes().map(
+            ({ name, description, thinkingLevel, color, modelSuggestions, ...type }) => ({
+              name,
+              description,
+              models: getModelPreferences(type),
+              modelSuggestions: modelSuggestions === undefined ? undefined : [...modelSuggestions],
+              thinkingLevel,
+              color,
+            }),
+          ),
         ),
     ),
     make(
@@ -117,7 +120,7 @@ export function agentTools(
     ),
     make(
       "agent_output",
-      "Read completed thread output in character pages. Paused threads deliberately have no final answer handback. All sessions can be viewed by the user with /agents thread PATH.",
+      "Read completed thread output in character pages. Paused threads deliberately have no final answer handback. All sessions can be viewed by the user with /agents tree; select a thread and press Enter to inspect it.",
       Type.Object({
         path,
         offset: Type.Optional(Type.Integer({ minimum: 0 })),

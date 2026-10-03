@@ -207,7 +207,7 @@ export function renderThreads(
       truncateToWidth(
         theme.fg(
           "muted",
-          `+${visible.length - limit} more threads · /agents thread`,
+          `+${visible.length - limit} more threads · /agents tree`,
         ),
         Math.max(0, width),
       ),
@@ -439,7 +439,7 @@ export function renderAgentTree(
   if (omitted > 0) {
     lines.push(
       truncateToWidth(
-        theme.fg("muted", `+${omitted} more agents · /agents status`),
+        theme.fg("muted", `+${omitted} more agents · /agents tree`),
         columns,
         "",
       ),
@@ -908,6 +908,7 @@ const EDIT_MENU_ACTIONS = [
   "name",
   "description",
   "models",
+  "modelSuggestions",
   "thinkingLevel",
   "tools.allow",
   "tools.block",
@@ -927,6 +928,7 @@ const EDIT_FIELD_LABELS: Record<EditMenuAction, string> = {
   name: "Name",
   description: "Description",
   models: "Models",
+  modelSuggestions: "Model suggestions",
   thinkingLevel: "Thinking level",
   "tools.allow": "Allowed tools",
   "tools.block": "Blocked tools",
@@ -944,7 +946,9 @@ const EDIT_FIELD_HELP: Record<EditMenuAction, string> = {
   name: "Unique type identifier. Renaming retains the original file.",
   description: "Description shown when browsing and spawning agents.",
   models:
-    "Ordered model preferences. Unavailable models are skipped at runtime.",
+    "Ordered model preferences. Unavailable models are skipped at runtime. Advisory names in model suggestions never pin a model.",
+  modelSuggestions:
+    "Advisory display names to help pick a model. Not provider/model pins; never selected or required. One name per line; empty clears.",
   thinkingLevel: "Reasoning effort. Default follows the parent session.",
   "tools.allow":
     "Unset uses default policy; an empty list explicitly allows no tools.",
@@ -987,6 +991,15 @@ function toolListMenuValue(names: string[] | undefined): string {
   return names.join(", ");
 }
 
+function modelSuggestionLabel(suggestions: string[] | undefined): string {
+  if (suggestions === undefined || suggestions.length === 0) return "None";
+  return suggestions.join(", ");
+}
+
+function modelSuggestionPrefill(suggestions: string[] | undefined): string {
+  return (suggestions ?? []).map((name) => sanitizeText(name)).join("\n");
+}
+
 function editMenuLabel(action: EditMenuAction, draft: AgentType): string {
   switch (action) {
     case "name":
@@ -997,6 +1010,8 @@ function editMenuLabel(action: EditMenuAction, draft: AgentType): string {
       const models = getModelPreferences(draft);
       return `models: ${sanitizeText(models?.join(", ") ?? "Default (inherit)")}`;
     }
+    case "modelSuggestions":
+      return `modelSuggestions: ${sanitizeText(modelSuggestionLabel(draft.modelSuggestions))}`;
     case "thinkingLevel":
       return `thinkingLevel: ${sanitizeText(draft.thinkingLevel ?? "Default (inherit)")}`;
     case "tools.allow":
@@ -1158,6 +1173,21 @@ async function editAgentTypesDialog(
             candidate.models = [...value];
             delete candidate.model;
           }
+        } else if (field === "modelSuggestions") {
+          const prefill = modelSuggestionPrefill(candidate.modelSuggestions);
+          const value = await dialogEditor(
+            ctx,
+            "Agent modelSuggestions (one display name per line)",
+            prefill,
+          );
+          if (value === undefined) continue;
+          if (value === prefill || value === prefill.trim()) continue;
+          const names = value
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0);
+          if (names.length === 0) delete candidate.modelSuggestions;
+          else candidate.modelSuggestions = [...names];
         } else if (field === "thinkingLevel") {
           const value = await dialogMenu(
             ctx,

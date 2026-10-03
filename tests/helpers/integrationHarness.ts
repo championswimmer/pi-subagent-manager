@@ -74,9 +74,10 @@ export async function withOfflineHarness(
         JSON.stringify(options.managerSettings),
       );
     }
-    await mkdir(path.join(directory, "agents"));
+    const agentsDir = path.join(directory, "subagent-manager", "agents");
+    await mkdir(agentsDir, { recursive: true });
     for (const [name, content] of Object.entries(options.agentFiles)) {
-      await writeFile(path.join(directory, "agents", `${name}.md`), content);
+      await writeFile(path.join(agentsDir, `${name}.md`), content);
     }
     const loaded = await discoverAndLoadExtensions(
       [fileURLToPath(new URL("../../src/index.ts", import.meta.url))],

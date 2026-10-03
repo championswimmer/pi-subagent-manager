@@ -57,6 +57,7 @@ test("missing files keep defaults and do not diagnostic", (t) => {
     maxLevels: 3,
     maxConcurrent: 16,
     maxThreads: 64,
+    scopedModelFiltering: true,
   });
   assert.deepEqual(result.diagnostics, []);
   assert.notEqual(result.settings, DEFAULT_MANAGER_SETTINGS);
@@ -77,7 +78,12 @@ test("global then project precedence, partial keys only", (t) => {
   writeJson(f.globalFile, { maxLevels: 4, maxConcurrent: 5, maxThreads: 6 });
   writeJson(f.projectFile, { maxConcurrent: 9 });
   assert.deepEqual(load(f), {
-    settings: { maxLevels: 4, maxConcurrent: 9, maxThreads: 6 },
+    settings: {
+      maxLevels: 4,
+      maxConcurrent: 9,
+      maxThreads: 6,
+      scopedModelFiltering: true,
+    },
     diagnostics: [],
   });
 });
@@ -104,34 +110,18 @@ test("malformed JSON, types, unknown keys, fractional and out-of-range values ar
     ["42", /Settings must be a JSON object/],
     ['"text"', /Settings must be a JSON object/],
     ["true", /Settings must be a JSON object/],
-    [
-      JSON.stringify({ maxLevels: 1.5 }),
-      /maxLevels must be a positive safe integer/,
-    ],
-    [
-      JSON.stringify({ maxConcurrent: 2.5 }),
-      /maxConcurrent must be a positive safe integer/,
-    ],
-    [
-      JSON.stringify({ maxThreads: 0 }),
-      /maxThreads must be a positive safe integer/,
-    ],
-    [
-      JSON.stringify({ maxLevels: -1 }),
-      /maxLevels must be a positive safe integer/,
-    ],
-    [
-      JSON.stringify({ maxConcurrent: "16" }),
-      /maxConcurrent must be a positive safe integer/,
-    ],
-    [
-      JSON.stringify({ maxThreads: true }),
-      /maxThreads must be a positive safe integer/,
-    ],
-    [
-      JSON.stringify({ maxLevels: null }),
-      /maxLevels must be a positive safe integer/,
-    ],
+    [JSON.stringify({ maxLevels: 1.5 }), /maxLevels must be a positive safe integer/],
+    [JSON.stringify({ maxConcurrent: 2.5 }), /maxConcurrent must be a positive safe integer/],
+    [JSON.stringify({ maxThreads: 0 }), /maxThreads must be a positive safe integer/],
+    [JSON.stringify({ maxLevels: -1 }), /maxLevels must be a positive safe integer/],
+    [JSON.stringify({ maxConcurrent: "16" }), /maxConcurrent must be a positive safe integer/],
+    [JSON.stringify({ maxThreads: true }), /maxThreads must be a positive safe integer/],
+    [JSON.stringify({ scopedModelFiltering: "true" }), /scopedModelFiltering must be a boolean/],
+    [JSON.stringify({ scopedModelFiltering: 1 }), /scopedModelFiltering must be a boolean/],
+    [JSON.stringify({ scopedModelFiltering: 0 }), /scopedModelFiltering must be a boolean/],
+    [JSON.stringify({ scopedModelFiltering: null }), /scopedModelFiltering must be a boolean/],
+    [JSON.stringify({ scopedModelFiltering: "false" }), /scopedModelFiltering must be a boolean/],
+    [JSON.stringify({ maxLevels: null }), /maxLevels must be a positive safe integer/],
     [
       JSON.stringify({ maxThreads: 9007199254740993 }),
       /maxThreads must be a positive safe integer/,
@@ -171,6 +161,7 @@ test("boundary integers have no artificial cap except maxLevels", (t) => {
     maxLevels: 1,
     maxConcurrent: 33,
     maxThreads: 1_000_000,
+    scopedModelFiltering: true,
   });
 });
 
@@ -296,6 +287,7 @@ test("invalid layer is ignored atomically and prior valid settings remain", (t) 
     maxLevels: 5,
     maxConcurrent: 6,
     maxThreads: 7,
+    scopedModelFiltering: true,
   });
   assert.equal(result.diagnostics.length, 1);
   assert.match(result.diagnostics[0], pathPattern(f.projectFile));
@@ -400,8 +392,18 @@ function rejection(fn: () => void, pattern: RegExp, path?: string): void {
 
 test("save persists user and project settings and reload applies precedence", (t) => {
   const f = fixture(t);
-  const user = { maxLevels: 4, maxConcurrent: 5, maxThreads: 6 };
-  const project = { maxLevels: 2, maxConcurrent: 7, maxThreads: 8 };
+  const user = {
+    maxLevels: 4,
+    maxConcurrent: 5,
+    maxThreads: 6,
+    scopedModelFiltering: true,
+  };
+  const project = {
+    maxLevels: 2,
+    maxConcurrent: 7,
+    maxThreads: 8,
+    scopedModelFiltering: true,
+  };
   const userPath = saveSettings(f, "user", user, false);
   assert.equal(userPath, f.globalFile);
   assert.equal(readFileSync(userPath, "utf8"), fileText(user));
@@ -415,6 +417,7 @@ test("save persists user and project settings and reload applies precedence", (t
     maxLevels: 1,
     maxConcurrent: Number.MAX_SAFE_INTEGER,
     maxThreads: 32,
+    scopedModelFiltering: true,
   };
   chmodSync(userPath, 0o644);
   assert.equal(saveSettings(f, "user", updated), userPath);
@@ -431,16 +434,27 @@ test("save persists user and project settings and reload applies precedence", (t
   assertNoTempFiles(dirname(userPath));
   assertNoTempFiles(dirname(projectPath));
 
-  const reordered = { maxThreads: 9, maxLevels: 3, maxConcurrent: 11 };
+  const reordered = {
+    scopedModelFiltering: true,
+    maxThreads: 9,
+    maxLevels: 3,
+    maxConcurrent: 11,
+  };
   assert.equal(saveSettings(f, "project", reordered), projectPath);
   assert.equal(
     readFileSync(projectPath, "utf8"),
-    fileText({ maxLevels: 3, maxConcurrent: 11, maxThreads: 9 }),
+    fileText({
+      maxLevels: 3,
+      maxConcurrent: 11,
+      maxThreads: 9,
+      scopedModelFiltering: true,
+    }),
   );
   assert.deepEqual(load(f).settings, {
     maxLevels: 3,
     maxConcurrent: 11,
     maxThreads: 9,
+    scopedModelFiltering: true,
   });
 });
 
@@ -457,6 +471,14 @@ test("invalid settings do not mutate an existing file", (t) => {
     { maxLevels: 1, maxConcurrent: 1, maxThreads: 9007199254740993 },
     { maxLevels: 1, maxConcurrent: 1 },
     { maxLevels: 1, maxConcurrent: 1, maxThreads: 1, extra: 1 },
+    {
+      maxLevels: 1,
+      maxConcurrent: 1,
+      maxThreads: 1,
+      scopedModelFiltering: "false",
+    },
+    { maxLevels: 1, maxConcurrent: 1, maxThreads: 1, scopedModelFiltering: 0 },
+    { maxLevels: 1, maxConcurrent: 1, maxThreads: 1 },
     null,
     [],
     42,
@@ -470,9 +492,19 @@ test("invalid settings do not mutate an existing file", (t) => {
   assert.equal(existsSync(f.globalFile), false);
   assert.equal(existsSync(join(f.cwd, ".pi")), false);
 
-  const original = { maxLevels: 4, maxConcurrent: 5, maxThreads: 6 };
+  const original = {
+    maxLevels: 4,
+    maxConcurrent: 5,
+    maxThreads: 6,
+    scopedModelFiltering: true,
+  };
   saveSettings(f, "user", original);
-  saveSettings(f, "project", { maxLevels: 2, maxConcurrent: 3, maxThreads: 4 });
+  saveSettings(f, "project", {
+    maxLevels: 2,
+    maxConcurrent: 3,
+    maxThreads: 4,
+    scopedModelFiltering: true,
+  });
   const userBefore = readFileSync(f.globalFile);
   const projectBefore = readFileSync(f.projectFile);
   const userIno = lstatSync(f.globalFile).ino;
@@ -483,6 +515,7 @@ test("invalid settings do not mutate an existing file", (t) => {
         maxLevels: 33,
         maxConcurrent: 1,
         maxThreads: 1,
+        scopedModelFiltering: true,
       }),
     /maxLevels must be <= 32/,
   );
@@ -492,8 +525,9 @@ test("invalid settings do not mutate an existing file", (t) => {
         maxLevels: 1,
         maxConcurrent: 1,
         maxThreads: 1,
+        scopedModelFiltering: true,
         extra: 1,
-      } as ManagerSettings),
+      } as unknown as ManagerSettings),
     /Unknown settings key: extra/,
   );
   rejection(
@@ -520,26 +554,26 @@ test("invalid settings do not mutate an existing file", (t) => {
     maxLevels: 2,
     maxConcurrent: 3,
     maxThreads: 4,
+    scopedModelFiltering: true,
   });
 });
 
 test("untrusted project writes never create paths", (t) => {
   const f = fixture(t);
-  const settings = { maxLevels: 2, maxConcurrent: 3, maxThreads: 4 };
+  const settings = {
+    maxLevels: 2,
+    maxConcurrent: 3,
+    maxThreads: 4,
+    scopedModelFiltering: true,
+  };
   const before = readdirSync(f.cwd);
-  rejection(
-    () => saveSettings(f, "project", settings, false),
-    /not enabled\/trusted/,
-  );
+  rejection(() => saveSettings(f, "project", settings, false), /not enabled\/trusted/);
   assert.deepEqual(readdirSync(f.cwd), before);
   assert.equal(existsSync(join(f.cwd, ".pi")), false);
   assert.equal(existsSync(join(f.agentDir, "subagent-manager")), false);
 
   mkdirSync(join(f.cwd, ".pi"));
-  rejection(
-    () => saveSettings(f, "project", settings, false),
-    /not enabled\/trusted/,
-  );
+  rejection(() => saveSettings(f, "project", settings, false), /not enabled\/trusted/);
   assert.equal(existsSync(join(f.cwd, ".pi", "agent")), false);
 
   writeJson(f.projectFile, { maxLevels: 8, maxConcurrent: 8, maxThreads: 8 });
@@ -550,7 +584,12 @@ test("untrusted project writes never create paths", (t) => {
       saveSettings(
         f,
         "project",
-        { maxLevels: 1, maxConcurrent: 1, maxThreads: 1 },
+        {
+          maxLevels: 1,
+          maxConcurrent: 1,
+          maxThreads: 1,
+          scopedModelFiltering: true,
+        },
         false,
       ),
     /not enabled\/trusted/,
@@ -574,7 +613,12 @@ test("untrusted project writes never create paths", (t) => {
 
 test("symlink directories and files are rejected on save", (t) => {
   const f = fixture(t);
-  const settings = { maxLevels: 4, maxConcurrent: 5, maxThreads: 6 };
+  const settings = {
+    maxLevels: 4,
+    maxConcurrent: 5,
+    maxThreads: 6,
+    scopedModelFiltering: true,
+  };
   const outside = join(f.root, "outside.json");
   const outsideText = JSON.stringify({
     maxLevels: 9,
@@ -641,6 +685,7 @@ test("symlink directories and files are rejected on save", (t) => {
         maxLevels: 1,
         maxConcurrent: 1,
         maxThreads: 1,
+        scopedModelFiltering: true,
       }),
     /Unsafe symlink path/,
     join(f.cwd, ".pi"),
@@ -716,8 +761,18 @@ test("symlink directories and files are rejected on save", (t) => {
 
 test("save creates missing owned directories", (t) => {
   const f = fixture(t);
-  const user = { maxLevels: 4, maxConcurrent: 5, maxThreads: 6 };
-  const project = { maxLevels: 2, maxConcurrent: 7, maxThreads: 8 };
+  const user = {
+    maxLevels: 4,
+    maxConcurrent: 5,
+    maxThreads: 6,
+    scopedModelFiltering: true,
+  };
+  const project = {
+    maxLevels: 2,
+    maxConcurrent: 7,
+    maxThreads: 8,
+    scopedModelFiltering: true,
+  };
   assert.equal(existsSync(dirname(f.globalFile)), false);
   const userPath = saveSettings(f, "user", user);
   assert.equal(userPath, f.globalFile);
@@ -827,4 +882,112 @@ test("save creates missing owned directories", (t) => {
     settings: project,
     diagnostics: [],
   });
+});
+
+test("omitted scopedModelFiltering defaults to true and only a present layer overrides it", (t) => {
+  const f = fixture(t);
+  writeJson(f.globalFile, { maxLevels: 4 });
+  writeJson(f.projectFile, { maxThreads: 9 });
+  assert.deepEqual(load(f), {
+    settings: { ...DEFAULT_MANAGER_SETTINGS, maxLevels: 4, maxThreads: 9 },
+    diagnostics: [],
+  });
+  assert.equal(load(f).settings.scopedModelFiltering, true);
+
+  writeJson(f.globalFile, { scopedModelFiltering: false });
+  assert.equal(load(f).settings.scopedModelFiltering, false);
+  assert.equal(load(f).settings.maxLevels, DEFAULT_MANAGER_SETTINGS.maxLevels);
+  assert.equal(load(f).settings.maxThreads, 9);
+
+  writeJson(f.projectFile, { maxConcurrent: 2 });
+  assert.equal(
+    load(f).settings.scopedModelFiltering,
+    false,
+    "a partial project layer must not reset an omitted boolean",
+  );
+  assert.equal(load(f).settings.maxConcurrent, 2);
+
+  writeJson(f.projectFile, { scopedModelFiltering: true, maxLevels: 6 });
+  assert.deepEqual(load(f).settings, {
+    ...DEFAULT_MANAGER_SETTINGS,
+    maxLevels: 6,
+    scopedModelFiltering: true,
+  });
+
+  writeJson(f.globalFile, { maxLevels: 5 });
+  writeJson(f.projectFile, { scopedModelFiltering: false, maxLevels: 1 });
+  const ignored = load(f, false);
+  assert.deepEqual(ignored.settings, {
+    ...DEFAULT_MANAGER_SETTINGS,
+    maxLevels: 5,
+  });
+  assert.equal(ignored.settings.scopedModelFiltering, true);
+  assert.deepEqual(ignored.diagnostics, []);
+  assert.equal(load(f).settings.scopedModelFiltering, false);
+  assert.equal(load(f).settings.maxLevels, 1);
+});
+
+test("invalid scopedModelFiltering is ignored atomically and keeps the prior layer", (t) => {
+  const f = fixture(t);
+  writeJson(f.globalFile, { scopedModelFiltering: false, maxLevels: 4 });
+  writeJson(f.projectFile, {
+    scopedModelFiltering: "no",
+    maxConcurrent: 3,
+  });
+  const result = load(f);
+  assert.deepEqual(result.settings, {
+    ...DEFAULT_MANAGER_SETTINGS,
+    scopedModelFiltering: false,
+    maxLevels: 4,
+  });
+  assert.equal(result.diagnostics.length, 1);
+  assert.match(result.diagnostics[0], pathPattern(f.projectFile));
+  assert.match(result.diagnostics[0], /scopedModelFiltering must be a boolean/);
+});
+
+test("save requires scopedModelFiltering and persists false with the other keys", (t) => {
+  const f = fixture(t);
+  const missing = {
+    maxLevels: 2,
+    maxConcurrent: 3,
+    maxThreads: 4,
+  } as ManagerSettings;
+  rejection(() => saveSettings(f, "user", missing), /scopedModelFiltering must be a boolean/);
+  assert.equal(existsSync(f.globalFile), false);
+  rejection(
+    () =>
+      saveSettings(f, "user", {
+        ...missing,
+        scopedModelFiltering: "false",
+      } as unknown as ManagerSettings),
+    /scopedModelFiltering must be a boolean/,
+  );
+  assert.equal(existsSync(dirname(f.globalFile)), false);
+
+  const saved = {
+    maxLevels: 2,
+    maxConcurrent: 3,
+    maxThreads: 4,
+    scopedModelFiltering: false,
+  };
+  const path = saveSettings(f, "user", saved);
+  assert.equal(readFileSync(path, "utf8"), fileText(saved));
+  assert.match(readFileSync(path, "utf8"), /"scopedModelFiltering": false/);
+  assert.deepEqual(load(f, false), { settings: saved, diagnostics: [] });
+
+  const before = readFileSync(path);
+  const ino = lstatSync(path).ino;
+  rejection(() => saveSettings(f, "user", missing), /scopedModelFiltering must be a boolean/);
+  rejection(
+    () =>
+      saveSettings(f, "project", {
+        ...saved,
+        scopedModelFiltering: 1 as unknown as boolean,
+      }),
+    /scopedModelFiltering must be a boolean/,
+  );
+  assert.deepEqual(readFileSync(path), before);
+  assert.equal(lstatSync(path).ino, ino);
+  assert.equal(existsSync(f.projectFile), false);
+  assert.deepEqual(load(f, false).settings, saved);
 });

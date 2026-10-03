@@ -64,13 +64,88 @@ test("selectPreferredModel honors preference order rather than scoped order", ()
   );
 });
 
+test("unmatched model suggestions do not change preference selection or inheritance", () => {
+  const suggested = {
+    name: "worker",
+    models: undefined,
+    modelSuggestions: ["Missing Display Name", "not-a-provider"],
+  };
+  assert.equal(getModelPreferences(suggested), undefined);
+  assert.equal(
+    selectPreferredModel(suggested, [{ model: { provider: "provider", id: "first" } }]),
+    undefined,
+  );
+  assert.equal(selectPreferredModel(suggested, [], false), undefined);
+  const pinned = {
+    name: "worker",
+    models: ["provider/second", "provider/first"],
+    modelSuggestions: ["Missing Display Name", "provider/not-selected"],
+  };
+  assert.deepEqual(getModelPreferences(pinned), ["provider/second", "provider/first"]);
+  assert.equal(
+    selectPreferredModel(pinned, [
+      { model: { provider: "provider", id: "first" } },
+      { model: { provider: "provider", id: "second" } },
+    ]),
+    "provider/second",
+  );
+});
+
 test("selectPreferredModel returns undefined when preferences are omitted", () => {
   assert.equal(
-    selectPreferredModel(
-      { name: "worker" },
-      [{ model: { provider: "provider", id: "first" } }],
-    ),
+    selectPreferredModel({ name: "worker" }, [{ model: { provider: "provider", id: "first" } }]),
     undefined,
+  );
+  assert.equal(selectPreferredModel({ name: "worker" }, [], false), undefined);
+});
+
+test("selectPreferredModel ordered unscoped available fallback ignores scope labeling", () => {
+  assert.equal(
+    selectPreferredModel(
+      {
+        name: "researcher",
+        models: ["provider/missing", "provider/unscoped", "provider/scoped"],
+      },
+      [
+        { model: { provider: "provider", id: "scoped" } },
+        { model: { provider: "provider", id: "unscoped" } },
+      ],
+      false,
+    ),
+    "provider/unscoped",
+  );
+});
+
+test("selectPreferredModel labels unavailable matches as available models when filtering is off", () => {
+  assert.throws(
+    () =>
+      selectPreferredModel(
+        {
+          name: "researcher",
+          models: ["provider/preferred", "provider/fallback"],
+        },
+        [{ model: { provider: "provider", id: "available" } }],
+        false,
+      ),
+    (error: unknown) => {
+      assert.match(String(error), /available models/i);
+      assert.match(
+        String(error),
+        /researcher[\s\S]*provider\/preferred[\s\S]*provider\/fallback[\s\S]*provider\/available/,
+      );
+      assert.doesNotMatch(String(error), /\/scoped-models/);
+      assert.doesNotMatch(String(error), /scoped/);
+      return true;
+    },
+  );
+  assert.throws(
+    () => selectPreferredModel({ name: "researcher", models: ["provider/preferred"] }, [], false),
+    (error: unknown) => {
+      assert.match(String(error), /available models/i);
+      assert.match(String(error), /\(none\)/);
+      assert.doesNotMatch(String(error), /\/scoped-models/);
+      return true;
+    },
   );
 });
 

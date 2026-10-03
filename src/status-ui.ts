@@ -10,6 +10,7 @@ import {
   dialogHeight,
   dialogText,
   frameDialog,
+  withDialogSession,
 } from "./dialog.ts";
 import type { ThreadService } from "./types.ts";
 import { buildStatusTree, type StatusRow } from "./thread-tree.ts";
@@ -19,8 +20,17 @@ export { buildStatusTree, type StatusRow };
 
 const ROOT = "/root";
 const TITLE = "Agents status";
+const TREE_TITLE = "Agents tree";
 const FOOTER =
   "Esc close · ↑↓ select · ←→ fold · PgUp/PgDn · Enter inspect · r refresh";
+
+function agentCount(threads: readonly { path?: string }[]): number {
+  const paths = new Set<string>();
+  for (const thread of threads) {
+    if (thread?.path && thread.path !== ROOT) paths.add(thread.path);
+  }
+  return paths.size;
+}
 
 function lexicalParent(path: string): string | null {
   const index = path.lastIndexOf("/");
@@ -56,6 +66,7 @@ export class StatusDialog {
   private selectedPath: string;
   private collapsed = new Set<string>();
   private viewport = 1;
+  private timer: ReturnType<typeof setInterval> | undefined;
 
   constructor(
     private host: DialogHost,
@@ -63,11 +74,30 @@ export class StatusDialog {
     private service: ThreadService,
     private done: (path: string | undefined) => void,
     selected?: string,
+    private title = TITLE,
   ) {
     this.selectedPath = selected || ROOT;
   }
 
   invalidate(): void {}
+
+  /** Arm the 1s refresh. Host disposal can leave the dialog promise pending. */
+  startRefresh(): void {
+    this.stopRefresh();
+    this.timer = setInterval(() => this.host.requestRender(), 1000);
+    if (typeof this.timer.unref === "function") this.timer.unref();
+  }
+
+  /** Stop the refresh. Safe to call more than once, including from dispose(). */
+  dispose(): void {
+    this.stopRefresh();
+  }
+
+  private stopRefresh(): void {
+    if (this.timer === undefined) return;
+    clearInterval(this.timer);
+    this.timer = undefined;
+  }
 
   private rows(): StatusRow[] {
     return buildStatusTree(this.service.list(), this.collapsed);
@@ -181,7 +211,56 @@ export class StatusDialog {
         .map((row) => this.line(row, row.path === this.selectedPath)),
       ...detail,
     ];
-    return frameDialog(this.theme, width, height, TITLE, body, FOOTER);
+    return frameDialog(
+      this.theme,
+      width,
+      height,
+      this.heading(rows, start, treeCount),
+      body,
+      FOOTER,
+    );
+  }
+
+  private heading(rows: StatusRow[], start: number, treeCount: number): string {
+    if (this.title !== TREE_TITLE) return this.title;
+    const agents = agentCount(this.service.list());
+    const noun = agents === 1 ? "agent" : "agents";
+    const total = rows.length;
+    const shown = Math.max(0, Math.min(treeCount, total - start));
+    if (shown <= 0) return `${TREE_TITLE}  ${agents} ${noun}`;
+    return `${TREE_TITLE}  ${agents} ${noun}  ${start + 1}-${start + shown}/${total}`;
+  }
+}
+
+async function showAgentDialog(
+  ctx: ExtensionCommandContext,
+  service: ThreadService,
+  options: {
+    title?: string;
+    selected?: string;
+    inspect?: (path: string) => Promise<void>;
+  } = {},
+): Promise<void> {
+  const open = options.inspect ?? ((path: string) => showThreads(ctx, service, path));
+  let selected = options.selected;
+  for (;;) {
+    // Cleared on close and from dispose(): DialogSession host disposal can
+    // leave this promise pending, so finally alone may not run immediately.
+    let dialog: StatusDialog | undefined;
+    try {
+      const chosen = await ctx.ui.custom<string | undefined>((host, theme, _keys, done) => {
+        dialog = new StatusDialog(host, theme, service, done, selected, options.title);
+        dialog.startRefresh();
+        return dialog;
+      }, DIALOG_OPTIONS);
+      dialog?.dispose();
+      dialog = undefined;
+      if (!chosen) return;
+      selected = chosen;
+      await open(chosen);
+    } finally {
+      dialog?.dispose();
+    }
   }
 }
 
@@ -191,25 +270,19 @@ export async function showAgentStatus(
   inspect?: (path: string) => Promise<void>,
 ): Promise<void> {
   if (!canOpenDialog(ctx)) return;
-  const open = inspect ?? ((path: string) => showThreads(ctx, service, path));
-  let selected: string | undefined;
-  for (;;) {
-    let timer: ReturnType<typeof setInterval> | undefined;
-    try {
-      const chosen = await ctx.ui.custom<string | undefined>(
-        (host, theme, _keys, done) => {
-          timer = setInterval(() => host.requestRender(), 1000);
-          if (typeof timer.unref === "function") timer.unref();
-          return new StatusDialog(host, theme, service, done, selected);
-        },
-        DIALOG_OPTIONS,
-      );
-      if (timer) clearInterval(timer);
-      if (!chosen) return;
-      selected = chosen;
-      await open(chosen);
-    } finally {
-      if (timer) clearInterval(timer);
-    }
-  }
+  await showAgentDialog(ctx, service, { inspect });
+}
+
+export async function showAgentTree(
+  ctx: ExtensionCommandContext,
+  service: ThreadService,
+  selectedPath?: string,
+): Promise<void> {
+  if (!canOpenDialog(ctx)) return;
+  await withDialogSession(ctx, (scoped) =>
+    showAgentDialog(scoped, service, {
+      title: TREE_TITLE,
+      selected: selectedPath,
+    }),
+  );
 }

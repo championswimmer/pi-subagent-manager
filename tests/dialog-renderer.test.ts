@@ -148,7 +148,7 @@ for (const Renderer of [TuiMainScreen, TuiAltScreen]) {
       // editor all remain inside the same outer overlay.
       await input("\r");
       await input("\x1b");
-      for (let i = 0; i < 3; i++) await input("\x1b[B");
+      for (let i = 0; i < 4; i++) await input("\x1b[B");
       await input("\r");
       await input("\x1b[B");
       await input("\r");

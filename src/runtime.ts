@@ -131,7 +131,10 @@ async function assertAcceptedSessionFile(
 }
 
 /** Isolated SDK sessions; neither external extensions nor the CLI's MCP factories are loaded. */
-export function createDriverFactory(getRootContext: () => ExtensionContext): DriverFactory {
+export function createDriverFactory(
+  getRootContext: () => ExtensionContext,
+  getScopedModelFiltering: () => boolean = () => true,
+): DriverFactory {
   // Keep resolved settings even after disposal: descendants inherit settings, not the caller's history.
   const resolved = new Map<string, { provider: string; id: string; thinking: ThinkingLevel }>();
   return async (options) => {
@@ -206,20 +209,33 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
     const normalizeScopedModels = (
       scopedModels: ExtensionContext["scopedModels"] | null | undefined,
     ): readonly ScopedModel[] => scopedModels ?? [];
-    const selectScopedPreference = (scopedModels: readonly ScopedModel[]) => {
+    const filteringEnabled = getScopedModelFiltering;
+    const selectModelPreference = (
+      candidates: readonly { model: { provider: string; id: string } }[],
+      filtering = filteringEnabled(),
+    ) => {
       try {
-        return selectPreferredModel(options.type, scopedModels);
+        return selectPreferredModel(options.type, candidates, filtering);
       } catch (error) {
-        if (scopedModels.length === 0 && error instanceof Error && !error.message.includes("[]"))
+        if (
+          filtering &&
+          candidates.length === 0 &&
+          error instanceof Error &&
+          !error.message.includes("[]")
+        )
           throw new Error(`${error.message} Current /scoped-models scope: [].`);
         throw error;
       }
     };
+    const availableModelCandidates = () =>
+      ctx.modelRegistry.getAvailable().map((model) => ({ model }));
     const initialScopedModels = normalizeScopedModels(ctx.scopedModels);
     let provider = parent?.provider ?? ctx.model?.provider;
     let id = parent?.id ?? ctx.model?.id;
     if (modelPreferences !== undefined) {
-      ({ provider, id } = parseModelIdentity(selectScopedPreference(initialScopedModels)!));
+      const filtering = filteringEnabled();
+      const candidates = filtering ? initialScopedModels : availableModelCandidates();
+      ({ provider, id } = parseModelIdentity(selectModelPreference(candidates, filtering)!));
     } else if (restored?.model) {
       provider = restored.model.provider;
       id = restored.model.modelId;
@@ -358,8 +374,8 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
       currentIdentity: string | undefined,
       liveScopedModels: readonly ScopedModel[],
     ) => {
-      if (modelPreferences === undefined) return;
-      const preferredIdentity = selectScopedPreference(liveScopedModels);
+      if (!filteringEnabled() || modelPreferences === undefined) return;
+      const preferredIdentity = selectModelPreference(liveScopedModels, true);
       if (!preferredIdentity) return;
       if (!currentIdentity) throw new Error(`Subagent ${options.path} has no selected model`);
       if (currentIdentity !== preferredIdentity) {
@@ -382,11 +398,11 @@ export function createDriverFactory(getRootContext: () => ExtensionContext): Dri
         session.setScopedModels([...liveScopedModels]);
         lastScopedModelsKey = key;
       }
-      if (modelPreferences === undefined) {
+      if (!filteringEnabled() || modelPreferences === undefined) {
         updateResolved();
         return;
       }
-      const preferredIdentity = selectScopedPreference(liveScopedModels);
+      const preferredIdentity = selectModelPreference(liveScopedModels, true);
       if (!preferredIdentity) {
         updateResolved();
         return;

@@ -177,6 +177,11 @@ test("isolated real SDK driver without credentials", async (t) => {
       ctx.model = registry.find(identity.slice(0, slash), identity.slice(slash + 1))!;
     };
     const factory = createDriverFactory(() => ctx);
+    let scopedModelFiltering = true;
+    const filteringFactory = createDriverFactory(
+      () => ctx,
+      () => scopedModelFiltering,
+    );
     const events: DriverEvent[] = [];
     let pause = false;
     const options = (overrides: Partial<DriverOptions> = {}): DriverOptions => ({
@@ -199,6 +204,20 @@ test("isolated real SDK driver without credentials", async (t) => {
       const driver = await factory(opts);
       drivers.push(driver);
       return driver;
+    };
+    const createFiltered = async (opts: DriverOptions) => {
+      const driver = await filteringFactory(opts);
+      drivers.push(driver);
+      return driver;
+    };
+    const restoreScope = () => {
+      scopedModelFiltering = true;
+      setScopedModels("runtime-test/model/with/slashes", "runtime-other/backup");
+      setRootModel("runtime-test/model/with/slashes");
+    };
+    const refreshAvailable = async () => {
+      await runtime.setRuntimeApiKey("runtime-test", "fake-runtime-only-key");
+      await runtime.setRuntimeApiKey("runtime-other", "other-runtime-only-key");
     };
 
     await t.test(
@@ -1132,6 +1151,262 @@ test("isolated real SDK driver without credentials", async (t) => {
         [[3, 2, false]],
       );
     });
+
+    await t.test(
+      "ordered unscoped available fallback skips missing and later scoped models",
+      async () => {
+        await refreshAvailable();
+        scopedModelFiltering = false;
+        setScopedModels("runtime-other/backup");
+        setRootModel("runtime-other/backup");
+        try {
+          next = answer("unscoped fallback");
+          const driver = await createFiltered(
+            options({
+              path: "/root/unscoped-ordered",
+              type: {
+                ...options().type,
+                name: "unscoped-ordered",
+                models: ["runtime-test/missing", "runtime-test/fallback", "runtime-other/backup"],
+              },
+            }),
+          );
+          await driver.prompt("prefer first available");
+          assert.equal(requests.at(-1)?.model.provider, "runtime-test");
+          assert.equal(requests.at(-1)?.model.id, "fallback");
+          assert.equal(requests.at(-1)?.apiKey, "fake-runtime-only-key");
+        } finally {
+          restoreScope();
+        }
+      },
+    );
+
+    await t.test(
+      "enabled scoped filtering rejects explicit models outside an empty scope",
+      async () => {
+        scopedModelFiltering = true;
+        setScopedModels();
+        const baselineCalls = calls;
+        try {
+          await assert.rejects(
+            createFiltered(
+              options({
+                path: "/root/enabled-empty-scope",
+                type: {
+                  ...options().type,
+                  name: "enabled-empty",
+                  models: ["runtime-test/model/with/slashes"],
+                },
+              }),
+            ),
+            (error: unknown) => {
+              assert.match(String(error), /enabled-empty/);
+              assert.match(String(error), /\/scoped-models/);
+              assert.match(String(error), /\[\]/);
+              return true;
+            },
+          );
+          assert.equal(calls, baselineCalls);
+        } finally {
+          restoreScope();
+        }
+      },
+    );
+
+    await t.test(
+      "disabled filtering allows an empty scope when a preference is available",
+      async () => {
+        await refreshAvailable();
+        scopedModelFiltering = false;
+        setScopedModels();
+        setRootModel("runtime-other/backup");
+        try {
+          next = answer("empty scope ok");
+          const driver = await createFiltered(
+            options({
+              path: "/root/disabled-empty-scope",
+              type: {
+                ...options().type,
+                name: "disabled-empty",
+                models: ["runtime-test/missing", "runtime-test/fallback"],
+              },
+            }),
+          );
+          await driver.prompt("run without scope");
+          assert.equal(requests.at(-1)?.model.provider, "runtime-test");
+          assert.equal(requests.at(-1)?.model.id, "fallback");
+          setScopedModels("runtime-other/backup");
+          next = answer("kept fallback");
+          await driver.prompt("scope appeared");
+          assert.equal(requests.at(-1)?.model.id, "fallback");
+          await assert.rejects(
+            createFiltered(
+              options({
+                path: "/root/disabled-missing",
+                type: {
+                  ...options().type,
+                  name: "disabled-missing",
+                  models: ["runtime-test/missing"],
+                },
+              }),
+            ),
+            (error: unknown) => {
+              assert.match(String(error), /available models/i);
+              assert.doesNotMatch(String(error), /\/scoped-models/);
+              return true;
+            },
+          );
+        } finally {
+          restoreScope();
+        }
+      },
+    );
+
+    await t.test(
+      "unmatched model suggestions do not pin or block inherited model selection",
+      async () => {
+        setRootModel("runtime-other/backup");
+        next = answer("inherited despite suggestions");
+        try {
+          const driver = await create(
+            options({
+              path: "/root/suggestion-inherit",
+              type: {
+                ...options().type,
+                modelSuggestions: ["Missing Display Name", "runtime-test/not-in-scope"],
+              },
+            }),
+          );
+          await driver.prompt("inherit with unmatched suggestions");
+          assert.equal(requests.at(-1)?.model.provider, "runtime-other");
+          assert.equal(requests.at(-1)?.model.id, "backup");
+          assert.equal(requests.at(-1)?.apiKey, "other-runtime-only-key");
+          assert.equal(
+            events.some(
+              (event) =>
+                event.kind === "error" &&
+                /Missing Display|not-in-scope|modelSuggestions/.test(event.text),
+            ),
+            false,
+          );
+        } finally {
+          setRootModel("runtime-test/model/with/slashes");
+        }
+      },
+    );
+
+    await t.test("omitted models still inherit when scoped filtering is disabled", async () => {
+      scopedModelFiltering = false;
+      setScopedModels();
+      setRootModel("runtime-other/backup");
+      try {
+        next = answer("inherited root");
+        const driver = await createFiltered(options({ path: "/root/disabled-inherit" }));
+        await driver.prompt("inherit root");
+        assert.equal(requests.at(-1)?.model.provider, "runtime-other");
+        assert.equal(requests.at(-1)?.model.id, "backup");
+        assert.equal(requests.at(-1)?.apiKey, "other-runtime-only-key");
+
+        const parent = await createFiltered(
+          options({
+            path: "/root/disabled-inherit-parent",
+            type: { ...options().type, thinkingLevel: "medium" },
+          }),
+        );
+        const child = await createFiltered(
+          options({
+            path: "/root/disabled-inherit-parent/child",
+            parentPath: "/root/disabled-inherit-parent",
+            inherited: [],
+          }),
+        );
+        setRootModel("runtime-test/model/with/slashes");
+        next = answer("inherited parent");
+        await child.prompt("inherit parent");
+        assert.equal(requests.at(-1)?.model.provider, "runtime-other");
+        assert.equal(requests.at(-1)?.model.id, "backup");
+        parent.dispose();
+      } finally {
+        restoreScope();
+      }
+    });
+
+    await t.test(
+      "disabling scoped filtering stops scope-drift rejection without reselection",
+      async () => {
+        scopedModelFiltering = true;
+        setScopedModels("runtime-test/model/with/slashes", "runtime-other/backup");
+        setRootModel("runtime-test/model/with/slashes");
+        let release!: () => void;
+        let entered!: () => void;
+        const started = new Promise<void>((resolve) => {
+          entered = resolve;
+        });
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const tool: ToolDefinition = {
+          name: "filter_gate",
+          label: "Filter Gate",
+          description: "Blocks until filtering is disabled",
+          parameters: Type.Object({}),
+          async execute() {
+            entered();
+            await gate;
+            return { content: [{ type: "text", text: "done" }], details: undefined };
+          },
+        };
+        try {
+          next = {
+            ...answer(""),
+            content: [
+              { type: "toolCall", id: "filter-gate-1", name: "filter_gate", arguments: {} },
+            ],
+            stopReason: "toolUse",
+          };
+          const driver = await createFiltered(
+            options({
+              path: "/root/filter-toggle",
+              tools: [tool],
+              type: {
+                ...options().type,
+                name: "filter-toggle",
+                models: ["runtime-test/model/with/slashes", "runtime-other/backup"],
+                tools: { allow: ["filter_gate"] },
+              },
+            }),
+          );
+          const beforeCalls = calls;
+          const run = driver.prompt("tool turn");
+          await started;
+          setScopedModels();
+          scopedModelFiltering = false;
+          await driver.steer("steer while scope drifted");
+          next = answer("continued on original");
+          release();
+          await run;
+          assert.equal(calls, beforeCalls + 2);
+          assert.equal(requests.at(-1)?.model.provider, "runtime-test");
+          assert.equal(requests.at(-1)?.model.id, "model/with/slashes");
+          assert.equal(driver.output(), "continued on original");
+          assert.equal(countMessages(driver.snapshot(), "user", "steer while scope drifted"), 1);
+
+          next = answer("request while disabled");
+          await driver.prompt("later request");
+          assert.equal(requests.at(-1)?.model.id, "model/with/slashes");
+
+          scopedModelFiltering = true;
+          setScopedModels("runtime-other/backup");
+          next = answer("reselected backup");
+          await driver.prompt("scope restored");
+          assert.equal(requests.at(-1)?.model.provider, "runtime-other");
+          assert.equal(requests.at(-1)?.model.id, "backup");
+        } finally {
+          release();
+          restoreScope();
+        }
+      },
+    );
 
     await t.test("invalid model/tool/storage policies fail closed", async () => {
       await assert.rejects(

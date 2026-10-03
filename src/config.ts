@@ -74,6 +74,7 @@ const FIELDS = new Set([
   "description",
   "models",
   "model",
+  "modelSuggestions",
   "thinkingLevel",
   "color",
   "tools",
@@ -136,6 +137,22 @@ function record(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+/** Advisory display names only. Empty means no suggestions; never a model pin. */
+function modelSuggestionNames(value: unknown): string[] {
+  if (!Array.isArray(value))
+    throw new Error("modelSuggestions must be an array of nonempty display names");
+  const suggestions = value.map((entry, index) => {
+    if (typeof entry !== "string")
+      throw new Error(`modelSuggestions[${index}] must be a nonempty display name`);
+    const name = entry.trim();
+    if (!name) throw new Error(`modelSuggestions[${index}] must be a nonempty display name`);
+    return name;
+  });
+  if (new Set(suggestions).size !== suggestions.length)
+    throw new Error("modelSuggestions contains duplicate display names");
+  return [...suggestions];
+}
+
 function toolNames(value: unknown, label: string): string[] {
   if (
     !Array.isArray(value) ||
@@ -189,6 +206,8 @@ export function parseAgentType(content: string, filePath?: string): AgentType {
       model: data.model,
     });
     if (models !== undefined) result.models = models;
+    if (Object.hasOwn(data, "modelSuggestions"))
+      result.modelSuggestions = modelSuggestionNames(data.modelSuggestions);
     if (Object.hasOwn(data, "thinkingLevel")) {
       if (
         !THINKING_LEVELS.includes(
@@ -226,6 +245,8 @@ export function serializeAgentType(type: AgentType): string {
   };
   const models = getModelPreferences(type);
   if (models !== undefined) data.models = models;
+  if (type.modelSuggestions !== undefined)
+    data.modelSuggestions = modelSuggestionNames(type.modelSuggestions);
   for (const key of ["thinkingLevel", "color", "tools"] as const)
     if (type[key] !== undefined) data[key] = type[key];
   const content = `---\n${stringify(data)}---\n${type.systemPrompt}`;
@@ -384,16 +405,9 @@ export class ConfigStore {
         );
   }
 
+  // Manager-owned storage only. Do not scan legacy Pi agent packages.
   private scopeDirectories(scope: AgentScope): string[] {
-    return scope === "user"
-      ? [
-          resolve(this.options.agentDir, AGENTS_DIR),
-          this.preferredScopeDirectory(scope),
-        ]
-      : [
-          resolve(this.options.cwd, ".pi", AGENTS_DIR),
-          this.preferredScopeDirectory(scope),
-        ];
+    return [this.preferredScopeDirectory(scope)];
   }
 
   private destinationBasePaths(scope: AgentScope, directory: string): string[] {

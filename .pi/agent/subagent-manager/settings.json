@@ -1,0 +1,5 @@
+{
+  "maxLevels": 3,
+  "maxConcurrent": 16,
+  "maxThreads": 64
+}

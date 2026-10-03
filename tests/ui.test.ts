@@ -204,7 +204,7 @@ test("widget is compact, excludes current root, and reports hidden threads", () 
   assert.match(lines[1]!, /\/working/);
   assert.match(lines[2]!, /\/paused/);
   assert.match(lines[3]!, /\/worker9/);
-  assert.match(lines.at(-1)!, /\+6 more threads/);
+  assert.match(lines.at(-1)!, /\+6 more threads · \/agents tree/);
   assert.equal(renderThreads(threads.slice(1, 9), 80, darkTheme).length, 8);
 });
 
@@ -435,14 +435,18 @@ test("thread dialogs exclude root, discard viewer edits, and resume through stee
   assert.deepEqual(calls, ["/worker: continue please"]);
 });
 
+function userAgentsDir(agentDir: string) {
+  return join(agentDir, "subagent-manager", "agents");
+}
+
 async function configFixture(fileName = "worker.md") {
   const root = await mkdtemp(join(tmpdir(), "pi-subagent-ui-test-"));
   const agentDir = join(root, "global");
   const bundledDir = join(root, "bundled");
-  await mkdir(join(agentDir, "agents"), { recursive: true });
+  await mkdir(userAgentsDir(agentDir), { recursive: true });
   const body = "# Instructions\n\nKeep **Markdown** and whitespace.\n\n";
   await writeFile(
-    join(agentDir, "agents", fileName),
+    join(userAgentsDir(agentDir), fileName),
     serializeAgentType({
       name: "worker",
       description: "Worker",
@@ -462,6 +466,7 @@ const EDIT_FIELD_ACTIONS = new Set([
   "name",
   "description",
   "models",
+  "modelSuggestions",
   "thinkingLevel",
   "tools.allow",
   "tools.block",
@@ -663,7 +668,7 @@ test("legacy scalar model opens the ordered picker and cancel keeps the saved de
   try {
     const legacyScalarDefinition = `---\nname: worker\ndescription: Worker\nmodel: openai/gpt-4.1\n---\n${body}`;
     await writeFile(
-      join(agentDir, "agents", "worker.md"),
+      join(userAgentsDir(agentDir), "worker.md"),
       legacyScalarDefinition,
     );
     store.reload();
@@ -702,7 +707,7 @@ test("legacy scalar model opens the ordered picker and cancel keeps the saved de
     ]);
     assert.equal(store.get("worker").systemPrompt, body);
     assert.equal(
-      await readFile(join(agentDir, "agents", "worker.md"), "utf8"),
+      await readFile(join(userAgentsDir(agentDir), "worker.md"), "utf8"),
       legacyScalarDefinition,
     );
   } finally {
@@ -769,7 +774,7 @@ test("saving model preferences stores canonical ordered models after add and reo
 async function workerWithSuccess() {
   const fixture = await configFixture();
   await writeFile(
-    join(fixture.agentDir, "agents", "worker.md"),
+    join(userAgentsDir(fixture.agentDir), "worker.md"),
     serializeAgentType({
       name: "worker",
       description: "Worker",
@@ -1142,7 +1147,7 @@ test("color picker badges are backgrounds, preview the example task path, and ca
   const theme = darkTheme;
   try {
     const original = await readFile(
-      join(agentDir, "agents", "worker.md"),
+      join(userAgentsDir(agentDir), "worker.md"),
       "utf8",
     );
     assert.match(original, /color: success/);
@@ -1209,7 +1214,7 @@ test("color picker badges are backgrounds, preview the example task path, and ca
     assert.equal(store.get("worker").color, "success");
     assert.equal(store.get("worker").name, "worker");
     assert.equal(
-      await readFile(join(agentDir, "agents", "worker.md"), "utf8"),
+      await readFile(join(userAgentsDir(agentDir), "worker.md"), "utf8"),
       original,
     );
   } finally {
@@ -1260,7 +1265,7 @@ test("color picker default unsets a configured success color", async () => {
       component.handleInput("\r");
     });
     const original = await readFile(
-      join(agentDir, "agents", "worker.md"),
+      join(userAgentsDir(agentDir), "worker.md"),
       "utf8",
     );
     assert.match(original, /color: success/);
@@ -1303,7 +1308,7 @@ test("invalid field edits and untrusted project saves leave configuration unchan
   }
 });
 
-test("editing a noncanonical filename copies into preferred storage and keeps the original file", async () => {
+test("editing a noncanonical filename in preferred storage updates that file in place", async () => {
   const { root, store, agentDir, body } = await configFixture("custom.md");
   try {
     const { ctx } = editorContext(
@@ -1312,25 +1317,14 @@ test("editing a noncanonical filename copies into preferred storage and keeps th
       ["Revised"],
     );
     await editAgentTypes(ctx, store);
-    assert.deepEqual(await readdir(join(agentDir, "agents")), ["custom.md"]);
-    assert.deepEqual(
-      await readdir(join(agentDir, "subagent-manager", "agents")),
-      ["worker.md"],
-    );
+    assert.deepEqual(await readdir(userAgentsDir(agentDir)), ["custom.md"]);
     const saved = store.get("worker");
     assert.equal(saved.description, "Revised");
-    assert.equal(
-      saved.filePath,
-      join(agentDir, "subagent-manager", "agents", "worker.md"),
-    );
+    assert.equal(saved.filePath, join(userAgentsDir(agentDir), "custom.md"));
     assert.equal(saved.systemPrompt, body);
     assert.match(
       await readFile(saved.filePath!, "utf8"),
       /description: Revised/,
-    );
-    assert.match(
-      await readFile(join(agentDir, "agents", "custom.md"), "utf8"),
-      /description: Worker/,
     );
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -1345,7 +1339,7 @@ test("renaming a type cannot overwrite an existing definition", async () => {
       description: "Other",
       systemPrompt: "Original",
     });
-    const file = join(agentDir, "agents", "other.md");
+    const file = join(userAgentsDir(agentDir), "other.md");
     await writeFile(file, content);
     store.reload();
     const { ctx, diagnostics } = editorContext(
@@ -1371,7 +1365,7 @@ test("external invalid edit restores draft, reports diagnostics, and restarts TU
       "-e",
       'require("node:fs").writeFileSync(process.argv[1], "---\\nname: bad\\ndescription: bad\\nmodel: invalid\\n---\\nchanged")',
     ]);
-    const file = join(agentDir, "agents", "worker.md");
+    const file = join(userAgentsDir(agentDir), "worker.md");
     const original = await readFile(file, "utf8");
     const { ctx, diagnostics, driver } = editorContext(root, [
       "worker",
@@ -1452,7 +1446,7 @@ test("edit menu shows current values, ordered models, legacy scalars, and tool p
   try {
     const hostile = "Worker\x1b[31mred\x1b[0m\x1b]0;owned\x07\r\nnext";
     await writeFile(
-      join(agentDir, "agents", "worker.md"),
+      join(userAgentsDir(agentDir), "worker.md"),
       serializeAgentType({
         name: "worker",
         description: hostile,
@@ -1464,11 +1458,11 @@ test("edit menu shows current values, ordered models, legacy scalars, and tool p
       }),
     );
     await writeFile(
-      join(agentDir, "agents", "legacy.md"),
+      join(userAgentsDir(agentDir), "legacy.md"),
       `---\nname: legacy\ndescription: Legacy scalar\nmodel: google/gemini-2.5-pro\n---\n${body}`,
     );
     await writeFile(
-      join(agentDir, "agents", "empty.md"),
+      join(userAgentsDir(agentDir), "empty.md"),
       serializeAgentType({
         name: "empty",
         description: "Explicit empty tools",
@@ -1494,6 +1488,7 @@ test("edit menu shows current values, ordered models, legacy scalars, and tool p
       "name: worker",
       `description: ${sanitizeText(hostile)}`,
       "models: openai/gpt-4.1, anthropic/claude-3.7-sonnet",
+      "modelSuggestions: None",
       "thinkingLevel: high",
       "tools.allow: bash, read",
       "tools.block: edit",
@@ -1511,6 +1506,7 @@ test("edit menu shows current values, ordered models, legacy scalars, and tool p
       "name: legacy",
       "description: Legacy scalar",
       "models: google/gemini-2.5-pro",
+      "modelSuggestions: None",
       "thinkingLevel: Default (inherit)",
       "tools.allow: Unset (use default policy)",
       "tools.block: Unset (use default policy)",
@@ -1527,6 +1523,7 @@ test("edit menu shows current values, ordered models, legacy scalars, and tool p
       "name: empty",
       "description: Explicit empty tools",
       "models: Default (inherit)",
+      "modelSuggestions: None",
       "thinkingLevel: Default (inherit)",
       "tools.allow: Empty list",
       "tools.block: Empty list",
@@ -1542,7 +1539,7 @@ test("field editor prefills current values and cancelled or invalid edits keep t
   const { root, store, agentDir, body } = await configFixture();
   try {
     await writeFile(
-      join(agentDir, "agents", "worker.md"),
+      join(userAgentsDir(agentDir), "worker.md"),
       serializeAgentType({
         name: "worker",
         description: "Worker",
@@ -1585,6 +1582,7 @@ test("field editor prefills current values and cancelled or invalid edits keep t
       "name: worker",
       "description: Worker",
       "models: Default (inherit)",
+      "modelSuggestions: None",
       "thinkingLevel: Default (inherit)",
       "tools.allow: read",
       "tools.block: bash",
@@ -1596,6 +1594,7 @@ test("field editor prefills current values and cancelled or invalid edits keep t
       "name: renamed",
       "description: Worker",
       "models: Default (inherit)",
+      "modelSuggestions: None",
       "thinkingLevel: Default (inherit)",
       "tools.allow: read",
       "tools.block: bash",
@@ -1609,6 +1608,7 @@ test("field editor prefills current values and cancelled or invalid edits keep t
       "name: renamed",
       "description: Worker",
       "models: Default (inherit)",
+      "modelSuggestions: None",
       "thinkingLevel: Default (inherit)",
       "tools.allow: bash, edit",
       "tools.block: bash",
@@ -1655,7 +1655,7 @@ test("description editor prefills safe text and unchanged submits keep the origi
       .map(sanitizeText)
       .join("\n");
     await writeFile(
-      join(agentDir, "agents", "worker.md"),
+      join(userAgentsDir(agentDir), "worker.md"),
       serializeAgentType({
         name: "worker",
         description: hostile,
@@ -1663,7 +1663,7 @@ test("description editor prefills safe text and unchanged submits keep the origi
       }),
     );
     await writeFile(
-      join(agentDir, "agents", "empty.md"),
+      join(userAgentsDir(agentDir), "empty.md"),
       serializeAgentType({
         name: "empty",
         description: "Explicit empty tools",
@@ -1877,6 +1877,164 @@ test("nested definition editor from settings uses one overlay", async () => {
     assert.equal(applied, 0);
     assert.equal(store.get("worker").description, before);
     assertOneOverlay(driver, "nested definition editor");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("model suggestion editor shows advisory names and preserves them across cancel and other edits", async () => {
+  const { root, store, agentDir, body } = await configFixture();
+  try {
+    const hostile = "Claude\x1b[31m Opus\x1b[0m";
+    const suggestions = [hostile, "GPT"];
+    await writeFile(
+      join(userAgentsDir(agentDir), "worker.md"),
+      serializeAgentType({
+        name: "worker",
+        description: "Worker",
+        systemPrompt: body,
+        models: ["openai/gpt-4.1"],
+        modelSuggestions: suggestions,
+      }),
+    );
+    store.reload();
+    const shown = `modelSuggestions: ${sanitizeText(suggestions.join(", "))}`;
+    const prefill = suggestions.map((name) => sanitizeText(name)).join("\n");
+    const { ctx, menus, editors } = editorContext(
+      root,
+      [
+        "worker",
+        "modelSuggestions",
+        "description",
+        "Cancel",
+        undefined,
+      ],
+      [undefined, "Revised description"],
+    );
+    await editAgentTypes(ctx, store);
+    const editMenus = unsavedMenus(menus);
+    assert.equal(editMenus[0]!.options.includes(shown), true);
+    assert.equal(
+      editMenus[0]!.options.includes("models: openai/gpt-4.1"),
+      true,
+    );
+    assert.ok(editMenus[0]!.options.every((option) => !option.includes("\x1b")));
+    assert.equal(editMenus[1]!.options.includes(shown), true);
+    assert.equal(
+      editMenus[2]!.options.includes("description: Revised description"),
+      true,
+    );
+    assert.equal(editMenus[2]!.options.includes(shown), true);
+    assert.equal(editors[0]?.title, "Agent modelSuggestions (one display name per line)");
+    assert.equal(editors[0]?.prefill, prefill);
+    assert.ok(!editors[0]?.prefill?.includes("\x1b"));
+    assert.deepEqual(store.get("worker").modelSuggestions, suggestions);
+    assert.deepEqual(store.get("worker").models, ["openai/gpt-4.1"]);
+    assert.equal(store.get("worker").systemPrompt, body);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("model suggestion edits save display names, empty clears, and other saves keep an explicit empty list", async () => {
+  const { root, store, agentDir, body } = await configFixture();
+  try {
+    await writeFile(
+      join(userAgentsDir(agentDir), "worker.md"),
+      serializeAgentType({
+        name: "worker",
+        description: "Worker",
+        systemPrompt: body,
+        models: ["openai/gpt-4.1"],
+        modelSuggestions: ["Claude Opus", "GPT"],
+      }),
+    );
+    store.reload();
+    const edited = editorContext(
+      root,
+      ["worker", "modelSuggestions", "modelSuggestions", "Cancel", undefined],
+      ["Sonnet\n\n GPT \n", undefined],
+    );
+    await editAgentTypes(edited.ctx, store);
+    const editedMenus = unsavedMenus(edited.menus);
+    assert.equal(
+      editedMenus[1]!.options.includes("modelSuggestions: Sonnet, GPT"),
+      true,
+    );
+    assert.equal(
+      editedMenus[2]!.options.includes("modelSuggestions: Sonnet, GPT"),
+      true,
+    );
+    assert.deepEqual(store.get("worker").modelSuggestions, ["Claude Opus", "GPT"]);
+
+    const duplicate = editorContext(
+      root,
+      ["worker", "modelSuggestions", "Cancel", undefined],
+      ["GPT\nGPT"],
+    );
+    await editAgentTypes(duplicate.ctx, store);
+    assert.match(duplicate.diagnostics.join("\n"), /duplicate/);
+    assert.equal(
+      unsavedMenus(duplicate.menus).at(-1)!.options.includes(
+        "modelSuggestions: Claude Opus, GPT",
+      ),
+      true,
+    );
+    assert.deepEqual(store.get("worker").modelSuggestions, ["Claude Opus", "GPT"]);
+
+    const saved = editorContext(
+      root,
+      ["worker", "modelSuggestions", "Save", "Global", undefined],
+      ["Sonnet\n\n GPT \n"],
+    );
+    await editAgentTypes(saved.ctx, store);
+    assert.deepEqual(store.get("worker").modelSuggestions, ["Sonnet", "GPT"]);
+    assert.deepEqual(store.get("worker").models, ["openai/gpt-4.1"]);
+    assert.equal(store.get("worker").systemPrompt, body);
+    const persisted = await readFile(store.get("worker").filePath!, "utf8");
+    assert.match(persisted, /modelSuggestions:\n  - Sonnet\n  - GPT/);
+    assert.match(persisted, /models:\n  - openai\/gpt-4\.1/);
+
+    const cleared = editorContext(
+      root,
+      ["worker", "modelSuggestions", "Save", "Global", undefined],
+      ["\n  \n"],
+    );
+    await editAgentTypes(cleared.ctx, store);
+    assert.equal(store.get("worker").modelSuggestions, undefined);
+    assert.deepEqual(store.get("worker").models, ["openai/gpt-4.1"]);
+    assert.doesNotMatch(
+      await readFile(store.get("worker").filePath!, "utf8"),
+      /modelSuggestions/,
+    );
+
+    await writeFile(
+      join(userAgentsDir(agentDir), "worker.md"),
+      serializeAgentType({
+        name: "worker",
+        description: "Worker",
+        systemPrompt: body,
+        modelSuggestions: [],
+      }),
+    );
+    store.reload();
+    const keptEmpty = editorContext(
+      root,
+      ["worker", "modelSuggestions", "description", "Save", "Global", undefined],
+      ["", "Still empty"],
+    );
+    await editAgentTypes(keptEmpty.ctx, store);
+    assert.equal(
+      keptEmpty.editors[0]?.prefill,
+      "",
+      "empty suggestions prefill as a blank multiline editor",
+    );
+    assert.deepEqual(store.get("worker").modelSuggestions, []);
+    assert.equal(store.get("worker").description, "Still empty");
+    assert.match(
+      await readFile(store.get("worker").filePath!, "utf8"),
+      /modelSuggestions: \[\]/,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -25,6 +25,8 @@
     "src",
     "agents",
     "docs/default-agents.md",
+    "docs/research-model-roles-coding.md",
+    "docs/research-model-roles-writing.md",
     "README.md"
   ],
   "pi": {

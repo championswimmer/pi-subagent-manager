@@ -363,7 +363,7 @@ test("bounds the widget to ten lines and counts every omitted real agent", () =>
   );
   const five = renderAgentTree(many.slice(0, 5), 80, theme);
   assert.equal(five.length, 10);
-  assert.match(plain(five).at(-1)!, /^\+1 more agents · \/agents status$/);
+  assert.match(plain(five).at(-1)!, /^\+1 more agents · \/agents tree$/);
   assert.match(plain(five).join("\n"), /Job 0/);
   assert.equal(
     plain(five).some((line) => line.includes("Job 4")),
@@ -371,7 +371,7 @@ test("bounds the widget to ten lines and counts every omitted real agent", () =>
   );
   const six = renderAgentTree(many, 80, theme);
   assert.equal(six.length, 10);
-  assert.match(plain(six).at(-1)!, /^\+2 more agents · \/agents status$/);
+  assert.match(plain(six).at(-1)!, /^\+2 more agents · \/agents tree$/);
   const four = renderAgentTree(many.slice(0, 4), 80, theme);
   assert.equal(four.length, 9);
   assert.equal(
@@ -392,7 +392,7 @@ test("bounds the widget to ten lines and counts every omitted real agent", () =>
   const packed = renderAgentTree(nested, 90, theme);
   assert.equal(packed.length, 10);
   assert.match(plain(packed)[0]!, /7 live · 0 paused$/);
-  assert.match(plain(packed).at(-1)!, /^\+3 more agents · \/agents status$/);
+  assert.match(plain(packed).at(-1)!, /^\+3 more agents · \/agents tree$/);
   assert.ok(indexOf(packed, "Parent") < indexOf(packed, "Child 0"));
   assert.match(plain(packed).join("\n"), /Child 2/);
   assert.equal(

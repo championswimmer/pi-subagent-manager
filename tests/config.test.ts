@@ -61,6 +61,7 @@ test("parse and serialize round-trip all fields and exact Markdown body", () => 
   const type: AgentType = {
     ...definition,
     models: ["provider/model/id", "provider/fallback"],
+    modelSuggestions: ["Claude Opus", "GPT"],
     thinkingLevel: "high",
     color: "accent",
     tools: { allow: [], block: ["bash"] },
@@ -176,6 +177,104 @@ test("validate scalar fields, safe names, model preferences and exact tool polic
     );
 });
 
+test("modelSuggestions accepts display aliases, preserves an explicit empty list, and rejects malformed values", () => {
+  const parsed = parseAgentType(
+    markdown(
+      "models:\n  - provider/model/with/slashes\nmodelSuggestions:\n  - '  Claude Opus  '\n  - GPT\n  - Sonnet\n",
+    ),
+  );
+  assert.deepEqual(parsed.models, ["provider/model/with/slashes"]);
+  assert.deepEqual(parsed.modelSuggestions, ["Claude Opus", "GPT", "Sonnet"]);
+  assert.equal(parsed.modelSuggestions!.some((name) => name.includes("/")), false);
+  parsed.modelSuggestions!.push("mutated");
+  assert.deepEqual(
+    parseAgentType(
+      markdown("modelSuggestions:\n  - '  Claude Opus  '\n  - GPT\n  - Sonnet\n"),
+    ).modelSuggestions,
+    ["Claude Opus", "GPT", "Sonnet"],
+  );
+
+  const empty = parseAgentType(markdown("modelSuggestions: []\n"));
+  assert.deepEqual(empty.modelSuggestions, []);
+  assert.match(serializeAgentType(empty), /modelSuggestions: \[\]/);
+  assert.deepEqual(parseAgentType(serializeAgentType(empty)).modelSuggestions, []);
+  assert.equal(parseAgentType(markdown()).modelSuggestions, undefined);
+  assert.doesNotMatch(serializeAgentType(definition), /modelSuggestions/);
+
+  const untrimmed = ["  Claude Opus  ", "GPT"];
+  const serialized = serializeAgentType({
+    ...definition,
+    modelSuggestions: untrimmed,
+  });
+  untrimmed.push("later");
+  assert.deepEqual(parseAgentType(serialized).modelSuggestions, [
+    "Claude Opus",
+    "GPT",
+  ]);
+  assert.equal(parseAgentType(serialized).models, undefined);
+
+  for (const extra of [
+    "modelSuggestions: Claude Opus\n",
+    "modelSuggestions: null\n",
+    "modelSuggestions:\n  - null\n",
+    "modelSuggestions:\n  - 1\n",
+    "modelSuggestions:\n  - true\n",
+    "modelSuggestions:\n  - ''\n",
+    "modelSuggestions:\n  - '   '\n",
+    "modelSuggestions:\n  - GPT\n  - GPT\n",
+    "modelSuggestions:\n  - Claude Opus\n  - ' Claude Opus '\n",
+  ])
+    assert.throws(() => parseAgentType(markdown(extra)), /modelSuggestions/);
+});
+
+test("ConfigStore clones and saves modelSuggestions without changing model pins", (t) => {
+  const f = fixture(t);
+  const store = new ConfigStore({ ...f, includeProject: true });
+  const input = ["Claude Opus", "GPT"];
+  const saved = store.save(
+    {
+      ...definition,
+      models: ["provider/model"],
+      modelSuggestions: input,
+    },
+    "user",
+  );
+  input.push("mutated-input");
+  saved.modelSuggestions!.push("mutated-return");
+  assert.deepEqual(store.get("example").modelSuggestions, ["Claude Opus", "GPT"]);
+  assert.deepEqual(store.get("example").models, ["provider/model"]);
+  const listed = store.list().find((type) => type.name === "example")!;
+  listed.modelSuggestions!.reverse();
+  assert.deepEqual(store.get("example").modelSuggestions, ["Claude Opus", "GPT"]);
+  assert.notEqual(
+    store.get("example").modelSuggestions,
+    store.list().find((type) => type.name === "example")!.modelSuggestions,
+  );
+  assert.match(
+    readFileSync(saved.filePath!, "utf8"),
+    /models:\n  - provider\/model\nmodelSuggestions:\n  - Claude Opus\n  - GPT\n/,
+  );
+
+  store.save({ ...definition, modelSuggestions: [] }, "user");
+  assert.deepEqual(store.get("example").modelSuggestions, []);
+  assert.equal(store.get("example").models, undefined);
+  assert.match(
+    readFileSync(store.get("example").filePath!, "utf8"),
+    /modelSuggestions: \[\]/,
+  );
+
+  const cleared = store.save(
+    { ...definition, description: "No suggestions" },
+    "user",
+  );
+  assert.equal(cleared.modelSuggestions, undefined);
+  assert.equal(store.get("example").modelSuggestions, undefined);
+  assert.doesNotMatch(
+    readFileSync(cleared.filePath!, "utf8"),
+    /modelSuggestions/,
+  );
+});
+
 test("selectTools has exact names, empty allow, block wins and stable available order", () => {
   const available = ["read", "bash", "agent_update"];
   assert.deepEqual(selectTools(undefined, available), available);
@@ -198,7 +297,7 @@ test("selectTools has exact names, empty allow, block wins and stable available 
     assert.throws(() => selectTools(policy, available));
 });
 
-test("bundled defaults are the eight specialist roles", () => {
+test("bundled defaults are architect, coder, reviewer, tasker and writer", () => {
   const store = new ConfigStore({
     cwd: "/nonexistent-project",
     agentDir: "/nonexistent-user",
@@ -206,7 +305,7 @@ test("bundled defaults are the eight specialist roles", () => {
   });
   assert.deepEqual(
     store.list().map((type) => type.name),
-    ["architect", "coder", "designer", "explorer", "researcher", "reviewer", "tasker", "writer"],
+    ["architect", "coder", "reviewer", "tasker", "writer"],
   );
 });
 
@@ -294,7 +393,58 @@ test("duplicate declared names in malformed file cannot resurrect lower policy",
   assert.match(store.diagnostics[0], /unique|duplicate/i);
 });
 
-test("legacy and bundled edits copy on write into preferred storage", (t) => {
+test("legacy agent directories are ignored and do not override or fail closed", (t) => {
+  const f = fixture(t);
+  writeFileSync(
+    join(f.bundledDir, "example.md"),
+    serializeAgentType({ ...definition, description: "bundled" }),
+  );
+  writeFileSync(join(f.userLegacy, "example.md"), "not frontmatter");
+  writeFileSync(
+    join(f.userLegacy, "legacy-only.md"),
+    serializeAgentType({
+      ...definition,
+      name: "legacy-only",
+      description: "Legacy user",
+    }),
+  );
+  writeFileSync(
+    join(f.projectLegacy, "example.md"),
+    serializeAgentType({ ...definition, description: "Legacy project" }),
+  );
+  writeFileSync(join(f.projectLegacy, "broken.md"), ":\n  [");
+  const store = new ConfigStore({ ...f, includeProject: true });
+  assert.equal(store.get("example").description, "bundled");
+  assert.equal(store.get("example").source, "bundled");
+  assert.equal(
+    store.get("example").filePath,
+    join(f.bundledDir, "example.md"),
+  );
+  assert.throws(() => store.get("legacy-only"), /Unknown or invalid/);
+  assert.deepEqual(store.diagnostics, []);
+
+  rmSync(f.userLegacy, { recursive: true });
+  const outside = join(f.agentDir, "outside-package");
+  mkdirSync(outside);
+  writeFileSync(
+    join(outside, "hijack.md"),
+    serializeAgentType({
+      ...definition,
+      name: "hijack",
+      description: "External package",
+    }),
+  );
+  symlinkSync(outside, f.userLegacy);
+  rmSync(f.projectLegacy, { recursive: true });
+  symlinkSync(outside, f.projectLegacy);
+  store.reload();
+  assert.throws(() => store.get("hijack"), /Unknown or invalid/);
+  assert.throws(() => store.get("legacy-only"), /Unknown or invalid/);
+  assert.equal(store.get("example").source, "bundled");
+  assert.deepEqual(store.diagnostics, []);
+});
+
+test("bundled and canonical saves write only preferred storage", (t) => {
   const f = fixture(t);
   writeFileSync(
     join(f.bundledDir, "bundled-only.md"),
@@ -305,14 +455,34 @@ test("legacy and bundled edits copy on write into preferred storage", (t) => {
     }),
   );
   writeFileSync(
-    join(f.userLegacy, "example.md"),
-    serializeAgentType({ ...definition, description: "Legacy user" }),
+    join(f.user, "custom.md"),
+    serializeAgentType({
+      ...definition,
+      name: "custom-file",
+      description: "Custom file",
+    }),
   );
   writeFileSync(
-    join(f.projectLegacy, "project-only.md"),
+    join(f.project, "project-agent.md"),
     serializeAgentType({
       ...definition,
       name: "project-only",
+      description: "Canonical project",
+    }),
+  );
+  writeFileSync(
+    join(f.userLegacy, "untouched.md"),
+    serializeAgentType({
+      ...definition,
+      name: "untouched",
+      description: "Legacy user",
+    }),
+  );
+  writeFileSync(
+    join(f.projectLegacy, "untouched.md"),
+    serializeAgentType({
+      ...definition,
+      name: "untouched",
       description: "Legacy project",
     }),
   );
@@ -325,50 +495,58 @@ test("legacy and bundled edits copy on write into preferred storage", (t) => {
     bundled,
   );
   assert.equal(savedBundled.filePath, join(f.user, "bundled-only.md"));
+  assert.equal(savedBundled.source, "user");
   assert.equal(
     parseAgentType(readFileSync(join(f.bundledDir, "bundled-only.md"), "utf8"))
       .description,
     "Bundled only",
   );
-
-  const legacyUser = store.get("example");
-  assert.equal(legacyUser.filePath, join(f.userLegacy, "example.md"));
-  const savedUser = store.save(
-    { ...legacyUser, description: "Preferred user" },
-    "user",
-    legacyUser,
-  );
-  assert.equal(savedUser.filePath, join(f.user, "example.md"));
+  assert.equal(store.get("bundled-only").description, "Bundled override");
   assert.equal(
-    parseAgentType(readFileSync(join(f.userLegacy, "example.md"), "utf8"))
+    store.get("bundled-only").filePath,
+    join(f.user, "bundled-only.md"),
+  );
+
+  const custom = store.get("custom-file");
+  assert.equal(custom.filePath, join(f.user, "custom.md"));
+  assert.equal(custom.source, "user");
+  const savedCustom = store.save(
+    { ...custom, description: "Updated custom" },
+    "user",
+    custom,
+  );
+  assert.equal(savedCustom.filePath, join(f.user, "custom.md"));
+  assert.equal(
+    parseAgentType(readFileSync(join(f.user, "custom.md"), "utf8"))
+      .description,
+    "Updated custom",
+  );
+  assert.equal(store.get("custom-file").description, "Updated custom");
+  assert.ok(!readdirSync(f.user).includes("custom-file.md"));
+
+  const projectAgent = store.get("project-only");
+  assert.equal(projectAgent.filePath, join(f.project, "project-agent.md"));
+  const savedProject = store.save(
+    { ...projectAgent, description: "Preferred project" },
+    "project",
+    projectAgent,
+  );
+  assert.equal(savedProject.filePath, join(f.project, "project-agent.md"));
+  assert.equal(savedProject.source, "project");
+  assert.equal(store.get("project-only").description, "Preferred project");
+  assert.ok(!readdirSync(f.project).includes("project-only.md"));
+  assert.equal(
+    parseAgentType(readFileSync(join(f.userLegacy, "untouched.md"), "utf8"))
       .description,
     "Legacy user",
   );
-  assert.equal(store.get("example").description, "Preferred user");
-  assert.equal(store.get("example").filePath, join(f.user, "example.md"));
-
-  const legacyProject = store.get("project-only");
   assert.equal(
-    legacyProject.filePath,
-    join(f.projectLegacy, "project-only.md"),
-  );
-  const savedProject = store.save(
-    { ...legacyProject, description: "Preferred project" },
-    "project",
-    legacyProject,
-  );
-  assert.equal(savedProject.filePath, join(f.project, "project-only.md"));
-  assert.equal(
-    parseAgentType(
-      readFileSync(join(f.projectLegacy, "project-only.md"), "utf8"),
-    ).description,
+    parseAgentType(readFileSync(join(f.projectLegacy, "untouched.md"), "utf8"))
+      .description,
     "Legacy project",
   );
-  assert.equal(store.get("project-only").description, "Preferred project");
-  assert.equal(
-    store.get("project-only").filePath,
-    join(f.project, "project-only.md"),
-  );
+  assert.deepEqual(readdirSync(f.userLegacy), ["untouched.md"]);
+  assert.deepEqual(readdirSync(f.projectLegacy), ["untouched.md"]);
 });
 
 test("save validates and atomically writes user/project definitions and reloads", (t) => {

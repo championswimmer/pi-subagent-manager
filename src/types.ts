@@ -9,6 +9,8 @@ export interface AgentType {
   models?: string[];
   /** @deprecated Use ordered models instead. */
   model?: string;
+  /** Advisory display names. Not provider/model pins and never used for selection. */
+  modelSuggestions?: string[];
   thinkingLevel?: ThinkingLevel;
   /** Pi semantic token for the type pill background and task path foreground. */
   color?: string;

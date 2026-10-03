@@ -1,95 +1,105 @@
-# Default agents: task strengths, routing, and model selection
+# Default agents
 
-Research checked **2026-10-02**. These are workflow presets, not a claim that a role prompt makes every model equally capable. Model recommendations are starting points to evaluate, not permanent winners or shipped vendor pins.
+Five bundled roles. `modelSuggestions` are advisory display aliases for evaluation, not runtime pins and not a ranking. Research cutoff for the notes below is **2026-10-03**. Guidance dated **2026-10-02** is historical and is not restated here as a current result. Full sourced notes: [coding roles](research-model-roles-coding.md) and [writing and evidence research](research-model-roles-writing.md).
 
-## Major task families
+Public names do not guarantee access in a particular account, region, Pi adapter, or harness. Confirm a live identity before adding `models`. These aliases do not select a model and do not bypass scoped runtime preferences.
 
-The useful unit is a **work product and its success criterion**, rather than a single intelligence score.
+## Five roles
 
-| Family                            | What success means                                                                   | Relevant evidence and limitations                                                                                                                                                                                                                                                                                                                                              |
-| --------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Repository exploration            | Locate the right symbols, behavior, and conventions with traceable coverage          | [LongBench v2](https://longbench2.github.io/) includes repository/context comprehension. Large context capacity alone does not establish reliable navigation or sustained execution.                                                                                                                                                                                           |
-| Bounded execution / tool use      | Complete a specified operation correctly, within policy, with few unnecessary steps  | [Terminal-Bench](https://www.tbench.ai/) tests environment tasks; [τ-bench](https://arxiv.org/abs/2406.12045) tests policy-constrained tool/user interaction and repeated-run reliability. Scores depend on the tools, scaffold, task version, and budget.                                                                                                                     |
-| Sustained software implementation | Resolve a repository issue through iterative edits, debugging, and verified behavior | [SWE-bench](https://www.swebench.com/SWE-bench/) uses real issues and repository tests. Passing tests does not establish maintainability, security, or review skill.                                                                                                                                                                                                           |
-| Review / critical verification    | Find actionable defects while avoiding plausible false positives                     | [Code Review Bench](https://github.com/withmartian/code-review-benchmark) assesses review precision/recall. Its small offline set, LLM judging, and developer-fix proxy limit generalization. Implementation skill is not the same as reviewer calibration.                                                                                                                    |
-| Evidence research                 | Acquire relevant sources, reconcile evidence, and produce a supported synthesis      | [BrowseComp](https://arxiv.org/abs/2504.12516) tests difficult factual discovery; [DeepResearch Bench](https://deepresearch-bench.github.io/) evaluates reports and citation effectiveness/accuracy. Finding a fact and writing a good sourced report are different competencies.                                                                                              |
-| Creative / editorial writing      | Produce coherent, original prose matching an audience, voice, and brief              | [Creative Writing Bench](https://github.com/EQ-bench/creative-writing-bench) uses rubrics and pairwise judgments. Its English prompts and judge preferences are not universal taste, factual reliability, or long-form editorial quality.                                                                                                                                      |
-| Visual/interface design           | Deliver convincing visual hierarchy and usable interactions across states and sizes  | [WebDev Arena](https://arena.ai/blog/webdev-arena) measures human preferences between generated apps; [Design Arena](https://designarena.ai/) covers creative artifacts. Preference is not an accessibility, security, or production-readiness audit. Design Arena's methodology was not reliably retrievable in this research, so we do not use it to declare a model winner. |
-| Architecture / planning           | Choose defensible tradeoffs and a dependency-valid, verifiable sequence of work      | [PlanBench](https://arxiv.org/abs/2206.10498) tests formal action/state planning. It is not a direct measure of software architecture or multi-agent management; long-context understanding is not an execution guarantee either.                                                                                                                                              |
-| Quantitative / analytical work    | Compute correctly with explicit assumptions, units, reproducibility, and uncertainty | Mathematical reasoning, data analysis, and scientific interpretation deserve a distinct evaluation contract. We document an analyst specialization below rather than pretending coding benchmarks cover it.                                                                                                                                                                    |
+| Agent       | Thinking | Route here for                                                              | Do not use it for                                            |
+| ----------- | -------- | --------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `architect` | `high`   | Requirements, tradeoffs, plans, and evidence research when retrieval exists | Implementing the plan, or treating memory as a source        |
+| `coder`     | `high`   | Iterative implementation, debugging, refactoring, and frontend UI           | Review of its own patch, or visual QA it did not render      |
+| `reviewer`  | `high`   | Independent, non-mutating, evidence-based defects and a minimal local fix   | Applying the fix, style quotas, or speculative redesign      |
+| `tasker`    | `low`    | A bounded job, or a targeted repository lookup with path-and-line coverage  | Ambiguous features, audits, or complex code understanding    |
+| `writer`    | `medium` | Creative drafts and voice-preserving editorial work                         | Live research, or invented facts, citations, or testimonials |
 
-Other important workloads include translation, tutoring, structured extraction, and GUI/computer operation. [OSWorld](https://os-world.github.io/) illustrates why computer use needs both perception and an actual action interface; a shell-only agent cannot inherit that capability from a model score.
+Use uncertainty and dependencies, not a fixed duration, to separate tasker from coder. A narrow lookup stays with tasker. Complex code understanding goes to architect or coder. Writer stays separate from evidence gathering so prose preference does not choose sources.
 
-Vision, language, context utilization, latency, cost, risk, task horizon, and available tools are **cross-cutting dimensions**. Assess them alongside the role. Do not turn every benchmark into another default agent, or infer a universal ranking from one leaderboard.
+Thinking labels are workload defaults. The SDK maps each label onto the selected model's supported levels. That mapping is not a universal token budget. As recorded in the coding research, GPT-6.1 Sol's reference supports low through max, not none or minimal. Do not treat `off` as available on every model.
 
-## Shipped roles and boundaries
+## Six capabilities, five defaults
 
-| Agent        | Default thinking | Route here for                                                                 | Do not use it for                                                      |
-| ------------ | ---------------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
-| `explorer`   | `low`            | Targeted code lookup, file/symbol maps, tracing existing behavior              | Broad audits, architecture decisions, or external research             |
-| `tasker`     | `low`            | A bounded job with clear scope and acceptance criteria                         | An ambiguous, interconnected feature or sustained debugging            |
-| `coder`      | `high`           | Iterative implementation, refactoring, and difficult debugging                 | Independent review of its own work as a substitute for a reviewer      |
-| `reviewer`   | `high`           | Evidence-led assessment of a change; calibrated defect reports                 | Quietly fixing the patch or generating a quota of speculative findings |
-| `researcher` | `high`           | Source acquisition when tooling permits, reconciliation, and synthesis         | Unsourced answers presented as live research; quick code lookup        |
-| `writer`     | `medium`         | Creative long-form drafts and voice-preserving editorial work                  | Fabricating facts, citations, endorsements, or purported experiences   |
-| `designer`   | `medium`         | Frontend visual/interaction work with responsive and accessible states         | Backend redesign or claims of visual QA without rendered inspection    |
-| `architect`  | `high`           | Requirements, alternatives, interfaces, decomposition, authorized coordination | Treating a planning request as permission to execute                   |
+The request named six capabilities and five roles. They ship as five defaults, not one role per capability:
 
-Use uncertainty and dependencies, not a fixed number of minutes, to distinguish tasker from coder. Researcher's high setting favors careful synthesis and conflicting evidence; medium can be sufficient for straightforward source summaries. Writer/designer's medium setting is a balance, not a statement that creativity improves monotonically with more reasoning. Increase effort only when it improves the actual work product. The SDK maps requested thinking to the selected model's supported levels; the requested label is not a universal token budget.
+| Capability                               | Shipped role                           |
+| ---------------------------------------- | -------------------------------------- |
+| Architecture and planning                | `architect`                            |
+| Evidence research                        | `architect`, not a separate researcher |
+| Independent review                       | `reviewer`                             |
+| Implementation                           | `coder`                                |
+| Frontend and UI implementation           | `coder`, not a separate designer       |
+| Cheap bounded work and repository lookup | `tasker`                               |
 
-Every default has an explicit allowlist. Only architect has delegation tools, and it plans only unless delegation/execution is authorized. Explorer cannot write or execute shell commands. Reviewer/researcher/architect have shell access for inspection or retrieval, so their non-mutation rules are **prompt contracts, not enforced read-only sandboxes**. Bash and delegated children can change files. Writer can edit drafts but has no shell access; implementation roles can edit and run checks. Agents share the working directory and must preserve unrelated changes.
+`writer` is the fifth role. It covers creative and editorial prose and does not absorb research. Keeping writing separate avoids optimizing evidence collection for a compelling narrative.
 
-## Research and browser capability gates
+Removed bundled files, with no runtime alias and no automatic migration:
 
-The child runtime does **not** load the parent's extensions, MCP tools, skills, web search, or browser tools. These definitions do not change that runtime.
+| Removed file    | Send that work to                                                    |
+| --------------- | -------------------------------------------------------------------- |
+| `researcher.md` | `architect`, subject to the retrieval gate below                     |
+| `designer.md`   | `coder`, subject to the rendered and accessibility gate below        |
+| `explorer.md`   | `tasker` when the question is targeted; otherwise architect or coder |
 
-Researcher can use supplied/local sources and an available, authorized shell retrieval/search workflow. If live acquisition is unavailable, it must pause for sources or a supported retrieval route rather than improvise citations. A provider's hosted-search feature does not mean that feature is exposed as a child tool. Likewise, designer may use available CLI browser tooling, but code checks do not prove that a page was rendered, accessible, or visually inspected. A delegated child does not magically gain the parent's unavailable capabilities.
+A custom user or project definition may still use the names `researcher`, `designer`, or `explorer`. Same-name definitions override bundled ones. Retained threads keep the definition saved on the thread. Nothing is renamed.
 
-## Model recommendations, not vendor locks
+The older bundled `worker` stays removed: tasker for bounded jobs, coder for sustained implementation. Quantitative or other specializations remain custom definitions, not extra bundled roles.
 
-**All bundled definitions omit `models` and inherit the effective parent/default model.** This preserves usability across providers and accounts. Different models can be assigned per role through `/agents types` or same-name user/project definitions.
+## Tool and capability boundaries
 
-An explicit `models` list is ordered, exact `provider/model-id` matching against `/scoped-models`. If no preference matches, including an empty scope, spawning fails. It is **not** a fallback to the parent, account registry, or a cheaper model after an API failure. The chosen entry must be a usable physical model, not a virtual selector. Confirm credentials, account entitlement, installed Pi adapter support, and the live scoped identities before adding pins.
+Every default has an explicit allowlist. Only architect has delegation tools. A planning or research request does not authorize implementation. Architect has no edit or write tools. Reviewer has no edit or write tools. Writer has no shell. Coder and tasker can edit and run checks. Tasker's lookup path is still non-mutating: a read-only question does not authorize an edit.
 
-Candidate starting points from the sources below:
+These boundaries are prompt contracts plus tool filtering, **not an OS sandbox**. Bash and delegated children can change the shared working tree. Agents must preserve unrelated work.
 
-| Roles               | Optional model candidates                                                                   | Evidence strength / tradeoff                                                                                                                                         |
-| ------------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Explorer, tasker    | `openai/gpt-6-luna`; `anthropic/claude-sonnet-5-5` for harder bounded work                  | Luna targets inexpensive focused work. Sonnet's vendor positioning emphasizes well-scoped tasks. Evaluate completion checks and retries, not token price alone.      |
-| Coder               | `anthropic/claude-opus-5-5`; Sonnet 5.5 for cost-sensitive implementation                   | Anthropic positions Opus for sustained open-ended judgment. Independent terminal results also make Sonnet a credible coding candidate, not merely a weaker fallback. |
-| Reviewer, architect | `anthropic/claude-opus-5-5`; `openai/gpt-6.1-sol` as an alternative to evaluate             | Reasoning and calibration matter. Current role-specific independent evidence for Sol is insufficient here to call it a winner.                                       |
-| Researcher          | `google/gemini-3.8-flash` for efficient source synthesis; Opus for difficult reconciliation | Flash offers broad multimodal inputs and low/medium/high thinking. Neither choice supplies missing retrieval tools.                                                  |
-| Writer, designer    | `anthropic/claude-sonnet-5-5`; Opus for demanding editorial/design work                     | Clearer prose and visual polish are vendor claims and early-tester observations. Validate against your own voice samples and rendered UI, not a coding score.        |
+Children do not inherit the parent's extensions, MCP servers, skills, browser, or web tools.
 
-Sources: [Sonnet 5.5 announcement](https://www.anthropic.com/claude-sonnet-5-5), [Opus 5.5 announcement](https://www.anthropic.com/claude-opus-5-5), [independent Sonnet analysis](https://artificialanalysis.ai/articles/claude-sonnet-5-5), [Luna API reference](https://developers.openai.com/api/docs/models/gpt-6-luna), [Sol API reference](https://developers.openai.com/api/docs/models/gpt-6.1-sol), [Flash reference](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash), and [independent Luna/Flash comparison](https://artificialanalysis.ai/models/releases/comparisons/gpt-6-luna-vs-gemini-3-8-flash). Model availability and recommendations will age; use the [Pi catalog](https://pi.dev/models) and your actual runtime to verify identities. Catalog presence alone does not prove installed adapter support or account access.
+Exa provider discovery and full-page fetch can be available in a session that has those provider tools. The 2026-10-03 research used that route. Named Exa MCP tools are not callable by a bundled child, and they are not in architect's allowlist. Do not document or instruct the child to call `mcp__exa__web_search_exa` or `mcp__exa__web_fetch_exa`. Architect uses supplied or local evidence, including a parent research packet, or a genuinely available authorized shell retrieval workflow. An Exa CLI or API counts only when it is actually configured and the task authorizes network access. Otherwise architect pauses. Model memory is not live evidence. Delegation does not give children tools the parent happened to have.
 
-Independent terminal results and vendor results use different scaffolds/effort, and the independent Sonnet analysis notes a pre-release deployment issue. Do not combine their scores into one ranking. Creative-writing and WebDev leaderboard extraction was incomplete during this research; we deliberately make no current leaderboard-winner claim.
+Coder may implement frontend UI in the project's existing system, including focus, state coverage, and narrow-width hierarchy. A screenshot, browser check, or accessibility pass counts only if tooling in that session rendered the UI and the agent inspected the result. A CSS reading is not visual verification. If no browser tooling is available, the layout stays visually unverified.
 
-For an opt-in coder override, preserve the bundled prompt/tool policy in `/agents types` and set, for example:
+Reviewer reports demonstrable defects and asks for the smallest local repair or removal. It does not propose a speculative abstraction when a local change or deletion would fix the defect, and it does not apply the fix.
 
-```yaml
-models:
-  - anthropic/claude-opus-5-5
-  - anthropic/claude-sonnet-5-5
-thinkingLevel: high
-```
+## Advisory aliases and runtime models
 
-This is a **frontmatter fragment**, not a complete definition. Both IDs are examples requiring live scope and runtime validation. Do not use `off` as a universal cheap mode: some newer reasoning models cannot disable thinking; support for minimal/max also varies by model and adapter.
+Bundled definitions omit `models` and `model`. They inherit the effective parent or default model. An explicit `models` list is ordered exact `provider/model-id` matching. With scoped filtering on, a miss fails spawn. It does not fall back to a suggestion, the parent, or a cheaper model. `modelSuggestions` never participate in that match and never bypass scoped runtime preferences.
 
-## Optional analyst specialization
+Same-name user definitions override bundled ones. Trusted project definitions override user ones. An override keeps the suggestions it declares; it still does not select a model unless it also sets `models` or `model`.
 
-Keep the default set small: mathematical/data work can use tasker for a specified computation and coder for an iterative analysis pipeline. Create a separate `analyst` when this becomes a recurring workload with a distinct acceptance contract:
+The lists below are the initial advisory aliases. They are provisional display names for humans and editors. They are not verified winners, not availability guarantees, and not pins.
 
-- State inputs, provenance, units, missingness, and assumptions before calculating.
-- Use reproducible code for calculations; distinguish measured values from estimates.
-- Check dimensional consistency, totals, baselines, and sensitivity to assumptions.
-- Separate correlation, causation, and forecast uncertainty.
-- Return the method, results, reproducibility instructions, and limitations; never invent data.
+| Role        | Advisory display aliases                      |
+| ----------- | --------------------------------------------- |
+| `architect` | `opus-5.5`, `gpt-6-astra`, `gpt-6.1-sol`      |
+| `coder`     | `sonnet-5.5`, `gpt-6.1-sol`, `muse-spark-1.3` |
+| `reviewer`  | `gpt-6.1-sol`, `gpt-6-astra`                  |
+| `tasker`    | `gpt-6-luna`, `deepseek-4.1-flash`            |
+| `writer`    | `opus-5.5`, `gemini-4-argon`, `gpt-6-astra`   |
 
-Choose thinking and write permissions based on the analysis, not the role name alone. Other specializations—translator, tutor, extraction worker, or GUI operator—should similarly add a concrete contract and required capabilities, not merely a different title.
+How to read them, without treating them as configuration:
 
-## Migration and evaluation
+- `opus-5.5` and `sonnet-5.5` are display aliases for Claude Opus 5.5 and Claude Sonnet 5.5. Official docs, as recorded on 2026-10-03, use `claude-opus-5-5` and `claude-sonnet-5-5`.
+- `gpt-6.1-sol`, `gpt-6-astra`, and `gpt-6-luna` match the official model-reference IDs recorded in that research. Sol's launch page was not directly readable then (HTTP 403); identity also rests on the model reference.
+- `muse-spark-1.3` is the requested Muse Spark 1.3 candidate for coder. It is not a writing suggestion. The wording `must-spark` is not a verified product name. Standard and Contributor tiers differ in data-use terms and available reasoning effort: max is Standard-only. Do not silently pick Contributor for confidential work.
+- `deepseek-4.1-flash` is a display alias only. The documented direct-provider ID is `deepseek-flash` (DeepSeek-V4.1-Flash). A guessed `deepseek-v4.1-flash` is not that ID. Legacy `deepseek-v4-flash` is an alias that routes to the current Flash model, not a second product.
+- `gemini-4-argon` is an advisory display name for Gemini 4 Argon. The announcement describes phased, restricted access. Use it only if it is actually available. No API ID was verified for this alias. Guessed `gemini-3.8-pro` is not suggested.
+- Fable names appear in writing benchmarks. A provider route was not verified, so Fable is not suggested.
 
-The generic bundled `worker` is removed: use tasker for bounded jobs and coder for sustained implementation. Repository lookup formerly sent to researcher should go to explorer. Architect and researcher keep their names but have new prompts, explicit tools, and thinking defaults. Same-name custom definitions still override bundled ones; retained threads keep their saved definitions. There are no runtime aliases or automatic renames.
+Reviewer's list is GPT-only because that was the requested second-family preference, together with a minimal-solution review contract. It is not a claim that GPT models have the best review precision, and not a claim that GPT models always write less code. Conciseness is not a family invariant; control it in the review task.
 
-Evaluate model + preset + actual tools + budget on representative jobs: task completion and retries for execution, passing behavior and regressions for coding, precision/recall for review, citation support/coverage for research, voice/coherence for writing, rendered states/accessibility for design, and dependency validity and acceptance criteria for plans. Track total tokens, latency, and failure cost as well as quality. Independent review and real execution checks are stronger evidence than another model saying a result looks correct.
+Coder's Muse entry is a pilot candidate for implementation, not the writing research winner. Writer's list prefers Opus 5.5 as a generally documented model, Argon only when accessible, and Astra as another documented candidate. None of these lists is a universal winner.
+
+## Evidence checked 2026-10-03
+
+This is a short index of the two research reports, not a new benchmark run. Live pages can change. Release dates below are dates those reports recorded from sources, not independently redeployed timestamps. Do not merge vendor scores, secondary leaderboards, and human-preference Elo into one ranking.
+
+**Official identity pages.** Claude Opus 5.5 and Sonnet 5.5: [Opus docs](https://platform.claude.com/docs/en/models/opus-5-5/overview), [Sonnet docs](https://platform.claude.com/docs/en/models/sonnet-5-5/overview), [Sonnet launch](https://www.anthropic.com/claude-sonnet-5-5). OpenAI references: [Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol), [Astra](https://developers.openai.com/api/docs/models/gpt-6-astra), [Luna](https://developers.openai.com/api/docs/models/gpt-6-luna). Muse Spark 1.3: [Meta models](https://dev.meta.ai/docs/models), [product page](https://developer.meta.com/ai/models/muse-spark/). DeepSeek-V4.1-Flash: [Sep 10, 2026 release](https://api-docs.deepseek.com/news/news260910). Gemini 4 Argon: [announcement](https://blog.google/innovation-and-ai/models-and-research/gemini-models/gemini-4-argon/). Argon access is phased and restricted; the name is not an API pin.
+
+**Terminal-Bench and DeepSWE do not transfer across harnesses.** Anthropic's Sep 28, 2026 Sonnet launch reports Terminal-Bench 4.0 results under that table's settings, including Sonnet 5.5 at 70.6% and Opus 5.5 at 66.4% subject to the launch footnote. DeepSeek's model card reports different Terminal-Bench versions on its own harness: 90.6 on 2.1, 30.0 on 3.0, and 31.2 on 4.0. Those figures are not one test and must not be compared as if they were. The same card reports DeepSWE v1.1 at 74.2 with mini-SWE at maximum reasoning effort, versus 66.2 in Pi, 65.6 in Codex, and 69.8 in Claude Code. Harness and effort dominate narrow gaps. Strong max-effort scores do not establish cheap low-effort tasker behavior. Secondary DeepSWE rows are not a verified common-harness ranking. No version-matched SWE-bench set for this shortlist was established. Boards: [Terminal-Bench](https://www.tbench.ai/leaderboard), [DeepSWE](https://deepswe.datacurve.ai/), [DeepSeek card](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash). Detail and dropped sources: [coding research](research-model-roles-coding.md).
+
+**Human preference is not citation fidelity.** Arena's creative-writing index, freshest dated snapshot found **2026-10-02**, measures blind human preference. Indexed figures placed `gemini-4-argon-high` and `claude-opus-5.5-high` close together, with overlapping intervals. The original child obtained those numbers from a source-linked index; the parent subsequently confirmed the primary creative-writing table through Exa MCP fetch on 2026-10-03, and `high` is a tested configuration rather than proof of an API name. EQ-Bench's fetched JS snapshot is a different instrument: LLM-judged short-form Elo, another scale, and no verified evaluation date on the asset. It ranked GPT-6 Astra and Claude Fable 5.1 above Claude Opus 5.5. That does not make Fable an available route, and it does not measure source support. DeepResearch Bench separates report quality from citation accuracy; its historical agent-system results are not an October 2026 ranking of these aliases. BrowseComp is difficult web answering, not faithful report writing. No source established a universal writing-plus-citation winner. [Arena creative writing](https://arena.ai/leaderboard/text/creative-writing), [EQ-Bench](https://eqbench.com/creative_writing.html), [DeepResearch Bench](https://deepresearch-bench.github.io/). Detail: [writing and evidence research](research-model-roles-writing.md).
+
+**Review.** No matched review-precision result supports a Sol or Astra win over other families. The GPT-only suggestion list is a user preference for a second perspective, plus the smallest-local-repair contract above. It is not a SOTA precision or conciseness claim.
+
+**API and pricing compatibility.** Sol tools require Responses API; Luna's Chat Completions function calling requires `reasoning_effort=none`. Check the actual harness before selecting either. OpenAI prices in the coding report are Standard short-context rates, with higher long-context rates; Luna applies its higher tier above 272K input tokens. Meta Contributor cannot use max reasoning. These constraints do not affect advisory metadata or automatically select a runtime. [Sol reference](https://developers.openai.com/api/docs/models/gpt-6.1-sol), [Luna reference](https://developers.openai.com/api/docs/models/gpt-6-luna), [pricing](https://developers.openai.com/api/docs/pricing), [Meta reasoning](https://ai.developer.meta.com/docs/reasoning/).
+
+Evaluate a candidate on representative jobs before any runtime pin: accepted behavior and regressions for coder, actionable precision and false positives for reviewer, requirement coverage for architect, exact acceptance checks for tasker, and voice plus claim support for writer. Track effort, retries, tokens, and latency. A model saying a result looks correct is weaker evidence than an independent check.
