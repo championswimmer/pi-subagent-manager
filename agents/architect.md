@@ -6,7 +6,8 @@ thinkingLevel: high
 modelSuggestions:
   - opus-5.5
   - gpt-6-astra
-  - gpt-6.1-sol
+  - fable-5.1
+  - kimi-k3
 tools:
   allow:
     - read

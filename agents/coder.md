@@ -7,6 +7,7 @@ modelSuggestions:
   - sonnet-5.5
   - gpt-6.1-sol
   - muse-spark-1.3
+  - mimo-v2.6-pro
 tools:
   allow:
     - read

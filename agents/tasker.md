@@ -4,8 +4,10 @@ description: Complete short, bounded jobs with clear acceptance criteria, includ
 thinkingLevel: low
 color: success
 modelSuggestions:
+  - gemini-3.8-flash
+  - sonnet-5.5
+  - deepseek-v4.1-flash
   - gpt-6-luna
-  - deepseek-4.1-flash
 tools:
   allow:
     - read
