@@ -10,6 +10,7 @@ import {
   DEFAULT_MANAGER_SETTINGS,
   saveManagerSettings,
   type ManagerSettings,
+  type SubagentMode,
 } from "./settings.ts";
 import { editAgentTypes } from "./ui.ts";
 
@@ -30,6 +31,30 @@ const FIELDS = [
     help: "How many agent sessions can be kept for follow-up work, including completed and paused agents. At the limit, new agents cannot start. Positive safe integer.",
   },
 ] as const;
+
+const MODE_OPTIONS = [
+  {
+    id: "off",
+    label: "Off",
+    value: "No subagent tools or prompt guidance",
+    help: "Off: hide subagent tools and inject no subagent guidance into the system prompt. Existing work and retained sessions are kept.",
+  },
+  {
+    id: "opportunistic",
+    label: "Opportunistic",
+    value: "Parallelizable or very large tasks only",
+    help: "Opportunistic: make subagent tools available. Delegate only when tasks can be parallelized or a task is very large; otherwise work directly.",
+  },
+  {
+    id: "orchestration",
+    label: "Orchestration",
+    value: "/root coordinates; subagents execute",
+    help: "Orchestration: tell /root to delegate all task execution to subagents and only coordinate and synthesize results. This rule is not inherited by workers.",
+  },
+] as const;
+
+const MODE_HELP =
+  "Off: no subagent tools or prompt guidance. Opportunistic: delegate only parallelizable or very large tasks. Orchestration: /root delegates all execution and only coordinates and synthesizes results.";
 
 const SCOPED_MODEL_FILTERING = {
   id: "scopedModelFiltering",
@@ -70,6 +95,12 @@ async function configureAgentsDialog(
       ctx,
       `Agents settings${dirty ? " · unsaved" : ""}`,
       [
+        {
+          id: "subagentMode",
+          label: "Subagent Mode",
+          value: MODE_OPTIONS.find((mode) => mode.id === draft.subagentMode)!.label,
+          help: MODE_HELP,
+        },
         ...FIELDS.map((field) => ({
           ...field,
           value: String(draft[field.id]),
@@ -138,6 +169,12 @@ async function configureAgentsDialog(
         )
           throw new Error(field.help);
         draft[field.id] = number;
+      } else if (action === "subagentMode") {
+        const mode = await dialogMenu(ctx, "Subagent Mode", [...MODE_OPTIONS], {
+          selectedId: draft.subagentMode,
+        });
+        if (MODE_OPTIONS.some((option) => option.id === mode))
+          draft.subagentMode = mode as SubagentMode;
       } else if (action === "scopedModelFiltering") {
         draft.scopedModelFiltering = !draft.scopedModelFiltering;
       } else if (action === "scope") {

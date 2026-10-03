@@ -126,7 +126,7 @@ Project types override global types. Malformed definitions and same-scope duplic
 
 ### Import existing agents
 
-On the first interactive TUI session, the manager discovers external definitions read-only and offers an import. After accepting, a **checkbox picker** lets you choose individual agents; nothing is selected by default. **↑↓** navigates, **Space** toggles a row, **Ctrl+A** toggles all, **Enter** submits (an empty selection skips), and **Esc** cancels. `/agents import` opens the picker again later, including after declining or cancelling.
+On the first interactive TUI session with subagents enabled, the manager discovers external definitions read-only and offers an import. **Off** mode suppresses this automatic offer. After accepting, a **checkbox picker** lets you choose individual agents; nothing is selected by default. **↑↓** navigates, **Space** toggles a row, **Ctrl+A** toggles all, **Enter** submits (an empty selection skips), and **Esc** cancels. `/agents import` opens the picker again later, including after declining or cancelling.
 
 The current session's model receives **only the selected file paths**, applicable source settings paths, the exact destination schema, current scoped models/tools, and detailed field-by-field migration instructions. It reads and writes the definitions itself in the existing conversation—there is **no deterministic conversion code** or separate importer agent/session. Originals remain untouched. Unsupported capabilities, lost security restrictions, unavailable models and collisions must be explained and approved before writing; compatible definitions need no second all-or-nothing selection. Definitions reload after model turns, or explicitly with `/agents reload`.
 
@@ -143,7 +143,7 @@ Automatic project discovery requires project trust. Only agent definitions are o
 - `/agents types`: open the bordered agent-definition browser and two-column editor: **field names** on the left, **current values** on the right. **↑↓/Tab** selects fields, **Enter** edits, **Ctrl+S** saves, and **Esc** discards the draft. Multiline field dialogs use **Enter** for a newline and **Ctrl+S** to apply to the draft. Edit the system prompt, models, thinking, tools, color and save scope. Model preferences use an ordered picker: add available models (scoped entries are marked), remove entries, and move them up/down. The YAML editor edits the header together; **External editor** edits the whole Markdown file using `$VISUAL`, `$EDITOR`, or `vi`.
 - `/agents import`: select individual external definitions for model-driven migration.
 - `/agents reload`: reload definitions and show diagnostics.
-- `/agents` or `/agents settings`: open a bordered settings dialog. Edit level, concurrency and retained-thread limits, toggle **Scoped model filtering**, choose global or trusted-project scope, and save with **Ctrl+S**. Settings apply immediately without interrupting existing work. **Agent definitions** opens the type editor.
+- `/agents` or `/agents settings`: open a bordered settings dialog. Choose **Subagent Mode** (**Off**, **Opportunistic**, or **Orchestration**), edit level, concurrency and retained-thread limits, toggle **Scoped model filtering**, choose global or trusted-project scope, and save with **Ctrl+S**. The mode field and chooser explain each option. Settings apply immediately without interrupting existing work. **Agent definitions** opens the type editor.
 - `/agents tree`: open a live, bordered tree of all retained agents, including running and paused sessions. **↑↓** select, **←→** collapse/expand, **PgUp/PgDn** scroll, **Enter** inspects the selected thread, **Esc** close. The dialog refreshes every second and preserves selection. An optional path preselects that agent, for example `/agents tree /root/controller-security-research`.
 - `/agents status`: alias of `/agents tree`.
 
@@ -192,11 +192,20 @@ Settings belong to **this extension**, not another subagent package:
   "maxLevels": 3,
   "maxConcurrent": 16,
   "maxThreads": 64,
-  "scopedModelFiltering": true
+  "scopedModelFiltering": true,
+  "subagentMode": "opportunistic"
 }
 ```
 
-All keys are optional. `maxLevels` includes the main conversation as **L1**: the default permits L2 children and L3 grandchildren, but no L4. An independent root such as `/k` is still L2, so independent paths cannot bypass the limit. `maxLevels: 1` disables new children; supported values are integers from 1 to 32.
+All keys are optional. `subagentMode` controls tool availability and concise system-prompt guidance:
+
+- **`off`**: hide subagent tools and inject no subagent guidance. The main model is not told about this plugin; the automatic import offer, thread widget and root notifications are suppressed. `/agents` remains available to change settings or inspect retained threads.
+- **`opportunistic`** (default): expose subagent tools and tell the main model to delegate only parallelizable or very large tasks; otherwise work directly.
+- **`orchestration`**: expose subagent tools and tell `/root` to delegate all task execution. It only coordinates and synthesizes subagent results. This is a prompt policy, not a tool sandbox; the root-only rule is not inherited by workers.
+
+Mode changes apply immediately without canceling running work or discarding retained sessions. Agent import requires **opportunistic** mode because migration uses the main thread's file tools; it is not offered automatically in orchestration mode.
+
+`maxLevels` includes the main conversation as **L1**: the default permits L2 children and L3 grandchildren, but no L4. An independent root such as `/k` is still L2, so independent paths cannot bypass the limit. `maxLevels: 1` disables new children; supported values are integers from 1 to 32.
 
 `maxConcurrent` counts starting/running threads **across the entire tree**, including parents waiting for children; `maxThreads` counts all retained threads. Both require positive safe integers. Capacity exhaustion fails clearly rather than queuing. Omitted settings use the defaults above. Unknown keys, malformed values and symlinked settings paths produce warnings; an invalid file is ignored atomically, preserving the preceding valid layer/defaults.
 

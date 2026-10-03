@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -24,17 +24,24 @@ async function withCommands(
     replies: (string | undefined)[];
     cwd: string;
     notifications: string[];
+    tools: Map<string, any>;
+    widgets: unknown[];
   }) => Promise<void>,
+  options: { initialMode?: "off" | "orchestration" } = {},
 ) {
   const cwd = mkdtempSync(join(tmpdir(), "pi-agents-command-"));
   const oldDir = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = cwd;
-  markImportOffered(cwd); // Command tests do not scan the developer's external agent directories.
+  if (options.initialMode) {
+    mkdirSync(join(cwd, "subagent-manager"), { recursive: true });
+    writeFileSync(join(cwd, "subagent-manager", "settings.json"), JSON.stringify({ subagentMode: options.initialMode }));
+  } else markImportOffered(cwd); // Enabled command tests do not scan external agent directories.
   const sessionManager = SessionManager.inMemory(cwd);
   const hooks = new Map<string, Function>();
   const renders: string[][] = [];
   const replies: (string | undefined)[] = [];
   const notifications: string[] = [];
+  const widgets: unknown[] = [];
   const driver = createDialogDriver({
     theme: { fg: (_token: string, text: string) => text } as Theme,
     width: 100,
@@ -48,8 +55,9 @@ async function withCommands(
     },
   });
   let command: any;
+  const tools = new Map<string, any>();
   const pi = {
-    registerTool() {},
+    registerTool(tool: any) { tools.set(tool.name, tool); },
     registerCommand: (name: string, definition: any) => {
       assert.equal(name, "agents");
       command = definition;
@@ -65,7 +73,7 @@ async function withCommands(
     mode: "tui",
     isProjectTrusted: () => false,
     ui: {
-      setWidget() {},
+      setWidget(_key: string, widget: unknown) { widgets.push(widget); },
       notify: (text: string) => notifications.push(text),
       custom: driver.custom,
     },
@@ -73,7 +81,7 @@ async function withCommands(
   try {
     piSubagent(pi);
     await hooks.get("session_start")!({}, ctx);
-    await body({ command, ctx, hooks, renders, replies, cwd, notifications });
+    await body({ command, ctx, hooks, renders, replies, cwd, notifications, tools, widgets });
   } finally {
     await hooks.get("session_shutdown")?.({}, ctx);
     if (oldDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -120,7 +128,53 @@ test("agents command defaults to settings and saved settings persist and reach t
       { prompt: "User request", systemPrompt: "Main" },
       ctx,
     );
-    assert.match(result.systemPrompt, /maximum is 5 levels/);
+    assert.match(result.systemPrompt, /Maximum depth: 5 levels including L1/);
+  });
+});
+
+test("off startup is silent: no onboarding, visible widget, or tool exposure", async () => {
+  await withCommands(async ({ hooks, ctx, tools, renders, notifications, widgets, cwd }) => {
+    assert.equal(importWasOffered(cwd), false);
+    assert.deepEqual(renders, []);
+    assert.deepEqual(notifications, []);
+    assert.ok(widgets.every((widget) => widget === undefined));
+    assert.ok([...tools.values()].every((tool) => tool.exposure === "hidden"));
+    assert.equal(await hooks.get("before_agent_start")!({ systemPrompt: "Main", prompt: "Task" }, ctx), undefined);
+  }, { initialMode: "off" });
+});
+
+test("orchestration skips first-run import and explains the mode required for manual import", async () => {
+  await withCommands(async ({ command, ctx, renders, notifications, cwd }) => {
+    assert.equal(importWasOffered(cwd), false);
+    assert.deepEqual(renders, []);
+    await command.handler("import", ctx);
+    assert.deepEqual(renders, []);
+    assert.match(notifications.at(-1)!, /Agent import requires Opportunistic mode/);
+  }, { initialMode: "orchestration" });
+});
+
+test("saving mode changes updates tools and prompt immediately", async () => {
+  await withCommands(async ({ command, ctx, hooks, replies, tools, cwd }) => {
+    for (const mode of ["off", "orchestration", "opportunistic"] as const) {
+      replies.push("subagentMode", mode, "save");
+      await command.handler("settings", ctx);
+      for (const tool of tools.values())
+        assert.equal(tool.exposure, mode === "off" ? "hidden" : "direct");
+      const event = await hooks.get("before_agent_start")!({ systemPrompt: "Main", prompt: "Work" }, ctx);
+      if (mode === "off") assert.equal(event, undefined);
+      else assert.match(event.systemPrompt, new RegExp(mode === "orchestration" ? "Delegate every user task" : "do ordinary tasks yourself"));
+      assert.equal(loadManagerSettings({ cwd, agentDir: cwd, includeProject: false }).settings.subagentMode, mode);
+    }
+  });
+});
+
+test("off does not acknowledge migration or inject guidance", async () => {
+  await withCommands(async ({ command, ctx, hooks, replies, cwd }) => {
+    replies.push("subagentMode", "off", "save");
+    await command.handler("settings", ctx);
+    rmSync(join(cwd, "subagent-manager", ".import-offered"));
+    assert.equal(await hooks.get("before_agent_start")!({ systemPrompt: "Main", prompt: `${IMPORT_REQUEST_PREFIX}manual request` }, ctx), undefined);
+    assert.equal(importWasOffered(cwd), false);
   });
 });
 

@@ -18,6 +18,8 @@ import {
   DEFAULT_MANAGER_SETTINGS as DEFAULTS,
   loadManagerSettings,
   saveManagerSettings,
+  SUBAGENT_MODES,
+  type SubagentMode,
   type ManagerSettings,
 } from "../src/settings.ts";
 
@@ -55,7 +57,8 @@ const settings = (
   maxConcurrent: number,
   maxThreads: number,
   scopedModelFiltering = true,
-) => ({ maxLevels, maxConcurrent, maxThreads, scopedModelFiltering });
+  subagentMode: SubagentMode = "opportunistic",
+) => ({ maxLevels, maxConcurrent, maxThreads, scopedModelFiltering, subagentMode });
 
 const escape = (path: string) => new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
@@ -76,7 +79,13 @@ test("missing files return a fresh copy of defaults without diagnostics", (t) =>
   const f = fixture(t);
   const result = load({ cwd: join(f.root, "nope"), agentDir: join(f.root, "nope2") });
   assert.deepEqual(result, {
-    settings: { maxLevels: 3, maxConcurrent: 16, maxThreads: 64, scopedModelFiltering: true },
+    settings: {
+      maxLevels: 3,
+      maxConcurrent: 16,
+      maxThreads: 64,
+      scopedModelFiltering: true,
+      subagentMode: "opportunistic",
+    },
     diagnostics: [],
   });
   result.settings.maxLevels = 99;
@@ -126,6 +135,10 @@ test("invalid layer content is rejected with a diagnostic naming the file", (t) 
     ['{"maxLevels":33}', /maxLevels must be <= 32/],
     ['{"scopedModelFiltering":"true"}', /scopedModelFiltering must be a boolean/],
     ['{"scopedModelFiltering":0}', /scopedModelFiltering must be a boolean/],
+    ['{"subagentMode":"automatic"}', /subagentMode must be off, opportunistic or orchestration/],
+    ['{"subagentMode":"Off"}', /subagentMode must be off, opportunistic or orchestration/],
+    ['{"subagentMode":false}', /subagentMode must be off, opportunistic or orchestration/],
+    ['{"subagentMode":null}', /subagentMode must be off, opportunistic or orchestration/],
     ['{"maxLevels":2,"extra":1}', /Unknown settings key: extra/],
   ];
   for (const [content, pattern] of cases) {
@@ -157,6 +170,36 @@ test("an invalid layer is ignored atomically while other layers still apply", (t
   writeJson(f.globalFile, "{");
   writeJson(f.projectFile, "[]");
   assert.equal(load(f).diagnostics.length, 2);
+});
+
+test("all subagent modes save and load with trusted-project precedence", (t) => {
+  const f = fixture(t);
+  for (const mode of SUBAGENT_MODES) {
+    const user = { ...DEFAULTS, subagentMode: mode };
+    save(f, "user", user);
+    assert.deepEqual(load(f, false), { settings: user, diagnostics: [] });
+    assert.equal(JSON.parse(readFileSync(f.globalFile, "utf8")).subagentMode, mode);
+    for (const projectMode of SUBAGENT_MODES) {
+      writeJson(f.projectFile, { subagentMode: projectMode });
+      assert.deepEqual(load(f), { settings: { ...user, subagentMode: projectMode }, diagnostics: [] });
+      assert.equal(load(f, false).settings.subagentMode, mode);
+    }
+  }
+});
+
+test("invalid mode rejects the entire layer and preserves preceding settings", (t) => {
+  const f = fixture(t);
+  writeJson(f.globalFile, { subagentMode: "off", maxLevels: 5 });
+  writeJson(f.projectFile, { subagentMode: "automatic", maxLevels: 2 });
+  const result = load(f);
+  assert.deepEqual(result.settings, { ...DEFAULTS, subagentMode: "off", maxLevels: 5 });
+  assert.equal(result.diagnostics.length, 1);
+  assert.match(result.diagnostics[0], escape(f.projectFile));
+  assert.match(result.diagnostics[0], /subagentMode must be off, opportunistic or orchestration/);
+
+  writeJson(f.globalFile, { subagentMode: "orchestration", maxLevels: 0 });
+  writeJson(f.projectFile, { maxThreads: 8 });
+  assert.deepEqual(load(f).settings, { ...DEFAULTS, maxThreads: 8 });
 });
 
 test("unreadable settings file is ignored", (t) => {
@@ -264,7 +307,13 @@ test("save writes canonical 0600 files, creates owned directories, and reloads w
   save(f, "user", user);
   assert.equal(lstatSync(f.globalFile).mode & 0o777, 0o600, "overwrite restores 0600");
 
-  const reordered = { scopedModelFiltering: true, maxThreads: 9, maxLevels: 3, maxConcurrent: 11 };
+  const reordered = {
+    subagentMode: "opportunistic",
+    scopedModelFiltering: true,
+    maxThreads: 9,
+    maxLevels: 3,
+    maxConcurrent: 11,
+  };
   assert.equal(save(f, "project", reordered), f.projectFile);
   assert.equal(
     readFileSync(f.projectFile, "utf8"),
@@ -301,6 +350,14 @@ test("invalid save input never creates or mutates files", (t) => {
     [
       { ...settings(1, 1, 1), scopedModelFiltering: "false" },
       /scopedModelFiltering must be a boolean/,
+    ],
+    [
+      { ...settings(1, 1, 1), subagentMode: "automatic" },
+      /subagentMode must be off, opportunistic or orchestration/,
+    ],
+    [
+      { maxLevels: 1, maxConcurrent: 1, maxThreads: 1, scopedModelFiltering: true },
+      /subagentMode must be off, opportunistic or orchestration/,
     ],
     [{ ...settings(1, 1, 1), extra: 1 }, /Unknown settings key: extra/],
     [null, /must be a JSON object/],

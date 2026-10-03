@@ -5,10 +5,11 @@ import { fuzzyFilter } from "@earendil-works/pi-tui";
 import { ConfigStore } from "./config.ts";
 import { IMPORT_REQUEST_PREFIX, markImportOffered, offerAgentImport } from "./agent-import.ts";
 import { ThreadManager } from "./manager.ts";
-import { DEFAULT_MANAGER_SETTINGS, loadManagerSettings } from "./settings.ts";
+import { loadManagerSettings } from "./settings.ts";
 import { configureAgents } from "./settings-ui.ts";
 import { showAgentStatus, showAgentTree } from "./status-ui.ts";
 import { createDriverFactory } from "./runtime.ts";
+import { subagentPrompt } from "./prompt.ts";
 import { agentTools } from "./tools.ts";
 import { editAgentTypes, updateWidget } from "./ui.ts";
 import type { SavedThread, ThreadEvent } from "./types.ts";
@@ -29,7 +30,11 @@ export default function piSubagent(pi: ExtensionAPI): void {
     includeProject: false,
   });
   let manager: ThreadManager | undefined;
-  let limits = { ...DEFAULT_MANAGER_SETTINGS };
+  let limits = loadManagerSettings({
+    cwd: process.cwd(),
+    agentDir: getAgentDir(),
+    includeProject: false,
+  }).settings;
   const loadLimits = (ctx: ExtensionContext) => {
     const loaded = loadManagerSettings({
       cwd: ctx.cwd,
@@ -44,6 +49,12 @@ export default function piSubagent(pi: ExtensionAPI): void {
   let migrationRequested = false;
   let importInProgress = false;
   const importAgents = async (ctx: ExtensionContext, firstRun: boolean) => {
+    // Migration requires the root's file tools and must not delegate source prompts.
+    if (limits.subagentMode === "orchestration") {
+      if (!firstRun)
+        ctx.ui.notify("Agent import requires Opportunistic mode. Change Subagent Mode in /agents settings.", "info");
+      return;
+    }
     if (importInProgress) return;
     importInProgress = true;
     try {
@@ -59,7 +70,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
   };
   // A migration can span clarification turns. Reload after each root turn, without converting files.
   pi.on("agent_end", async () => {
-    if (!migrationRequested) return;
+    if (limits.subagentMode === "off" || !migrationRequested) return;
     store.reload();
     if (store.diagnostics.length) context?.ui.notify(store.diagnostics.join("\n"), "warning");
   });
@@ -85,10 +96,13 @@ export default function piSubagent(pi: ExtensionAPI): void {
     }
   };
   const warnDelivery = (error: unknown) => {
+    if (limits.subagentMode === "off") return;
     const message = error instanceof Error ? error.message : String(error);
     context?.ui.notify(`Subagent delivery failed: ${message}`, "warning");
   };
-  const sendRootNotification = (notification: RootNotification) =>
+  const sendRootNotification = (notification: RootNotification) => {
+    if (limits.subagentMode === "off" || context?.isIdle?.() === false) return;
+    // Never submit to Pi's streaming queue: off must also suppress pending delivery.
     pi.sendMessage(
       {
         customType: "pi-subagent:update",
@@ -98,7 +112,9 @@ export default function piSubagent(pi: ExtensionAPI): void {
       },
       { triggerTurn: false },
     );
+  };
   const restoreRootMailbox = (ctx: ExtensionContext) => {
+    if (limits.subagentMode === "off" || ctx.isIdle?.() === false) return;
     const entries = ctx.sessionManager.getBranch();
     const delivered = new Set(
       entries.flatMap((entry) => {
@@ -121,6 +137,9 @@ export default function piSubagent(pi: ExtensionAPI): void {
       }
     }
   };
+  pi.on("agent_settled", async (_event, ctx) => {
+    if (context?.sessionManager === ctx.sessionManager) restoreRootMailbox(ctx);
+  });
   const delivery = (event: ThreadEvent) => {
     if (event.kind === "change" || event.kind === "metrics") return;
     const thread = event.thread;
@@ -141,8 +160,8 @@ export default function piSubagent(pi: ExtensionAPI): void {
             state: thread.state,
           },
         };
-        // Root sendMessage can defer while streaming too. Accept durably before queueing;
-        // the eventual transcript message carries its ID for branch-local recovery.
+        // Persist first; defer delivery until the root is idle and the plugin is enabled.
+        // The eventual transcript message carries its ID for branch-local recovery.
         pi.appendEntry(ROOT_MAILBOX_ENTRY, notification);
         sendRootNotification(notification);
       } else void requireManager().deliver(event.recipient, message).catch(warnDelivery);
@@ -151,9 +170,34 @@ export default function piSubagent(pi: ExtensionAPI): void {
     }
   };
 
-  for (const tool of agentTools(requireManager, "/root", () => store.list())) pi.registerTool(tool);
+  const rootTools = agentTools(requireManager, "/root", () => store.list());
+  let toolsEnabled: boolean | undefined;
+  const syncTools = () => {
+    const enabled = limits.subagentMode !== "off";
+    if (toolsEnabled === enabled) return;
+    toolsEnabled = enabled;
+    for (const tool of rootTools) {
+      pi.registerTool({
+        ...tool,
+        // Hidden tools are neither model-visible nor discoverable/callable via codemode.
+        exposure: enabled ? "direct" : "hidden",
+        execute: (...args) => {
+          if (limits.subagentMode === "off") throw new Error("Subagent Mode is off");
+          return tool.execute(...args);
+        },
+      });
+    }
+  };
+  const refreshWidget = (ctx: ExtensionContext) => {
+    if (limits.subagentMode === "off") {
+      if (ctx.hasUI) ctx.ui.setWidget("pi-subagent", undefined);
+    } else updateWidget(ctx, requireManager().list());
+  };
+  syncTools();
   pi.on("before_agent_start", async (event, ctx) => {
-    if (event.prompt.startsWith(IMPORT_REQUEST_PREFIX)) {
+    const prompt = subagentPrompt(limits);
+    if (!prompt) return;
+    if (limits.subagentMode === "opportunistic" && event.prompt.startsWith(IMPORT_REQUEST_PREFIX)) {
       try {
         markImportOffered(getAgentDir());
       } catch (error) {
@@ -161,12 +205,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
       }
     }
     return {
-      systemPrompt: `${event.systemPrompt}\n\n## pi-subagent\nYou are /root. Thread paths determine context ancestry, independently of agent type. Name children with concise task-based kebab-case paths (e.g. /root/controller-security-research), not their type name. Children can pause WITHOUT handing back an answer; completed and paused sessions can both receive more work via agent_steer. Working child threads appear above the footer. The main conversation is L1; the maximum is ${limits.maxLevels} levels including L1. For independent work, spawn all siblings with wait:false before calling agent_wait; the same pattern applies inside child agents that have delegation tools. Waiting parents count toward the shared ${limits.maxConcurrent}-thread concurrency limit. Available types:\n${store
-        .list()
-        .map((type) => `- ${type.name}: ${type.description}`)
-        .join(
-          "\n",
-        )}\nUse agent_status to inspect and agent_wait to wait. Detached notifications do not automatically resume your turn.`,
+      systemPrompt: `${event.systemPrompt}\n\n${prompt}`,
     };
   });
 
@@ -182,6 +221,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
     });
     persistenceSignature = "";
     const settingsDiagnostics = loadLimits(ctx);
+    syncTools();
     const instance = new ThreadManager({
       ...limits,
       createDriver: createDriverFactory(requireContext, () => limits.scopedModelFiltering),
@@ -190,7 +230,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
       toolsFor: (path) => agentTools(requireManager, path, () => store.list()),
       onEvent: (event) => {
         if (token !== generation) return;
-        updateWidget(requireContext(), requireManager().list());
+        refreshWidget(requireContext());
         if (event.kind !== "metrics") persist();
         delivery(event);
       },
@@ -214,17 +254,19 @@ export default function piSubagent(pi: ExtensionAPI): void {
           instance.restore(data.threads);
         else persist();
       } catch (error) {
-        ctx.ui.notify(`Could not restore subagent registry: ${String(error)}`, "error");
+        if (limits.subagentMode !== "off")
+          ctx.ui.notify(`Could not restore subagent registry: ${String(error)}`, "error");
       }
     }
     restoreRootMailbox(ctx);
-    updateWidget(ctx, requireManager().list());
+    refreshWidget(ctx);
     const diagnostics = [...store.diagnostics, ...settingsDiagnostics];
-    if (diagnostics.length) ctx.ui.notify(diagnostics.join("\n"), "warning");
+    if (limits.subagentMode !== "off" && diagnostics.length)
+      ctx.ui.notify(diagnostics.join("\n"), "warning");
   };
   pi.on("session_start", async (_event, ctx) => {
     await attachSession(ctx);
-    await importAgents(ctx, true);
+    if (limits.subagentMode !== "off") await importAgents(ctx, true);
   });
   pi.on("session_tree", async (_event, ctx) => attachSession(ctx));
   const stopWorkingThreads = async () => {
@@ -279,6 +321,9 @@ export default function piSubagent(pi: ExtensionAPI): void {
         store.reload();
         const diagnostics = [...store.diagnostics, ...loadLimits(ctx)];
         requireManager().setLimits(limits);
+        syncTools();
+        refreshWidget(ctx);
+        restoreRootMailbox(ctx);
         ctx.ui.notify(
           diagnostics.length
             ? diagnostics.join("\n")
@@ -293,6 +338,9 @@ export default function piSubagent(pi: ExtensionAPI): void {
           apply: () => {
             const diagnostics = loadLimits(ctx);
             requireManager().setLimits(limits);
+            syncTools();
+            refreshWidget(ctx);
+            restoreRootMailbox(ctx);
             if (diagnostics.length) ctx.ui.notify(diagnostics.join("\n"), "warning");
           },
         });

@@ -456,6 +456,11 @@ for (const Renderer of [TuiMainScreen, TuiAltScreen]) {
       for (const key of ["\r", "\x05", "\x15", value, "\r"]) await input(key);
     };
 
+    // Choose orchestration, then edit the numeric limits below the mode row.
+    await input("\r");
+    await input(DOWN);
+    await input("\r");
+    await input(DOWN);
     await replaceField("33");
     assert.ok(notifications.some((message) => message.includes("at most 32")));
     await replaceField("5");
@@ -476,6 +481,10 @@ for (const Renderer of [TuiMainScreen, TuiAltScreen]) {
     assert.equal(
       loadManagerSettings({ cwd: root, agentDir: root, includeProject: false }).settings.maxLevels,
       5,
+    );
+    assert.equal(
+      loadManagerSettings({ cwd: root, agentDir: root, includeProject: false }).settings.subagentMode,
+      "orchestration",
     );
   });
 

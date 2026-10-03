@@ -21,9 +21,10 @@ type Menu = { title: string; rows: DialogRow[] };
 async function run(
   t: TestContext,
   actions: (string | undefined)[],
-  { settings = DEFAULT_MANAGER_SETTINGS, trusted = false } = {} as {
+  { settings = DEFAULT_MANAGER_SETTINGS, trusted = false, width = 80 } = {} as {
     settings?: ManagerSettings;
     trusted?: boolean;
+    width?: number;
   },
 ) {
   const root = mkdtempSync(join(tmpdir(), "pi-settings-ui-"));
@@ -32,6 +33,7 @@ async function run(
   const menus: Menu[] = [];
   const driver = createDialogDriver({
     theme,
+    width,
     choices: actions,
     unified: true,
     assertBorder: true,
@@ -67,6 +69,7 @@ async function run(
     applied,
     notifications,
     menus,
+    renders: driver.renders,
     value,
     loaded: loadManagerSettings({ cwd: root, agentDir: root, includeProject: true }),
     userFile: join(root, "subagent-manager", "settings.json"),
@@ -82,6 +85,63 @@ test("invalid numbers are rejected in place and valid edits save once to the use
   assert.ok(result.notifications.some((message) => message.includes(result.userFile)));
   assert.equal(existsSync(result.projectFile), false);
 });
+
+test("mode settings explain all choices and selecting each mode saves it", async (t) => {
+  for (const [mode, label] of [
+    ["off", "Off"],
+    ["opportunistic", "Opportunistic"],
+    ["orchestration", "Orchestration"],
+  ]) {
+    const result = await run(t, ["subagentMode", mode, "save"]);
+    const field = result.menus[0]!.rows.find((row) => row.id === "subagentMode")!;
+    assert.equal(field.label, "Subagent Mode");
+    assert.equal(field.value, "Opportunistic");
+    assert.match(field.help ?? "", /Off: no subagent tools or prompt guidance/);
+    assert.match(field.help ?? "", /Opportunistic: delegate only parallelizable or very large tasks/);
+    assert.match(field.help ?? "", /Orchestration: \/root delegates all execution/);
+    const chooser = result.menus[1]!;
+    assert.equal(chooser.title, "Subagent Mode");
+    assert.deepEqual(chooser.rows.map((row) => row.id), ["off", "opportunistic", "orchestration"]);
+    assert.ok(chooser.rows.every((row) => row.value && row.help));
+    assert.match(chooser.rows[2]!.help ?? "", /not inherited by workers/);
+    assert.equal(result.value(2, "subagentMode"), label);
+    assert.equal(result.applied, 1);
+    assert.equal(result.loaded.settings.subagentMode, mode);
+    assert.equal(result.loaded.diagnostics.length, 0);
+    assert.equal(JSON.parse(readFileSync(result.userFile, "utf8")).subagentMode, mode);
+  }
+});
+
+test("mode selection and chooser cancellation remain draft-only", async (t) => {
+  const canceled = await run(t, ["subagentMode", "off", "cancel"]);
+  assert.equal(canceled.value(2, "subagentMode"), "Off");
+  assert.match(canceled.menus[2]!.title, /unsaved/);
+  assert.equal(canceled.applied, 0);
+  assert.equal(existsSync(canceled.userFile), false);
+  assert.deepEqual(canceled.loaded.settings, DEFAULT_MANAGER_SETTINGS);
+
+  const escaped = await run(t, ["subagentMode", undefined, "save"]);
+  assert.equal(escaped.value(2, "subagentMode"), "Opportunistic");
+  assert.doesNotMatch(escaped.menus[2]!.title, /unsaved/);
+  assert.equal(escaped.loaded.settings.subagentMode, "opportunistic");
+});
+
+for (const width of [32, 80]) {
+  test(`mode screen and chooser render bordered frames at width ${width}`, async (t) => {
+    const result = await run(t, ["subagentMode", "orchestration", "cancel"], { width });
+    assert.ok(result.renders.every((lines) =>
+      lines[0]!.includes("Subagent Mode") || lines[0]!.includes("Agents settings"),
+    ));
+    // The shared two-column menu clips labels at narrow widths; the selected
+    // mode's full name remains visible in its help and in the settings value.
+    assert.ok(result.renders[1]!.join("\n").includes(width === 32 ? "Orchestra" : "Orchestration"));
+    assert.ok(result.renders[1]!.join("\n").includes("Opportunistic:"));
+    assert.ok(result.renders[2]!.join("\n").includes("Orchestration"));
+    assert.ok(result.renders[0]!.join("\n").includes("Off:"));
+    assert.ok(result.renders[0]!.join("\n").includes("Opportunistic:"));
+    assert.ok(result.renders[0]!.join("\n").includes("Orchestration:"));
+  });
+}
 
 test("filtering toggle and other edits are draft-only until save", async (t) => {
   const canceled = await run(t, ["scopedModelFiltering", "maxLevels", "4", "cancel"]);
@@ -130,10 +190,16 @@ test("scope help explains the destination and precedence without changing the dr
 
 test("restore defaults resets the whole draft before save", async (t) => {
   const result = await run(t, ["defaults", "save"], {
-    settings: { ...DEFAULT_MANAGER_SETTINGS, scopedModelFiltering: false, maxLevels: 9 },
+    settings: {
+      ...DEFAULT_MANAGER_SETTINGS,
+      subagentMode: "orchestration",
+      scopedModelFiltering: false,
+      maxLevels: 9,
+    },
   });
   assert.equal(result.applied, 1);
   assert.equal(result.value(1, "scopedModelFiltering"), "on");
+  assert.equal(result.value(1, "subagentMode"), "Opportunistic");
   assert.deepEqual(result.loaded.settings, DEFAULT_MANAGER_SETTINGS);
   assert.match(readFileSync(result.userFile, "utf8"), /"scopedModelFiltering": true/);
 });
@@ -144,9 +210,10 @@ test("project scope requires trust; trusted projects save to the project file", 
   assert.ok(untrusted.notifications.some((message) => message.includes("trusted project")));
   assert.deepEqual(untrusted.loaded.settings, DEFAULT_MANAGER_SETTINGS);
 
-  const trusted = await run(t, ["maxThreads", "9", "save"], { trusted: true });
+  const trusted = await run(t, ["subagentMode", "off", "maxThreads", "9", "save"], { trusted: true });
   assert.equal(trusted.applied, 1);
   assert.equal(trusted.loaded.settings.maxThreads, 9);
+  assert.equal(trusted.loaded.settings.subagentMode, "off");
   assert.equal(existsSync(trusted.projectFile), true);
   assert.equal(existsSync(trusted.userFile), false);
 

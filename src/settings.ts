@@ -13,7 +13,11 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
+export const SUBAGENT_MODES = ["off", "opportunistic", "orchestration"] as const;
+export type SubagentMode = (typeof SUBAGENT_MODES)[number];
+
 export interface ManagerSettings {
+  subagentMode: SubagentMode;
   maxLevels: number;
   maxConcurrent: number;
   maxThreads: number;
@@ -25,9 +29,12 @@ export const DEFAULT_MANAGER_SETTINGS: ManagerSettings = {
   maxConcurrent: 16,
   maxThreads: 64,
   scopedModelFiltering: true,
+  subagentMode: "opportunistic",
 };
 
-const KEYS = ["maxLevels", "maxConcurrent", "maxThreads", "scopedModelFiltering"] as const;
+const KEYS = [
+  "maxLevels", "maxConcurrent", "maxThreads", "scopedModelFiltering", "subagentMode",
+] as const;
 const MAX_LEVELS = 32;
 
 function errorCode(error: unknown): string | undefined {
@@ -64,6 +71,7 @@ function positiveSafeInteger(value: unknown): value is number {
 }
 
 function requirement(key: (typeof KEYS)[number]): string {
+  if (key === "subagentMode") return "subagentMode must be off, opportunistic or orchestration";
   return key === "scopedModelFiltering"
     ? "scopedModelFiltering must be a boolean"
     : `${key} must be a positive safe integer`;
@@ -88,6 +96,11 @@ function parseSettings(content: string): Partial<ManagerSettings> {
   for (const key of KEYS) {
     if (!Object.hasOwn(record, key)) continue;
     const value = record[key];
+    if (key === "subagentMode") {
+      if (!SUBAGENT_MODES.includes(value as SubagentMode)) throw new Error(requirement(key));
+      layer.subagentMode = value as SubagentMode;
+      continue;
+    }
     if (key === "scopedModelFiltering") {
       if (typeof value !== "boolean") throw new Error(requirement(key));
       layer.scopedModelFiltering = value;

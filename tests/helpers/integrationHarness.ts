@@ -3,7 +3,12 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
+import {
+  createAssistantMessageEventStream,
+  getCurrentSystemPrompt,
+  getCurrentTools,
+  type AssistantMessage,
+} from "@earendil-works/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -29,6 +34,7 @@ export type LoggedRequest = {
   lexicalParent: string | null;
   system: string;
   messagesText: string;
+  toolNames: string[];
 };
 export type OfflineHarness = {
   directory: string;
@@ -54,6 +60,7 @@ export async function withOfflineHarness(
     onRequest(request: LoggedRequest): AssistantMessage | Promise<AssistantMessage>;
     scopedModels?: string[];
     managerSettings?: Partial<ManagerSettings>;
+    builtinTools?: boolean;
   },
   body: (harness: OfflineHarness) => Promise<void>,
 ): Promise<void> {
@@ -117,9 +124,7 @@ export async function withOfflineHarness(
         },
       ],
       streamSimple(model, context) {
-        const system = JSON.stringify(
-          context.messages.filter((message) => message.role === "system"),
-        );
+        const system = JSON.stringify(getCurrentSystemPrompt(context.messages));
         const pathKey =
           system.match(/Your thread path is (\/root(?:\/[A-Za-z0-9_-]+)*)\./)?.[1] ?? system;
         const request: LoggedRequest = {
@@ -132,6 +137,7 @@ export async function withOfflineHarness(
             system.match(/Your lexical parent is (\/root(?:\/[A-Za-z0-9_-]+)*);/)?.[1] ?? null,
           system,
           messagesText: JSON.stringify(context.messages),
+          toolNames: getCurrentTools(context.messages).map((tool) => tool.name),
         };
         byPath.set(pathKey, request.pathCall);
         requests.push(request);
@@ -209,14 +215,18 @@ export async function withOfflineHarness(
         sessionManager: manager,
         settingsManager,
         resourceLoader,
-        noTools: "builtin",
+        noTools: options.builtinTools ? undefined : "builtin",
         thinkingLevel: "off",
       });
       sessions.add(session);
       assert.deepEqual(extensionsResult.errors, []);
       await session.bindExtensions({ mode: "print", onError: (error) => errors.push(error) });
-      assert.ok(session.getActiveToolNames().includes("agent_spawn"));
-      assert.ok(session.getAllTools().some((tool) => tool.name === "agent_steer"));
+      const enabled = options.managerSettings?.subagentMode !== "off";
+      assert.equal(session.getActiveToolNames().includes("agent_spawn"), enabled);
+      assert.equal(
+        session.getAllTools().some((tool) => tool.name === "agent_steer" && tool.exposure !== "hidden"),
+        enabled,
+      );
       return session;
     };
     const close = async (session: AgentSession) => {
