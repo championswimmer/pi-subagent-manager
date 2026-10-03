@@ -237,6 +237,57 @@ The code is deliberately layered:
 - `ui.ts`: configuration dialogs and activity/thread UI.
 - `index.ts`: parent-session lifecycle and extension wiring.
 
+## Changelog
+
+[CHANGELOG.md](CHANGELOG.md) is generated automatically when a version tag is pushed,
+alongside a [GitHub Release](https://github.com/championswimmer/pi-subagent-manager/releases).
+The [changelog workflow](.github/workflows/changelog.yml) runs independently of npm publishing.
+
+- **Major** tags (`v1.0.0`): large `##` headings; optional handwritten highlights go in the GitHub Release.
+- **Minor** tags (`v1.1.0`): smaller `###` headings under their major series.
+- **Patch** tags (`v1.1.1`): `####` headings under their minor release.
+- Missing initial tags get series headings (for example, `0.x` and `0.1.x`). Newer major/minor series appear first; each series starts with its initial release, followed by its patches newest-first.
+- Prereleases are listed separately. Stable releases compare against the previous **stable ancestor tag**, so PRs from release candidates remain in the final release. Prereleases compare against the previous ancestor tag, including earlier prereleases.
+
+GitHub's generated release notes list merged PRs and contributors without requiring labels
+or Conventional Commits. The generator also checks **all pages** of closed PRs against the
+Git commit range and adds missing merged PRs, including bots and squash/rebase merges.
+A PR's merge commit must be reachable in the tagged history; unmerged PRs and later merges
+are excluded. Direct commits are available through the full-history/compare links, not as PR bullets.
+Dates are the tagged commit dates. Handwritten release highlights are preserved on reruns;
+automatically generated sections are replaced rather than duplicated.
+
+The workflow needs only the built-in `GITHUB_TOKEN` with `contents: write` and
+`pull-requests: read`. It updates just `CHANGELOG.md` on the default branch without force
+pushes. If branch protection is added, allow this automation to update that file or change
+the publishing step to a changelog PR; otherwise the file update will fail, while the
+GitHub Release and workflow artifact remain available.
+
+Use **Actions → Publish changelog → Run workflow** to backfill the cumulative changelog.
+Leave `tag` empty to rebuild only the file, or specify an existing tag to publish/repair
+that release too. For a local preview (requires authenticated `gh` with repository contents-write
+permission for GitHub's notes-generation endpoint, and fetched tags):
+
+```sh
+git fetch origin --tags
+GITHUB_REPOSITORY=championswimmer/pi-subagent-manager npm run changelog
+```
+
+This rewrites the local `CHANGELOG.md` but does not publish anything. The workflow uses
+`--publish` to publish the requested release and commit the generated file. Do not manually
+edit generated entries; edit the GitHub Release and rerun the workflow instead.
+
+### Tool choice
+
+We use [GitHub generated release notes](https://docs.github.com/en/repositories/releasing-projects-on-github/automatically-generated-release-notes)
+plus a small tested renderer. [Release Drafter](https://github.com/release-drafter/release-drafter)
+adds a draft lifecycle; [release-please](https://github.com/googleapis/release-please)
+changes version/tag management and relies on Conventional Commits;
+[git-cliff](https://git-cliff.org/docs/integration/github/) is primarily commit-oriented;
+and [github-changelog-generator](https://github.com/github-changelog-generator/github-changelog-generator)
+adds Ruby/Docker and needs heading postprocessing. Native notes fit the existing tag-based
+npm release process without adding another release manager.
+
 ## Publishing
 
 Pushing a `v<version>` tag runs [`.github/workflows/release.yml`](.github/workflows/release.yml)
