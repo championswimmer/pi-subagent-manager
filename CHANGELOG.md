@@ -4,6 +4,14 @@ Generated from version tags and merged GitHub pull requests. Do not edit this fi
 
 ## 0.x — Pre-1.0 releases
 
+### [v0.4.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.4.0) — Minor release (2026-10-03)
+
+<!-- Release notes generated using configuration in .github/release.yml at v0.4.0 -->
+
+
+
+**Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v0.3.2...v0.4.0
+
 ### [v0.3.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.3.0) — Minor release (2026-10-03)
 
 **Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v0.2.0...v0.3.0
