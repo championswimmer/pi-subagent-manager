@@ -6,6 +6,15 @@ Generated from version tags and merged GitHub pull requests. Do not edit this fi
 
 ### [v0.4.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.4.0) — Minor release (2026-10-03)
 
+#### Highlights
+
+- New **Subagent Mode** setting in `/agents settings` with explanations and live switching.
+- **Off:** hides subagent tools, removes prompt guidance, and suppresses automatic UI and notifications.
+- **Opportunistic** (default): delegate only parallelizable or very large tasks.
+- **Orchestration:** `/root` delegates all execution and only coordinates and synthesizes results; workers remain unrestricted.
+- Concise mode-specific prompts; retained work survives mode changes and notifications are delivered once when re-enabled.
+
+
 <!-- Release notes generated using configuration in .github/release.yml at v0.4.0 -->
 
 
