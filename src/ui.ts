@@ -65,7 +65,7 @@ function agentColorToken(color: string | undefined): ThemeColor {
     : "accent";
 }
 
-/** Background pill with bold contrasting text. Label is sanitized; caller supplies brackets. */
+/** Background pill with bold contrasting text and padding. Label is sanitized. */
 function contrastPill(
   label: string,
   color: string | undefined,
@@ -93,7 +93,7 @@ function agentTypeBadge(
   color: string | undefined,
   theme: AgentBadgeTheme,
 ): string {
-  return contrastPill(`[${type}]`, color, theme);
+  return contrastPill(type, color, theme);
 }
 
 function agentPath(
@@ -1051,6 +1051,7 @@ async function editAgentTypesDialog(
       ...types.map((type) => ({
         id: type.name,
         label: type.name,
+        renderLabel: (label: string, theme: Theme) => agentTypeBadge(label, type.color, theme),
         value: type.description,
         help: `${type.source ?? "user"} · ${type.filePath ?? ""}`,
       })),

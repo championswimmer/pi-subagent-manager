@@ -17,24 +17,24 @@ const FIELDS = [
   {
     id: "maxLevels",
     label: "Maximum levels",
-    help: "Includes the root (L1). Positive integer, at most 32.",
+    help: "How deep agents can delegate. Your main conversation is level 1; 3 allows an agent and its child. Positive integer, at most 32.",
   },
   {
     id: "maxConcurrent",
     label: "Concurrent agents",
-    help: "Shared active-thread limit, including waiting parents. Positive safe integer.",
+    help: "How many agents can be active at once across all levels. Parents waiting for children also count. Positive safe integer.",
   },
   {
     id: "maxThreads",
     label: "Retained threads",
-    help: "Maximum retained agent sessions. Positive safe integer.",
+    help: "How many agent sessions can be kept for follow-up work, including completed and paused agents. At the limit, new agents cannot start. Positive safe integer.",
   },
 ] as const;
 
 const SCOPED_MODEL_FILTERING = {
   id: "scopedModelFiltering",
   label: "Scoped model filtering",
-  help: "On matches /scoped-models only. Off allows any available model. Draft only until save.",
+  help: "On: agents can use only models selected in /scoped-models. Off: agents can use any available model. Save and apply to activate changes.",
 } as const;
 
 export async function configureAgents(
@@ -84,7 +84,9 @@ async function configureAgentsDialog(
           id: "scope",
           label: "Save scope",
           value: scope === "user" ? "Global" : "Trusted project",
-          help: "Project settings override global settings. Changes apply after saving.",
+          help: scope === "user"
+            ? "Global: save all values shown as your defaults for every project. Existing trusted-project settings still override them, including here. Switching scope only changes where you save, not the values shown."
+            : "Trusted project: save all values shown for this project only, overriding your global defaults here. Other projects are unchanged. Switching scope only changes where you save, not the values shown.",
         },
         {
           id: "types",
@@ -95,12 +97,13 @@ async function configureAgentsDialog(
         {
           id: "defaults",
           label: "Restore defaults",
-          help: "Reset the draft only; save to apply.",
+          help: "Replace all values shown with built-in defaults. Nothing is saved until you choose Save and apply.",
         },
         {
           id: "save",
           label: "Save and apply",
-          help: "Apply without interrupting existing agents or discarding retained sessions.",
+          labelPrefix: dirty ? { text: "(changes)", color: "warning" as const } : undefined,
+          help: "Save all values to the selected scope and reload settings now. Project overrides still take precedence. Running agents and retained sessions are kept.",
         },
         {
           id: "cancel",

@@ -116,7 +116,7 @@ function expectedPath(theme: Theme, path: string, color?: string): string {
 /** Zero-metric fixtures only. Counters are the literal unset label, padded, not truncated. */
 function expectedThreadLine(theme: Theme, view: ThreadView, width = 80) {
   const token = view.state === "failed" ? "error" : view.state === "paused" ? "warning" : "accent";
-  const left = `${expectedBadge(theme, `[${view.type}]`, view.color)} ${expectedPath(theme, view.path, view.color)} ${theme.fg(token, `[${sanitizeText(view.state)}]`)} ${sanitizeText(view.status || view.task)}`;
+  const left = `${expectedBadge(theme, view.type, view.color)} ${expectedPath(theme, view.path, view.color)} ${theme.fg(token, `[${sanitizeText(view.state)}]`)} ${sanitizeText(view.status || view.task)}`;
   const right = theme.fg("muted", "0s ↑0 ↓0");
   return left + " ".repeat(width - visibleWidth(left) - visibleWidth(right)) + right;
 }
@@ -223,7 +223,7 @@ test("thread pills use the type color with contrasting text; state colors only t
       const line = renderThreads([view], 120, theme)[0]!;
       channels.add(contrastChannel(theme.colors[color]));
       assert.equal(line, expectedThreadLine(theme, view, 120));
-      assert.deepEqual(backgroundCoveredText(line), [" [researcher] "]);
+      assert.deepEqual(backgroundCoveredText(line), [" researcher "]);
     }
   }
   assert.ok(channels.has(0), "a light background must use black text");
@@ -289,10 +289,10 @@ test("widget resolves the theme at render time", () => {
   assert.doesNotMatch(second, /first</);
   const bg = (name: string) => colorToRgb(tokenColor(name)).r;
   assert.ok(
-    second.includes(`second<bg:${bg("accent")}> [fallback] </bg> second<fg:accent>/fallback</fg>`),
+    second.includes(`second<bg:${bg("accent")}> fallback </bg> second<fg:accent>/fallback</fg>`),
   );
   assert.ok(
-    second.includes(`second<bg:${bg("success")}> [worker] </bg> second<fg:success>/worker</fg>`),
+    second.includes(`second<bg:${bg("success")}> worker </bg> second<fg:success>/worker</fg>`),
   );
   widget.dispose();
 });
@@ -745,9 +745,9 @@ function assertColorPreview(
 ) {
   const preview = component.getPreview().render(160).join("\n");
   const path = expectedPath(theme, "/root/example-task", color);
-  const head = `${expectedBadge(theme, `[${agentName}]`, color)} ${path} ${theme.fg("accent", "[running]")} Working`;
+  const head = `${expectedBadge(theme, agentName, color)} ${path} ${theme.fg("accent", "[running]")} Working`;
   assert.ok(preview.includes(`Preview: ${head}`));
-  assert.deepEqual(backgroundCoveredText(preview), [` [${agentName}] `]);
+  assert.deepEqual(backgroundCoveredText(preview), [` ${agentName} `]);
 }
 
 const selectedValue = (component: any) => component.getSelectList().getSelectedItem()?.value;
@@ -761,6 +761,46 @@ function selectDefaultColor(component: any) {
     component.handleInput("\x1b[A");
   assert.equal(selectedValue(component), "__default__");
 }
+
+test("agent picker uses runtime name pills with definition colors and no brackets", async () => {
+  await withFixture(async ({ root, store, writeWorker }) => {
+    for (const theme of [darkTheme, lightTheme, testTheme("dark", "256color")]) {
+      for (const color of [undefined, "success", "warning"]) {
+        await writeWorker({ color });
+        const { ctx, driver } = editorContext(root, [undefined]);
+        driver.theme = theme;
+        let checked = false;
+        driver.onChild = (component) => {
+          if (!(component instanceof DialogMenu) || component.title !== "Agent types") return false;
+          const index = component.rows.findIndex((row) => row.id === "worker");
+          assert.ok(index >= 0);
+          for (const selected of [false, true]) {
+            if (selected) {
+              component.handleInput("\x1b[H");
+              for (let step = 0; step < index; step++) component.handleInput("\x1b[B");
+              assert.equal(component.getSelectedId(), "worker");
+            }
+            const lines: string[] = component.render(100);
+            const row: string = lines.find((line) => stripTerminalSequences(line).includes("worker"))!;
+            assert.ok(row.includes(expectedBadge(theme, "worker", color)));
+            assert.deepEqual(backgroundCoveredText(row), [" worker "]);
+            assert.doesNotMatch(stripTerminalSequences(row), /\[worker\]/);
+            for (const width of [1, 10, 40, 100]) {
+              const narrow = component.render(width);
+              assert.ok(narrow.every((line) => visibleWidth(line) <= width));
+              assert.equal(narrow.length, width < 4 ? 1 : dialogHeight({ terminal: { rows: 24 }, requestRender() {} }));
+            }
+          }
+          checked = true;
+          component.handleInput("\x1b");
+          return true;
+        };
+        await editAgentTypes(ctx, store);
+        assert.ok(checked);
+      }
+    }
+  });
+});
 
 test("color picker shows background pills, previews the draft name, and cancel keeps the saved color", async () => {
   await withFixture(async ({ root, store, file, writeWorker }) => {

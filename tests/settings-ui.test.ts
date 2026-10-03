@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import { ConfigStore } from "../src/config.ts";
-import { dialogHeight } from "../src/dialog.ts";
+import { dialogHeight, type DialogRow } from "../src/dialog.ts";
 import { configureAgents } from "../src/settings-ui.ts";
 import {
   DEFAULT_MANAGER_SETTINGS,
@@ -15,7 +15,7 @@ import {
 import { createDialogDriver } from "./helpers/dialogDriver.ts";
 
 const theme = { fg: (_color: string, text: string) => text } as Theme;
-type Menu = { title: string; rows: { id: string; value?: string }[] };
+type Menu = { title: string; rows: DialogRow[] };
 
 /** Runs configureAgents with scripted menu/input choices and reports what reached disk. */
 async function run(
@@ -39,7 +39,7 @@ async function run(
     onMenu: (menu) =>
       menus.push({
         title: menu.title,
-        rows: menu.rows.map((row) => ({ id: row.id, value: row.value })),
+        rows: menu.rows.map((row) => ({ ...row })),
       }),
   });
   const ctx = {
@@ -102,6 +102,30 @@ test("filtering toggle and other edits are draft-only until save", async (t) => 
   assert.equal(saved.loaded.settings.scopedModelFiltering, false);
   assert.equal(saved.loaded.diagnostics.length, 0);
   assert.match(readFileSync(saved.userFile, "utf8"), /"scopedModelFiltering": false/);
+});
+
+test("save shows a warning-colored changes prefix only while the draft is dirty", async (t) => {
+  const result = await run(t, [
+    "scopedModelFiltering", "scopedModelFiltering", "maxLevels", "5", "defaults", "cancel",
+  ]);
+  const prefix = (index: number) => result.menus[index]?.rows.find((row) => row.id === "save")?.labelPrefix;
+  assert.equal(prefix(0), undefined);
+  assert.deepEqual(prefix(1), { text: "(changes)", color: "warning" });
+  assert.equal(prefix(2), undefined, "reverting a toggle clears the indicator");
+  assert.deepEqual(prefix(3), { text: "(changes)", color: "warning" });
+  assert.equal(prefix(4), undefined, "restoring the original defaults clears the indicator");
+});
+
+test("scope help explains the destination and precedence without changing the draft", async (t) => {
+  const result = await run(t, ["maxLevels", "5", "scope", "scope", "cancel"], { trusted: true });
+  const scope = (index: number) => result.menus[index]?.rows.find((row) => row.id === "scope");
+  assert.match(scope(0)?.help ?? "", /this project only, overriding your global defaults/);
+  assert.match(scope(2)?.help ?? "", /defaults for every project/);
+  assert.match(scope(2)?.help ?? "", /trusted-project settings still override/);
+  for (const index of [1, 2, 3]) {
+    assert.match(scope(index)?.help ?? "", /only changes where you save, not the values shown/);
+    assert.equal(result.value(index, "maxLevels"), "5");
+  }
 });
 
 test("restore defaults resets the whole draft before save", async (t) => {

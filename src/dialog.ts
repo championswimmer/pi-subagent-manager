@@ -14,6 +14,7 @@ import {
   stripTerminalSequences,
   truncateToWidth,
   visibleWidth,
+  wrapTextWithAnsi,
   type Component,
   type TUI,
 } from "@earendil-works/pi-tui";
@@ -28,6 +29,9 @@ export interface DialogEditorHost extends DialogHost {
 export interface DialogRow {
   id: string;
   label: string;
+  labelPrefix?: { text: string; color: Parameters<Theme["fg"]>[0] };
+  /** Trusted formatter receives sanitized text; generated ANSI styling is kept when clipping. */
+  renderLabel?: (label: string, theme: Theme) => string;
   value?: string;
   help?: string;
 }
@@ -219,7 +223,12 @@ export class DialogMenu {
   invalidate(): void {}
   render(width: number): string[] {
     const height = dialogHeight(this.host);
-    this.viewport = Math.max(1, height - 7);
+    const inner = Math.max(0, width - 4);
+    const help = wrapTextWithAnsi(
+      dialogText(this.rows[this.selected]?.help ?? ""),
+      Math.max(1, inner - 1),
+    ).slice(0, Math.max(1, height - 7));
+    this.viewport = Math.max(1, height - 6 - help.length);
     const start = Math.max(
       0,
       Math.min(
@@ -227,7 +236,6 @@ export class DialogMenu {
         this.rows.length - this.viewport,
       ),
     );
-    const inner = Math.max(0, width - 4);
     const labelWidth = Math.min(28, Math.max(8, Math.floor(inner * 0.35)));
     const body = [
       this.theme.fg(
@@ -235,17 +243,26 @@ export class DialogMenu {
         ` ${this.rows.length ? this.selected + 1 : 0}/${this.rows.length} · Field / Value`,
       ),
       ...this.rows.slice(start, start + this.viewport).map((row, i) => {
-        const label = truncateToWidth(dialogText(row.label), labelWidth, "");
-        const text = `${start + i === this.selected ? "›" : " "} ${label}${" ".repeat(Math.max(0, labelWidth - visibleWidth(label)))} │ ${dialogText(row.value ?? "")}`;
-        return start + i === this.selected
-          ? this.theme.fg("accent", text)
-          : text;
+        const selected = start + i === this.selected;
+        const color = (text: string) => selected ? this.theme.fg("accent", text) : text;
+        const prefix = row.labelPrefix
+          ? truncateToWidth(`${dialogText(row.labelPrefix.text)} `, labelWidth, "")
+          : "";
+        const plainLabel = dialogText(row.label);
+        const label = truncateToWidth(
+          row.renderLabel ? row.renderLabel(plainLabel, this.theme) : plainLabel,
+          labelWidth - visibleWidth(prefix),
+          "",
+          true,
+        );
+        const padding = " ".repeat(Math.max(0, labelWidth - visibleWidth(prefix) - visibleWidth(label)));
+        return color(`${selected ? "›" : " "} `)
+          + (row.labelPrefix ? this.theme.fg(row.labelPrefix.color, prefix) : "")
+          + (row.renderLabel ? label : color(label))
+          + color(`${padding} │ ${dialogText(row.value ?? "")}`);
       }),
       "",
-      this.theme.fg(
-        "muted",
-        ` ${dialogText(this.rows[this.selected]?.help ?? "")}`,
-      ),
+      ...help.map((line) => this.theme.fg("muted", ` ${line}`)),
     ];
     return frameDialog(
       this.theme,
@@ -322,7 +339,8 @@ export async function dialogInput(
             "",
             ...input.render(Math.max(1, width - 4)).map((line) => ` ${line}`),
             "",
-            theme.fg("muted", ` ${dialogText(help)}`),
+            ...wrapTextWithAnsi(dialogText(help), Math.max(1, width - 5))
+              .map((line) => theme.fg("muted", ` ${line}`)),
           ],
           "Enter apply · Esc cancel",
         ),

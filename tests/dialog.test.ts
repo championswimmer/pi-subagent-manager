@@ -6,6 +6,7 @@ import test from "node:test";
 import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
   CURSOR_MARKER,
+  rgbColor,
   stripTerminalSequences,
   TuiAltScreen,
   TuiMainScreen,
@@ -13,7 +14,7 @@ import {
   type OverlayHandle,
   type Terminal,
 } from "@earendil-works/pi-tui";
-import { ConfigStore } from "../src/config.ts";
+import { AGENT_COLORS, ConfigStore } from "../src/config.ts";
 import {
   DIALOG_OPTIONS,
   DialogEditor,
@@ -27,7 +28,11 @@ import { configureAgents } from "../src/settings-ui.ts";
 import { DEFAULT_MANAGER_SETTINGS, loadManagerSettings } from "../src/settings.ts";
 import { createDialogDriver } from "./helpers/dialogDriver.ts";
 
-const theme = { fg: (_color: string, text: string) => text } as Theme;
+const theme = {
+  fg: (_color: string, text: string) => text,
+  colors: Object.fromEntries(AGENT_COLORS.map((color) => [color, rgbColor(238, 238, 238)])),
+  style: (text: string) => text,
+} as unknown as Theme;
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
 const host = (rows = 24) => ({ requestRender() {}, terminal: { rows } });
 const DOWN = "\x1b[B";
@@ -106,6 +111,43 @@ test("menu restores selection, navigates, selects, saves, and cancels within bou
   menu.handleInput(ESC);
   assert.equal(selected, undefined);
   for (const width of [1, 10, 40, 100]) bounded(menu.render(width), width, 12);
+});
+
+test("menu prefixes keep their warning color even on the selected row", () => {
+  const coloredTheme = {
+    fg: (color: string, text: string) => {
+      if (color === "warning") return `\x1b[33m${text}\x1b[0m`;
+      if (color === "accent") return `\x1b[36m${text}\x1b[0m`;
+      return text;
+    },
+  } as Theme;
+  const menu = new DialogMenu(host(), coloredTheme, "Settings", [
+    { id: "other", label: "Other" },
+    { id: "save", label: "Save and apply", labelPrefix: { text: "(changes)", color: "warning" } },
+  ], () => {});
+  for (const selected of [false, true]) {
+    if (selected) menu.handleInput(DOWN);
+    const rendered = menu.render(80).join("\n");
+    assert.match(rendered, /\x1b\[33m\(changes\) \x1b\[0m/);
+    assert.match(stripTerminalSequences(rendered), /\(changes\) Save and apply/);
+    for (const width of [1, 10, 40, 100]) bounded(menu.render(width), width, 24);
+  }
+});
+
+test("menu wraps long help text and reserves space for it", () => {
+  const help = "Global saves your defaults for every project. Trusted project settings override these defaults in this project. Switching scope only changes where you save, not the values shown.";
+  const rows = Array.from({ length: 20 }, (_, index) => ({ id: String(index), label: `Field ${index}`, help }));
+  const menu = new DialogMenu(host(), theme, "Settings", rows, () => {}, "19");
+  const lines = menu.render(60);
+  bounded(lines, 60, 24);
+  assert.ok(lines.some((line) => line.includes("Field 19")));
+  const text = lines.slice(0, -3).map(stripTerminalSequences)
+    .map((line) => line.slice(1, -1).trim()).join(" ");
+  assert.ok(text.includes(help), "the full help survives wrapping and framing");
+  for (const height of [6, 12, 24]) {
+    const shortMenu = new DialogMenu(host(height), theme, "Settings", rows, () => {}, "19");
+    for (const width of [1, 10, 40, 100]) bounded(shortMenu.render(width), width, height);
+  }
 });
 
 test("multiline editor forwards focus, keeps cursor visible, applies with Ctrl+S, and cancels", () => {
