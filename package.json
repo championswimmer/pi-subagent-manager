@@ -38,6 +38,7 @@
   "scripts": {
     "check": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
+    "test:coverage": "mkdir -p coverage && tsx --test --experimental-test-coverage --test-coverage-include='src/**' --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/lcov.info tests/*.test.ts",
     "prepublishOnly": "npm run check && npm test",
     "format": "prettier --write --print-width 100 src tests agents docs/default-agents.md README.md",
     "format:check": "prettier --check --print-width 100 src tests agents docs/default-agents.md README.md"
