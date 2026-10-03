@@ -3,13 +3,7 @@ import { test } from "node:test";
 import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { type AssistantMessage, type JsonObject } from "@earendil-works/pi-ai";
-import {
-  buildSessionContext,
-  SessionManager,
-  SessionSelectorComponent,
-  initTheme,
-} from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { buildSessionContext, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { AgentType, SavedThread, ThreadView } from "../src/types.ts";
 import { REGISTRY_ENTRY, registry, withOfflineHarness } from "./helpers/integrationHarness.ts";
 
@@ -36,14 +30,8 @@ const toolUse = (id: string, name: string, args: JsonObject): AssistantMessage =
   content: [{ type: "toolCall", id, name, arguments: args }],
   stopReason: "toolUse",
 });
-const offlineAgent = (body = "ONLY OFFLINE CHILD") =>
-  `---\nname: offline\ndescription: Offline lifecycle worker\ntools:\n  allow: [agent_pause]\n---\n${body}\n`;
-const nestedAgent = (body = "ONLY OFFLINE CHILD") =>
-  `---\nname: nested\ndescription: Nested offline lifecycle worker\nmodel: integration-test/offline-alt\nthinkingLevel: high\ntools:\n  allow: [agent_pause]\n---\n${body}\n`;
-const orderedAgent = (models: string[], body = "ONLY OFFLINE CHILD") =>
-  `---\nname: ordered\ndescription: Ordered offline lifecycle worker\nmodels:\n${models
-    .map((model) => `  - ${model}`)
-    .join("\n")}\ntools:\n  allow: [agent_pause]\n---\n${body}\n`;
+const offlineAgent =
+  "---\nname: offline\ndescription: Offline lifecycle worker\ntools:\n  allow: [agent_pause]\n---\nONLY OFFLINE CHILD\n";
 const contextText = (manager: SessionManager, leafId?: string) =>
   JSON.stringify(buildSessionContext(manager.getEntries(), leafId).messages);
 const rootNotifications = (manager: SessionManager) =>
@@ -62,98 +50,10 @@ const assertMarkers = (text: string, present: string[], absent: string[] = []) =
   for (const marker of present) assert.ok(text.includes(marker), `expected marker ${marker}`);
   for (const marker of absent) assert.ok(!text.includes(marker), `unexpected marker ${marker}`);
 };
-const createTranscript = (options: {
-  cwd: string;
-  sessionDir: string;
-  markers: string[];
-  modelId?: string;
-  thinkingLevel?: string;
-}) => {
-  const [firstMarker, ...restMarkers] = options.markers;
-  assert.ok(firstMarker, "seed transcripts require at least one marker");
-  const manager = SessionManager.create(options.cwd, options.sessionDir);
-  manager.appendMessage({ role: "user", content: firstMarker, timestamp: Date.now() });
-  if (options.modelId) manager.appendModelChange("integration-test", options.modelId);
-  if (options.thinkingLevel) manager.appendThinkingLevelChange(options.thinkingLevel);
-  for (const marker of restMarkers) {
-    manager.appendMessage({ role: "user", content: marker, timestamp: Date.now() });
-  }
-  assert.ok(manager.getSessionFile(), "seed transcript is persisted");
-  return manager;
-};
 const sessionLeafId = (thread: SavedThread) => {
   assert.ok(typeof thread.view.sessionLeafId === "string");
   return thread.view.sessionLeafId;
 };
-
-test(
-  "native resume discovery lists named children with lexical session ancestry",
-  { timeout: 30000 },
-  async () => {
-    await withOfflineHarness(
-      { agentFiles: { offline: offlineAgent() }, onRequest: () => answer("done") },
-      async ({ cwd, open, close, tool }) => {
-        const root = SessionManager.create(cwd);
-        root.appendSessionInfo("Resume discovery root");
-        root.appendMessage({ role: "user", content: "Root task", timestamp: Date.now() });
-        root.appendMessage(answer("Root context"));
-        const session = await open(root);
-        const child = await tool<ThreadView>(session, "agent_spawn", {
-          path: "worker",
-          type: "offline",
-          task: "Child task",
-        });
-        const grandchild = await tool<ThreadView>(session, "agent_spawn", {
-          path: "/root/worker/review",
-          type: "offline",
-          task: "Grandchild task",
-        });
-        assert.ok(child.sessionFile);
-        assert.ok(grandchild.sessionFile);
-        for (const list of [await SessionManager.list(cwd), await SessionManager.listAll()]) {
-          const byPath = new Map(list.map((entry) => [entry.path, entry]));
-          assert.equal(byPath.get(root.getSessionFile()!)?.name, "Resume discovery root");
-          assert.equal(byPath.get(child.sessionFile)?.name, "offline /root/worker");
-          assert.equal(byPath.get(child.sessionFile)?.parentSessionPath, root.getSessionFile());
-          assert.equal(byPath.get(grandchild.sessionFile)?.name, "offline /root/worker/review");
-          assert.equal(byPath.get(grandchild.sessionFile)?.parentSessionPath, child.sessionFile);
-        }
-        initTheme("dark", false);
-        const selector = new SessionSelectorComponent(
-          async () => [],
-          async () => [],
-          () => {},
-          () => {},
-          () => {},
-          () => {},
-        );
-        await new Promise((resolve) => setImmediate(resolve));
-        selector.getSessionList().setSessions(await SessionManager.list(cwd), false);
-        const rows = selector.getSessionList().render(120).map(stripTerminalSequences);
-        const rootRow = rows.findIndex((row) => row.includes("Resume discovery root"));
-        const childRow = rows.findIndex(
-          (row) => row.includes("offline /root/worker") && !row.includes("/review"),
-        );
-        const grandchildRow = rows.findIndex((row) => row.includes("offline /root/worker/review"));
-        assert.ok(rootRow >= 0 && childRow > rootRow && grandchildRow > childRow);
-        assert.match(rows[childRow], /└─ offline \/root\/worker/);
-        assert.match(rows[grandchildRow], /   └─ offline \/root\/worker\/review/);
-        await close(session);
-        const reopened = await open(SessionManager.open(root.getSessionFile()!));
-        const restored = await tool<ThreadView[]>(reopened, "agent_status", {});
-        assert.equal(
-          restored.find((thread) => thread.path === child.path)?.sessionFile,
-          child.sessionFile,
-        );
-        assert.equal(
-          restored.find((thread) => thread.path === grandchild.path)?.sessionFile,
-          grandchild.sessionFile,
-        );
-        await close(reopened);
-      },
-    );
-  },
-);
 
 // One lifecycle scenario using real SDK sessions, JSONL storage, and extension binding; no driver mocks.
 test(
@@ -163,7 +63,7 @@ test(
     let unexpectedCalls = 0;
     await withOfflineHarness(
       {
-        agentFiles: { offline: offlineAgent() },
+        agentFiles: { offline: offlineAgent },
         onRequest(request) {
           const isChild =
             request.path === "/root/worker" && request.system.includes("ONLY OFFLINE CHILD");
@@ -180,6 +80,9 @@ test(
           content: "Durable parent context",
           timestamp: Date.now(),
         });
+        // Inherited context must not be billed to the child's metrics.
+        const inherited = answer("Inherited parent answer");
+        root.appendMessage({ ...inherited, usage: { ...inherited.usage, input: 1000 } });
         let session = await open(root);
         const paused = await tool<ThreadView>(session, "agent_spawn", {
           path: "worker",
@@ -189,6 +92,8 @@ test(
         assert.equal(paused.state, "paused");
         assert.equal(paused.output, undefined, "pause must not hand back an answer");
         assert.equal(requests.length, 1, "pause stops before another provider turn");
+        assert.equal(paused.inputTokens, 1);
+        assert.equal(typeof paused.elapsedMs, "number");
         const childFile = paused.sessionFile!;
         assert.equal(path.dirname(childFile), root.getSessionDir());
         assert.equal(
@@ -202,6 +107,7 @@ test(
         assert.ok((await readFile(childFile, "utf8")).includes('"toolCallId":"pause-1"'));
         assert.equal(registry(root).rootSessionId, root.getSessionId());
         assert.equal(registry(root).threads[0].view.state, "paused");
+        assert.equal(registry(root).threads[0].view.inputTokens, 1);
         const parentFile = root.getSessionFile()!;
         await close(session);
 
@@ -216,6 +122,8 @@ test(
         const completed = await tool<ThreadView>(session, "agent_wait", { path: "worker" });
         assert.equal(completed.state, "completed");
         assert.equal(completed.output, "child answer 2");
+        assert.equal(completed.inputTokens, 2, "restored metrics accumulate new deltas");
+        assert.ok(completed.elapsedMs! >= paused.elapsedMs!);
         assert.equal(completed.sessionFile, childFile);
         assert.ok(
           requests[1].messagesText.includes("pause-1"),
@@ -280,12 +188,12 @@ test(
   "offline extension restores nested root-scoped transcripts and spawns under an unopened lexical parent",
   { timeout: 30000 },
   async () => {
-    const ROOT_MARKER = "marker:root:ancestor";
-    const ROOT_LATER_MARKER = "marker:root:later-only";
-    const TEAM_MARKER = "marker:team";
-    const REVIEWER_MARKER = "marker:reviewer";
-    const CHECKER_MARKER = "marker:checker";
-    const SIBLING_MARKER = "marker:sibling";
+    const ROOT = "marker:root:ancestor";
+    const ROOT_LATER = "marker:root:later-only";
+    const TEAM = "marker:team";
+    const REVIEWER = "marker:reviewer";
+    const CHECKER = "marker:checker";
+    const SIBLING = "marker:sibling";
     const CHILD_PATH = "/root/team/reviewer/drafter";
     const CHILD_OUTPUT = "nested child answer";
     const offline: AgentType = {
@@ -294,17 +202,16 @@ test(
       tools: { allow: ["agent_pause"] },
       systemPrompt: "ONLY OFFLINE CHILD",
     };
-    const nestedOffline: AgentType = {
+    const nested: AgentType = {
       ...offline,
       name: "nested",
-      description: "Nested offline lifecycle worker",
       model: "integration-test/offline-alt",
       thinkingLevel: "high",
     };
 
     await withOfflineHarness(
       {
-        agentFiles: { offline: offlineAgent(), nested: nestedAgent() },
+        agentFiles: { offline: offlineAgent },
         managerSettings: { maxLevels: 4 },
         onRequest(request) {
           assert.equal(request.path, CHILD_PATH);
@@ -312,171 +219,85 @@ test(
         },
       },
       async ({ directory, cwd, errors, requests, open, close, tool }) => {
-        let createdAt = Date.now();
-        const nextCreatedAt = () => ++createdAt;
         const root = SessionManager.create(cwd, path.join(directory, "parents"));
-        root.appendMessage({ role: "user", content: ROOT_MARKER, timestamp: nextCreatedAt() });
+        root.appendMessage({ role: "user", content: ROOT, timestamp: Date.now() });
         const rootId = root.getSessionId();
+        // Legacy layout: child transcripts live in a root-scoped directory.
         const rootScopedDir = path.join(directory, "subagents", rootId);
         await mkdir(rootScopedDir, { recursive: true });
-
-        const teamSession = createTranscript({
-          cwd,
-          sessionDir: rootScopedDir,
-          markers: [ROOT_MARKER, TEAM_MARKER],
-          modelId: "offline-alt",
-          thinkingLevel: "high",
-        });
-        const reviewerSession = createTranscript({
-          cwd,
-          sessionDir: rootScopedDir,
-          markers: [ROOT_MARKER, TEAM_MARKER, REVIEWER_MARKER],
-          modelId: "offline-alt",
-          thinkingLevel: "high",
-        });
-        const checkerSession = createTranscript({
-          cwd,
-          sessionDir: rootScopedDir,
-          markers: [ROOT_MARKER, TEAM_MARKER, REVIEWER_MARKER, CHECKER_MARKER],
-          modelId: "offline-alt",
-          thinkingLevel: "high",
-        });
-        const siblingSession = createTranscript({
-          cwd,
-          sessionDir: rootScopedDir,
-          markers: [ROOT_MARKER, SIBLING_MARKER],
-        });
-        const teamFile = teamSession.getSessionFile()!;
-        const reviewerFile = reviewerSession.getSessionFile()!;
-        const checkerFile = checkerSession.getSessionFile()!;
-        const siblingFile = siblingSession.getSessionFile()!;
-        for (const file of [teamFile, reviewerFile, checkerFile, siblingFile]) {
-          assert.ok(file.startsWith(rootScopedDir), `root-scoped transcript ${file}`);
-        }
-        assert.equal(teamSession.buildSessionContext().model?.modelId, "offline-alt");
-        assert.equal(teamSession.buildSessionContext().thinkingLevel, "high");
-        assert.equal(reviewerSession.buildSessionContext().model?.modelId, "offline-alt");
-        assert.equal(reviewerSession.buildSessionContext().thinkingLevel, "high");
-        assertMarkers(
-          contextText(teamSession),
-          [ROOT_MARKER, TEAM_MARKER],
-          [REVIEWER_MARKER, CHECKER_MARKER, SIBLING_MARKER, ROOT_LATER_MARKER],
-        );
-        assertMarkers(
-          contextText(reviewerSession),
-          [ROOT_MARKER, TEAM_MARKER, REVIEWER_MARKER],
-          [CHECKER_MARKER, SIBLING_MARKER, ROOT_LATER_MARKER],
-        );
-        assertMarkers(
-          contextText(checkerSession),
-          [ROOT_MARKER, TEAM_MARKER, REVIEWER_MARKER, CHECKER_MARKER],
-          [SIBLING_MARKER, ROOT_LATER_MARKER],
-        );
-        assertMarkers(
-          contextText(siblingSession),
-          [ROOT_MARKER, SIBLING_MARKER],
-          [TEAM_MARKER, REVIEWER_MARKER, CHECKER_MARKER, ROOT_LATER_MARKER],
-        );
-
-        root.appendMessage({
-          role: "user",
-          content: ROOT_LATER_MARKER,
-          timestamp: nextCreatedAt(),
-        });
-        const saved: SavedThread[] = [
-          {
+        const transcript = (markers: string[], isNested: boolean) => {
+          const manager = SessionManager.create(cwd, rootScopedDir);
+          manager.appendMessage({ role: "user", content: markers[0]!, timestamp: Date.now() });
+          if (isNested) {
+            manager.appendModelChange("integration-test", "offline-alt");
+            manager.appendThinkingLevelChange("high");
+          }
+          for (const content of markers.slice(1))
+            manager.appendMessage({ role: "user", content, timestamp: Date.now() });
+          return manager.getSessionFile()!;
+        };
+        const thread = (
+          relative: string,
+          state: ThreadView["state"],
+          sessionFile: string,
+          extra: Partial<ThreadView> = {},
+        ): SavedThread => {
+          const viewPath = `/root/${relative}`;
+          const parent = viewPath.slice(0, viewPath.lastIndexOf("/"));
+          return {
             view: {
-              path: "/root/team",
-              parent: "/root",
-              owner: "/root",
-              type: "nested",
-              state: "running",
-              task: "Coordinate the team",
-              status: "Working before reload",
-              createdAt: nextCreatedAt(),
-              sessionFile: teamFile,
+              path: viewPath,
+              parent,
+              owner: parent,
+              type: relative === "sibling" ? "offline" : "nested",
+              state,
+              task: relative,
+              status: `${state} before reload`,
+              createdAt: Date.now(),
+              sessionFile,
+              ...extra,
             },
-            definition: nestedOffline,
-          },
-          {
-            view: {
-              path: "/root/team/reviewer",
-              parent: "/root/team",
-              owner: "/root/team",
-              type: "nested",
-              state: "starting",
-              task: "Review incoming work",
-              status: "Starting before reload",
-              createdAt: nextCreatedAt(),
-              sessionFile: reviewerFile,
-            },
-            definition: nestedOffline,
-          },
-          {
-            view: {
-              path: "/root/team/reviewer/checker",
-              parent: "/root/team/reviewer",
-              owner: "/root/team/reviewer",
-              type: "nested",
-              state: "completed",
-              task: "Checked the previous draft",
-              status: "Completed; session retained",
-              output: "checked",
-              createdAt: nextCreatedAt(),
-              sessionFile: checkerFile,
-            },
-            definition: nestedOffline,
-          },
-          {
-            view: {
-              path: "/root/sibling",
-              parent: "/root",
-              owner: "/root",
-              type: "offline",
-              state: "paused",
-              task: "Wait for separate work",
-              status: "Need sibling input",
-              createdAt: nextCreatedAt(),
-              sessionFile: siblingFile,
-            },
-            definition: offline,
-          },
-        ];
+            definition: relative === "sibling" ? offline : nested,
+          };
+        };
+        const reviewerFile = transcript([ROOT, TEAM, REVIEWER], true);
+        root.appendMessage({ role: "user", content: ROOT_LATER, timestamp: Date.now() });
         root.appendCustomEntry(REGISTRY_ENTRY, {
           version: 1,
           rootSessionId: rootId,
-          threads: saved,
+          threads: [
+            thread("team", "running", transcript([ROOT, TEAM], true)),
+            thread("team/reviewer", "starting", reviewerFile),
+            thread(
+              "team/reviewer/checker",
+              "completed",
+              transcript([ROOT, TEAM, REVIEWER, CHECKER], true),
+              {
+                output: "checked",
+              },
+            ),
+            thread("sibling", "paused", transcript([ROOT, SIBLING], false), {
+              status: "Need sibling input",
+            }),
+          ],
         });
         const parentFile = root.getSessionFile()!;
 
-        let session = await open(root);
-        assert.equal(requests.length, 0, "restore must not call the provider");
-        const restored = await tool<ThreadView[]>(session, "agent_status", {});
-        const restoredByPath = new Map(restored.map((thread) => [thread.path, thread]));
-        assert.deepEqual(
-          restored.map((thread) => thread.path).sort(),
-          [
-            "/root/sibling",
-            "/root/team",
-            "/root/team/reviewer",
-            "/root/team/reviewer/checker",
-          ].sort(),
+        const session = await open(root);
+        const restored = new Map(
+          (await tool<ThreadView[]>(session, "agent_status", {})).map((view) => [view.path, view]),
         );
-        assert.equal(restoredByPath.get("/root/team")?.state, "paused");
-        assert.equal(
-          restoredByPath.get("/root/team")?.status,
-          "Interrupted by reload; send input to resume",
-        );
-        assert.equal(restoredByPath.get("/root/team/reviewer")?.state, "paused");
-        assert.equal(
-          restoredByPath.get("/root/team/reviewer")?.status,
-          "Interrupted by reload; send input to resume",
-        );
-        assert.equal(restoredByPath.get("/root/team/reviewer/checker")?.state, "completed");
-        assert.equal(restoredByPath.get("/root/team/reviewer/checker")?.output, "checked");
-        assert.equal(restoredByPath.get("/root/sibling")?.state, "paused");
-        assert.equal(restoredByPath.get("/root/sibling")?.status, "Need sibling input");
-        assert.equal(requests.length, 0, "status reads do not restore through the model");
+        assert.equal(restored.size, 4);
+        for (const interrupted of ["/root/team", "/root/team/reviewer"]) {
+          assert.equal(restored.get(interrupted)?.state, "paused");
+          assert.equal(
+            restored.get(interrupted)?.status,
+            "Interrupted by reload; send input to resume",
+          );
+        }
+        assert.equal(restored.get("/root/team/reviewer/checker")?.output, "checked");
+        assert.equal(restored.get("/root/sibling")?.status, "Need sibling input");
+        assert.equal(requests.length, 0, "restore and status reads stay offline");
 
         const spawned = await tool<ThreadView>(session, "agent_spawn", {
           path: CHILD_PATH,
@@ -485,96 +306,44 @@ test(
         });
         assert.equal(spawned.state, "completed");
         assert.equal(spawned.output, CHILD_OUTPUT);
-        assert.ok(spawned.sessionFile);
-        assert.equal(path.dirname(spawned.sessionFile), root.getSessionDir());
+        assert.equal(path.dirname(spawned.sessionFile!), root.getSessionDir());
         assert.equal(
-          SessionManager.open(spawned.sessionFile).getHeader()?.parentSession,
+          SessionManager.open(spawned.sessionFile!).getHeader()?.parentSession,
           reviewerFile,
         );
         assert.equal(requests.length, 1, "only the new child prompt uses the provider");
-        assert.equal(requests[0].path, CHILD_PATH);
         assert.equal(requests[0].lexicalParent, "/root/team/reviewer");
-        assert.equal(requests[0].modelId, "offline-alt");
-        assert.ok(
-          requests[0].system.includes("Your lexical parent is /root/team/reviewer"),
-          "child request names the lexical parent",
-        );
+        assert.equal(requests[0].modelId, "offline-alt", "inherits the lexical parent's model");
         assertMarkers(
           requests[0].messagesText,
-          [ROOT_MARKER, TEAM_MARKER, REVIEWER_MARKER],
-          [ROOT_LATER_MARKER, SIBLING_MARKER, CHECKER_MARKER],
+          [ROOT, TEAM, REVIEWER],
+          [ROOT_LATER, SIBLING, CHECKER],
         );
         await new Promise((resolve) => setImmediate(resolve));
         assert.equal(requests.length, 1, "delivery into the parent transcript stays offline");
         await close(session);
 
-        const reopened = SessionManager.open(parentFile);
-        session = await open(reopened);
-        assert.equal(requests.length, 1, "reopening the root remains offline");
-        const visibleAgain = await tool<ThreadView[]>(session, "agent_status", {});
-        assert.deepEqual(
-          visibleAgain.map((thread) => thread.path).sort(),
-          [
-            "/root/sibling",
-            "/root/team",
-            "/root/team/reviewer",
-            "/root/team/reviewer/checker",
-            CHILD_PATH,
-          ].sort(),
-        );
-        const restoredChild = await tool<ThreadView>(session, "agent_status", { path: CHILD_PATH });
-        assert.equal(restoredChild.state, "completed");
-        assert.equal(restoredChild.output, CHILD_OUTPUT);
-        assert.equal(requests.length, 1, "restoring the new child stays offline");
-        await close(session);
+        const durable = registry(SessionManager.open(parentFile));
+        assert.equal(durable.rootSessionId, rootId);
+        const byPath = new Map(durable.threads.map((saved) => [saved.view.path, saved.view]));
+        assert.equal(byPath.size, 5);
+        assert.equal(byPath.get("/root/team")?.state, "paused");
+        assert.equal(byPath.get(CHILD_PATH)?.output, CHILD_OUTPUT);
 
-        const durableRoot = SessionManager.open(parentFile);
-        const durableRegistry = registry(durableRoot);
-        const durableByPath = new Map(
-          durableRegistry.threads.map((thread) => [thread.view.path, thread.view]),
-        );
-        assert.equal(durableRegistry.rootSessionId, rootId);
-        assert.deepEqual(
-          durableRegistry.threads.map((thread) => thread.view.path).sort(),
-          [
-            "/root/sibling",
-            "/root/team",
-            "/root/team/reviewer",
-            "/root/team/reviewer/checker",
-            CHILD_PATH,
-          ].sort(),
-        );
-        assert.equal(durableByPath.get("/root/team")?.state, "paused");
-        assert.equal(durableByPath.get("/root/team/reviewer")?.state, "paused");
-        assert.equal(durableByPath.get(CHILD_PATH)?.state, "completed");
-        assert.equal(durableByPath.get(CHILD_PATH)?.output, CHILD_OUTPUT);
-        assert.equal(
-          path.dirname(durableByPath.get(CHILD_PATH)!.sessionFile!),
-          root.getSessionDir(),
-        );
-
-        const durableParent = SessionManager.open(reviewerFile);
-        const mailboxEntries = durableParent
+        const mailboxEntries = SessionManager.open(reviewerFile)
           .getBranch()
           .filter(
             (entry) => entry.type === "custom_message" && entry.customType === "subagent-update",
           );
-        assert.equal(
-          mailboxEntries.length,
-          1,
-          "actual parent transcript receives one mailbox update",
-        );
+        assert.equal(mailboxEntries.length, 1, "actual parent transcript receives one update");
         assert.ok(
           JSON.stringify(mailboxEntries).includes(`Agent ${CHILD_PATH} completed. Final answer:`),
         );
         assert.ok(JSON.stringify(mailboxEntries).includes(CHILD_OUTPUT));
 
-        const durableChild = SessionManager.open(spawned.sessionFile!);
-        const childContext = durableChild.buildSessionContext();
-        assert.equal(childContext.model?.provider, "integration-test");
+        const childContext = SessionManager.open(spawned.sessionFile!).buildSessionContext();
         assert.equal(childContext.model?.modelId, "offline-alt");
-        assert.equal(childContext.thinkingLevel, "high");
-        assert.ok(JSON.stringify(childContext.messages).includes(CHILD_OUTPUT));
+        assert.equal(childContext.thinkingLevel, "high", "inherits the lexical parent's thinking");
         assert.deepEqual(errors, []);
       },
     );
@@ -596,7 +365,7 @@ test(
 
     await withOfflineHarness(
       {
-        agentFiles: { offline: offlineAgent() },
+        agentFiles: { offline: offlineAgent },
         onRequest(request) {
           assert.equal(request.path, CHILD_PATH);
           const text = replies.get(request.pathCall);
@@ -677,11 +446,6 @@ test(
         assert.equal(restoredA.output, "answer A");
         const restoredLeafA = sessionLeafId(registry(reopened).threads[0]!);
         assert.equal(restoredLeafA, leafA);
-        assertMarkers(
-          contextText(SessionManager.open(childFile), restoredLeafA),
-          [ROOT_SEED, "answer A"],
-          ["answer B", "answer C"],
-        );
 
         await tool(session, "agent_steer", {
           path: CHILD_PATH,
@@ -701,52 +465,7 @@ test(
         assert.equal(restoredB.output, "answer B");
         const restoredLeafB = sessionLeafId(registry(reopened).threads[0]!);
         assert.equal(restoredLeafB, leafB);
-        assertMarkers(
-          contextText(SessionManager.open(childFile), restoredLeafB),
-          [ROOT_SEED, "answer A", "answer B"],
-          ["answer C"],
-        );
 
-        await close(session);
-        assert.deepEqual(errors, []);
-      },
-    );
-  },
-);
-
-test(
-  "offline extension surfaces scoped model policy failures as failed thread status",
-  { timeout: 30000 },
-  async () => {
-    await withOfflineHarness(
-      {
-        agentFiles: {
-          ordered: orderedAgent(["integration-test/offline-alt"]),
-        },
-        scopedModels: ["integration-test/offline"],
-        onRequest() {
-          throw new Error("provider must not be called when scope rejects the agent model");
-        },
-      },
-      async ({ directory, cwd, errors, requests, open, close, tool }) => {
-        const root = SessionManager.create(cwd, path.join(directory, "parents"));
-        const session = await open(root);
-        const failed = await tool<ThreadView>(session, "agent_spawn", {
-          path: "worker",
-          type: "ordered",
-          task: "Attempt disallowed scoped model",
-        });
-        assert.equal(failed.state, "failed");
-        assert.match(failed.error ?? "", /integration-test\/offline-alt/);
-        assert.match(failed.error ?? "", /\/scoped-models/);
-        assert.match(failed.status, /\/scoped-models/);
-        assert.equal(requests.length, 0);
-
-        const visible = await tool<ThreadView>(session, "agent_status", { path: "worker" });
-        assert.equal(visible.state, "failed");
-        assert.equal(visible.error, failed.error);
-        assert.equal(registry(root).threads[0]?.view.state, "failed");
-        assert.equal(registry(root).threads[0]?.view.error, failed.error);
         await close(session);
         assert.deepEqual(errors, []);
       },

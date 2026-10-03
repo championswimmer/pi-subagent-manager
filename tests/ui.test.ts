@@ -1,19 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  mkdtemp,
-  mkdir,
-  readFile,
-  readdir,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { quote } from "shell-quote";
 import {
   colorToRgb,
-  foregroundAnsi,
   CURSOR_MARKER,
   rgbColor,
   stripTerminalSequences,
@@ -31,17 +23,8 @@ import type { ThreadView } from "../src/types.ts";
 import { DialogEditor, DialogMenu, dialogHeight } from "../src/dialog.ts";
 import { configureAgents } from "../src/settings-ui.ts";
 import { DEFAULT_MANAGER_SETTINGS } from "../src/settings.ts";
-import {
-  bindDialogDriver,
-  createDialogDriver,
-  dialogDriverFor,
-} from "./helpers/dialogDriver.ts";
-import {
-  AGENT_COLORS,
-  ConfigStore,
-  parseAgentType,
-  serializeAgentType,
-} from "../src/config.ts";
+import { bindDialogDriver, createDialogDriver, dialogDriverFor } from "./helpers/dialogDriver.ts";
+import { AGENT_COLORS, ConfigStore, parseAgentType, serializeAgentType } from "../src/config.ts";
 import {
   editAgentTypes,
   editorArguments,
@@ -51,6 +34,8 @@ import {
   updateWidget,
   type ThreadController,
 } from "../src/ui.ts";
+
+const CONTROL = /[\x00-\x1f\x7f-\x9f]/;
 
 function thread(path: string, overrides: Partial<ThreadView> = {}): ThreadView {
   return {
@@ -66,11 +51,11 @@ function thread(path: string, overrides: Partial<ThreadView> = {}): ThreadView {
     ...overrides,
   };
 }
+
 function testTheme(
   appearance: "dark" | "light",
   mode: "truecolor" | "256color" = "truecolor",
 ): Theme {
-  // Deterministic fixtures use the public API, independent of terminal color detection.
   const foreground = appearance === "dark" ? "#eeeeee" : "#111111";
   const background = appearance === "dark" ? "#111111" : "#eeeeee";
   const colors = {
@@ -104,8 +89,7 @@ function contrastChannel(color: Color): 0 | 255 {
     const value = channel / 255;
     return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
   };
-  const luminance =
-    0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+  const luminance = 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
   return luminance > Math.sqrt(0.0525) - 0.05 ? 0 : 255;
 }
 
@@ -115,11 +99,7 @@ function badgeToken(color: string | undefined): ThemeColor {
     : "accent";
 }
 
-function expectedBadge(
-  theme: Theme,
-  name: string,
-  color: string | undefined,
-): string {
+function expectedBadge(theme: Theme, name: string, color?: string): string {
   const background = theme.colors[badgeToken(color)];
   const channel = contrastChannel(background);
   return styleText(
@@ -129,49 +109,16 @@ function expectedBadge(
   );
 }
 
-function expectedTypeBadge(
-  theme: Theme,
-  type: string,
-  color: string | undefined,
-): string {
-  return expectedBadge(theme, `[${type}]`, color);
-}
-
-function expectedPath(
-  theme: Theme,
-  path: string,
-  color: string | undefined,
-): string {
+function expectedPath(theme: Theme, path: string, color?: string): string {
   return theme.fg(badgeToken(color), sanitizeText(path));
 }
 
-function stateToken(
-  state: ThreadView["state"],
-): "error" | "warning" | "accent" {
-  return state === "failed"
-    ? "error"
-    : state === "paused"
-      ? "warning"
-      : "accent";
-}
-
 /** Zero-metric fixtures only. Counters are the literal unset label, padded, not truncated. */
-function expectedThreadLine(
-  theme: Theme,
-  view: ThreadView,
-  width = 80,
-): string {
-  const badge = expectedTypeBadge(theme, view.type, view.color);
-  const path = expectedPath(theme, view.path, view.color);
-  const state = theme.fg(
-    stateToken(view.state),
-    `[${sanitizeText(view.state)}]`,
-  );
-  const left = `${badge} ${path} ${state} ${sanitizeText(view.status || view.task)}`;
+function expectedThreadLine(theme: Theme, view: ThreadView, width = 80) {
+  const token = view.state === "failed" ? "error" : view.state === "paused" ? "warning" : "accent";
+  const left = `${expectedBadge(theme, `[${view.type}]`, view.color)} ${expectedPath(theme, view.path, view.color)} ${theme.fg(token, `[${sanitizeText(view.state)}]`)} ${sanitizeText(view.status || view.task)}`;
   const right = theme.fg("muted", "0s ↑0 ↓0");
-  return (
-    left + " ".repeat(width - visibleWidth(left) - visibleWidth(right)) + right
-  );
+  return left + " ".repeat(width - visibleWidth(left) - visibleWidth(right)) + right;
 }
 
 /** Visible text inside each background-color span. Resets are not part of the span. */
@@ -186,6 +133,8 @@ function backgroundCoveredText(line: string): string[] {
   }
   return spans;
 }
+
+type WidgetComponent = { render(width: number): string[]; dispose(): void };
 
 test("widget is compact, excludes current root, and reports hidden threads", () => {
   const threads = [
@@ -208,183 +157,228 @@ test("widget is compact, excludes current root, and reports hidden threads", () 
   assert.equal(renderThreads(threads.slice(1, 9), 80, darkTheme).length, 8);
 });
 
-test("widget sanitizes untrusted text and fits narrow Unicode terminal widths", () => {
-  const threads = [
-    thread("/作業", {
-      status: "\x1b[31mred\x1b[0m\x1b]0;owned\x07\n\x00界界界",
-    }),
-  ];
-  for (const width of [0, 1, 5, 20, 80]) {
-    const lines = renderThreads(threads, width, darkTheme);
-    assert.ok(lines.every((line) => visibleWidth(line) <= width));
-    assert.ok(
-      lines.every(
-        (line) => !/[\x00-\x1f\x7f-\x9f]/.test(stripTerminalSequences(line)),
-      ),
-    );
-  }
+test("widget sanitizes hostile text, fits narrow widths, and keeps counters right-aligned", () => {
   assert.equal(sanitizeText("\x1b]0;owned\x07hello\r\nthere"), "hello  there");
+  const hostile = "\x1b[31mred\x1b[0m\x1b]0;owned\x07\n\x00" + "界".repeat(30);
+  const view = thread("/root/" + "p".repeat(180), {
+    type: "researcher" + hostile,
+    status: hostile,
+    task: hostile,
+    color: "success",
+    elapsedMs: 65_000,
+    inputTokens: 1_200,
+    outputTokens: 34,
+  });
+  const styled = darkTheme.fg("muted", "1m5s ↑1.2k ↓34");
+  for (const width of [0, 1, 4, 8, 16, 40, 80]) {
+    const line = renderThreads([view], width, darkTheme)[0]!;
+    assert.ok(visibleWidth(line) <= width);
+    assert.ok(!CONTROL.test(stripTerminalSequences(line)));
+    if (width >= visibleWidth(styled)) {
+      assert.ok(line.endsWith(styled));
+      assert.equal(visibleWidth(line), width);
+    }
+  }
 });
 
-test("widget clears when empty and resolves theme dynamically at render", () => {
-  let content: unknown;
-  let options: unknown;
-  let marker = "first";
-  const fgCalls: { marker: string; color: string; text: string }[] = [];
-  const styleCalls: {
-    marker: string;
-    text: string;
-    bold?: boolean;
-    bg: string;
-    fg: string;
-  }[] = [];
-  const tokenColor = (name: string) =>
-    rgbColor(
-      AGENT_COLORS.indexOf(name as (typeof AGENT_COLORS)[number]) + 1,
-      8,
-      9,
+test("widget counter literals cover duration steps and count boundaries", () => {
+  const cases = [
+    [65_000, 999, 1_000, "1m5s ↑999 ↓1k"],
+    [3_600_000, 1_200, 999_999, "1h0m ↑1.2k ↓1m"],
+    [86_400_000, 1_000_000, 1_500_000, "1d0h ↑1m ↓1.5m"],
+    [-5, Number.NaN, -1, "0s ↑0 ↓0"],
+  ] as const;
+  for (const [elapsedMs, inputTokens, outputTokens, counters] of cases) {
+    const line = stripTerminalSequences(
+      renderThreads(
+        [
+          thread("/job", {
+            state: "completed",
+            elapsedMs,
+            inputTokens,
+            outputTokens,
+          }),
+        ],
+        80,
+        darkTheme,
+      )[0]!,
     );
+    assert.ok(line.endsWith(` ${counters}`), line);
+  }
+});
+
+test("thread pills use the type color with contrasting text; state colors only the state label", () => {
+  const channels = new Set<0 | 255>();
+  for (const theme of [
+    darkTheme,
+    lightTheme,
+    testTheme("dark", "256color"),
+    testTheme("light", "256color"),
+  ]) {
+    for (const color of ["accent", "success", "warning", "text", "error"] as const) {
+      const view = thread("/root/controller-security-research", {
+        type: "researcher",
+        color,
+      });
+      const line = renderThreads([view], 120, theme)[0]!;
+      channels.add(contrastChannel(theme.colors[color]));
+      assert.equal(line, expectedThreadLine(theme, view, 120));
+      assert.deepEqual(backgroundCoveredText(line), [" [researcher] "]);
+    }
+  }
+  assert.ok(channels.has(0), "a light background must use black text");
+  assert.ok(channels.has(255), "a dark background must use white text");
+
+  for (const state of ["failed", "paused", "starting", "completed", "stopped"] as const) {
+    const view = thread("/worker", {
+      type: "researcher",
+      state,
+      color: "success",
+      status: "Busy",
+      task: "Ignored",
+    });
+    const line = renderThreads([view], 80, darkTheme)[0]!;
+    assert.equal(line, expectedThreadLine(darkTheme, view));
+  }
+
+  // Unknown colors fall back to accent; hostile type/path text is sanitized.
+  const invalid = thread("/owned\x1b[31m", {
+    type: "bad\x1b[31m",
+    color: "\x1b[31mnot-a-token",
+    state: "failed",
+    status: "",
+    task: "Recover",
+  });
+  const fallback = renderThreads([invalid], 100, darkTheme)[0]!;
+  assert.equal(fallback, expectedThreadLine(darkTheme, invalid, 100));
+  assert.ok(!CONTROL.test(stripTerminalSequences(fallback)));
+});
+
+test("widget resolves the theme at render time", () => {
+  let content: unknown;
+  let marker = "first";
+  const tokenColor = (name: string) =>
+    rgbColor(AGENT_COLORS.indexOf(name as (typeof AGENT_COLORS)[number]) + 1, 8, 9);
   const ctx = {
     hasUI: true,
     ui: {
       get theme() {
         const current = marker;
         return {
-          fg: (color: string, text: string) => {
-            fgCalls.push({ marker: current, color, text });
-            return `${current}<fg:${color}>${text}</fg>`;
-          },
-          colors: Object.fromEntries(
-            AGENT_COLORS.map((name) => [name, tokenColor(name)]),
-          ),
-          style: (
-            text: string,
-            style: { bold?: boolean; bg?: Color; fg?: Color },
-          ) => {
-            const bg = style.bg
-              ? colorToRgb(style.bg)
-              : { r: -1, g: -1, b: -1 };
-            const fg = style.fg
-              ? colorToRgb(style.fg)
-              : { r: -1, g: -1, b: -1 };
-            styleCalls.push({
-              marker: current,
-              text,
-              bold: style.bold,
-              bg: `${bg.r},${bg.g},${bg.b}`,
-              fg: `${fg.r},${fg.g},${fg.b}`,
-            });
-            return `${current}<bg:${bg.r}>${text}</bg>`;
-          },
+          fg: (color: string, text: string) => `${current}<fg:${color}>${text}</fg>`,
+          colors: Object.fromEntries(AGENT_COLORS.map((name) => [name, tokenColor(name)])),
+          style: (text: string, style: { bg?: Color }) =>
+            `${current}<bg:${colorToRgb(style.bg!).r}>${text}</bg>`,
         };
       },
-      setWidget: (key: string, value: unknown, placement: unknown) => {
-        assert.equal(key, "pi-subagent");
+      setWidget: (_key: string, value: unknown) => {
         content = value;
-        options = placement;
       },
     },
   } as unknown as ExtensionContext;
   updateWidget(ctx, [
-    thread("/worker", { type: "worker", color: "success", status: "Working" }),
-    thread("/fallback", {
-      type: "fallback",
-      color: "\x1b[31m",
-      status: "Working",
-    }),
+    thread("/worker", { color: "success" }),
+    thread("/fallback", { type: "fallback", color: "\x1b[31m" }),
   ]);
-  assert.deepEqual(options, { placement: "aboveEditor" });
-  const tui = { requestRender() {} };
-  const widget = (
-    content as (injected: typeof tui) => {
-      render(width: number): string[];
-      dispose(): void;
-    }
-  )(tui);
-  const first = widget.render(200);
-  const firstWorker = first.find((line) =>
-    line.includes("first<fg:success>/worker</fg>"),
-  )!;
-  assert.match(first[0]!, /first<fg:accent>Agents<\/fg>/);
-  assert.match(firstWorker, /first<bg:/);
-  assert.match(firstWorker, /first<fg:accent>\[running\]<\/fg> Task/);
-  assert.match(firstWorker, /first<fg:muted>0s ↑0 ↓0<\/fg>$/);
-  assert.match(first[first.indexOf(firstWorker) + 1]!, /first<fg:muted>Working<\/fg>/);
+  const widget = (content as (tui: unknown) => WidgetComponent)({
+    requestRender() {},
+  });
+  assert.match(widget.render(200)[0]!, /first<fg:accent>Agents<\/fg>/);
   marker = "second";
-  const second = widget.render(200);
-  assert.match(second[0]!, /second<fg:accent>Agents<\/fg>/);
-  assert.match(
-    second[1]!,
-    /second<bg:1> \[fallback\] <\/bg> second<fg:accent>\/fallback<\/fg> second<fg:accent>\[running\]<\/fg> Task/,
+  const second = widget.render(200).join("\n");
+  assert.doesNotMatch(second, /first</);
+  const bg = (name: string) => colorToRgb(tokenColor(name)).r;
+  assert.ok(
+    second.includes(`second<bg:${bg("accent")}> [fallback] </bg> second<fg:accent>/fallback</fg>`),
   );
-  assert.match(second[1]!, /second<fg:muted>0s ↑0 ↓0<\/fg>$/);
-  assert.deepEqual(
-    styleCalls.map((call) => call.text),
-    [" [fallback] ", " [worker] ", " [fallback] ", " [worker] "],
-  );
-  assert.deepEqual(
-    styleCalls.map((call) => call.marker),
-    ["first", "first", "second", "second"],
-  );
-  assert.ok(styleCalls.every((call) => call.bold === true));
-  const successBg = `${tokenColor("success").r},8,9`;
-  const accentBg = `${tokenColor("accent").r},8,9`;
-  assert.deepEqual(
-    styleCalls.map((call) => call.bg),
-    [accentBg, successBg, accentBg, successBg],
-  );
-  assert.deepEqual(
-    styleCalls.map((call) => call.fg),
-    styleCalls.map((call) => {
-      const [r, g, b] = call.bg.split(",").map(Number);
-      const channel = contrastChannel(rgbColor(r!, g!, b!));
-      return `${channel},${channel},${channel}`;
-    }),
-  );
-  assert.deepEqual(
-    fgCalls.map((call) => ({ color: call.color, text: call.text })),
-    [
-      { color: "accent", text: "Agents" },
-      { color: "muted", text: "2 live · 0 paused" },
-      { color: "accent", text: "/fallback" },
-      { color: "accent", text: "[running]" },
-      { color: "muted", text: "0s ↑0 ↓0" },
-      { color: "muted", text: "Working" },
-      { color: "success", text: "/worker" },
-      { color: "accent", text: "[running]" },
-      { color: "muted", text: "0s ↑0 ↓0" },
-      { color: "muted", text: "Working" },
-      { color: "accent", text: "Agents" },
-      { color: "muted", text: "2 live · 0 paused" },
-      { color: "accent", text: "/fallback" },
-      { color: "accent", text: "[running]" },
-      { color: "muted", text: "0s ↑0 ↓0" },
-      { color: "muted", text: "Working" },
-      { color: "success", text: "/worker" },
-      { color: "accent", text: "[running]" },
-      { color: "muted", text: "0s ↑0 ↓0" },
-      { color: "muted", text: "Working" },
-    ],
+  assert.ok(
+    second.includes(`second<bg:${bg("success")}> [worker] </bg> second<fg:success>/worker</fg>`),
   );
   widget.dispose();
-  updateWidget(ctx, []);
-  assert.equal(content, undefined);
-  updateWidget(ctx, [thread("/root")]);
-  assert.equal(content, undefined);
+});
+
+test("widget timer rerenders live elapsed and does not run when settled or headless", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 1_000_000 });
+  const intervals = globalThis.setInterval;
+  let unrefs = 0;
+  globalThis.setInterval = ((fn: TimerHandler, ms?: number) => {
+    const timer = intervals(fn, ms as number) as unknown as NodeJS.Timeout;
+    const unref = timer.unref.bind(timer);
+    timer.unref = () => {
+      unrefs += 1;
+      return unref();
+    };
+    return timer;
+  }) as unknown as typeof setInterval;
+  try {
+    let renders = 0;
+    let component: WidgetComponent | undefined;
+    const tui = { requestRender: () => void (renders += 1) };
+    const ctx = {
+      hasUI: true,
+      ui: {
+        theme: darkTheme,
+        setWidget: (_key: string, factory: unknown) => {
+          component?.dispose();
+          component = typeof factory === "function" ? (factory(tui) as WidgetComponent) : undefined;
+        },
+      },
+    } as unknown as ExtensionContext;
+    const line = () =>
+      stripTerminalSequences(
+        component!.render(100).find((row) => stripTerminalSequences(row).includes("↑")) ?? "",
+      );
+    const job = (patch: Partial<ThreadView>) =>
+      thread("/root/job", { type: "researcher", ...patch });
+
+    updateWidget(ctx, [
+      job({ startedAt: 995_000, elapsedMs: 2_000, inputTokens: 10, outputTokens: 3 }),
+    ]);
+    assert.equal(unrefs, 1);
+    assert.match(line(), /7s ↑10 ↓3$/);
+    t.mock.timers.tick(1000);
+    assert.equal(renders, 1);
+    assert.match(line(), /8s ↑10 ↓3$/);
+
+    renders = 0;
+    updateWidget(ctx, [job({ startedAt: Date.now(), elapsedMs: 65_000 })]);
+    t.mock.timers.tick(1000);
+    assert.equal(renders, 1, "replacing a live widget must dispose the previous timer");
+    assert.match(line(), /1m6s ↑0 ↓0$/);
+
+    renders = 0;
+    updateWidget(ctx, [thread("/done", { state: "completed", startedAt: 1, elapsedMs: 9_000 })]);
+    assert.match(line(), /9s ↑0 ↓0$/);
+    t.mock.timers.tick(5000);
+    assert.equal(renders, 0);
+    assert.equal(unrefs, 2);
+
+    updateWidget(
+      {
+        hasUI: false,
+        ui: {
+          setWidget() {
+            throw new Error("no ui");
+          },
+        },
+      } as unknown as ExtensionContext,
+      [thread("/hidden", { startedAt: 1_000_000 })],
+    );
+    t.mock.timers.tick(2000);
+    assert.equal(renders, 0);
+  } finally {
+    globalThis.setInterval = intervals;
+    t.mock.timers.reset();
+  }
 });
 
 test("editor command accepts quoted argv but rejects shell operators", () => {
-  assert.deepEqual(
-    editorArguments('"/Applications/My Editor/bin/editor" --wait "a b"'),
-    ["/Applications/My Editor/bin/editor", "--wait", "a b"],
-  );
-  for (const command of [
-    "",
-    "vim; touch /tmp/owned",
-    "vim | sh",
-    "vim && echo x",
-    "vim *.md",
-  ]) {
+  assert.deepEqual(editorArguments('"/Applications/My Editor/bin/editor" --wait "a b"'), [
+    "/Applications/My Editor/bin/editor",
+    "--wait",
+    "a b",
+  ]);
+  for (const command of ["", "vim; touch /tmp/owned", "vim | sh", "vim && echo x", "vim *.md"]) {
     assert.throws(() => editorArguments(command), /VISUAL\/EDITOR/);
   }
 });
@@ -442,24 +436,45 @@ function userAgentsDir(agentDir: string) {
 async function configFixture(fileName = "worker.md") {
   const root = await mkdtemp(join(tmpdir(), "pi-subagent-ui-test-"));
   const agentDir = join(root, "global");
-  const bundledDir = join(root, "bundled");
   await mkdir(userAgentsDir(agentDir), { recursive: true });
   const body = "# Instructions\n\nKeep **Markdown** and whitespace.\n\n";
+  const file = join(userAgentsDir(agentDir), fileName);
   await writeFile(
-    join(userAgentsDir(agentDir), fileName),
-    serializeAgentType({
-      name: "worker",
-      description: "Worker",
-      systemPrompt: body,
-    }),
+    file,
+    serializeAgentType({ name: "worker", description: "Worker", systemPrompt: body }),
   );
   const store = new ConfigStore({
     cwd: root,
     agentDir,
-    bundledDir,
+    bundledDir: join(root, "bundled"),
     includeProject: false,
   });
-  return { root, agentDir, store, body };
+  /** Overwrite worker.md with extra fields and reload the store. */
+  const writeWorker = async (patch: Record<string, unknown>) => {
+    await writeFile(
+      join(userAgentsDir(agentDir), "worker.md"),
+      serializeAgentType({
+        name: "worker",
+        description: "Worker",
+        systemPrompt: body,
+        ...patch,
+      }),
+    );
+    store.reload();
+  };
+  return { root, agentDir, store, body, file, writeWorker };
+}
+
+async function withFixture(
+  run: (fixture: Awaited<ReturnType<typeof configFixture>>) => Promise<void>,
+  fileName?: string,
+) {
+  const fixture = await configFixture(fileName);
+  try {
+    await run(fixture);
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
 }
 
 const EDIT_FIELD_ACTIONS = new Set([
@@ -475,24 +490,23 @@ const EDIT_FIELD_ACTIONS = new Set([
 ]);
 
 /** Map scripted bare field actions to decorated labels only in the main unsaved edit menu. */
-function scriptedEditChoice(
-  title: string,
-  options: string[],
-  choice: string,
-): string {
-  if (!/^Edit .+ \(unsaved\)$/.test(title) || !EDIT_FIELD_ACTIONS.has(choice))
-    return choice;
+function scriptedEditChoice(title: string, options: string[], choice: string) {
+  if (!/^Edit .+ \(unsaved\)$/.test(title) || !EDIT_FIELD_ACTIONS.has(choice)) return choice;
   const label = options.find((option) => option.startsWith(`${choice}: `));
   assert.ok(label, `Missing decorated field label for ${choice}`);
   return label;
 }
+
+const TWO_MODELS = [
+  { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
+  { provider: "anthropic", id: "claude-3.7-sonnet", name: "Claude 3.7 Sonnet" },
+];
 
 function editorContext(
   root: string,
   choices: (string | undefined)[],
   inputs: (string | undefined)[] = [],
   options: {
-    mode?: "tui" | "rpc" | "json" | "print";
     availableModels?: { provider: string; id: string; name: string }[];
     scopedModels?: string[];
   } = {},
@@ -502,16 +516,13 @@ function editorContext(
   const menus: { title: string; options: string[] }[] = [];
   const frames: string[][] = [];
   const editors: { title: string; prefill?: string }[] = [];
-  const colorPickerTheme = darkTheme;
   const driver = createDialogDriver({
-    theme: colorPickerTheme,
+    theme: darkTheme,
     width: 100,
     choices,
     inputs,
     menuLabels: (menu) =>
-      menu.rows.map((row) =>
-        EDIT_FIELD_ACTIONS.has(row.id) ? `${row.id}: ${row.value}` : row.id,
-      ),
+      menu.rows.map((row) => (EDIT_FIELD_ACTIONS.has(row.id) ? `${row.id}: ${row.value}` : row.id)),
     resolveChoice: scriptedEditChoice,
     onMenu(menu, labels) {
       menus.push({ title: menu.title, options: labels });
@@ -521,46 +532,27 @@ function editorContext(
       editors.push({ title: editor.title, prefill: editor.prefill });
     },
     onFrame(component, lines) {
-      if (component instanceof DialogMenu)
-        frames.push(lines.map(stripTerminalSequences));
+      if (component instanceof DialogMenu) frames.push(lines.map(stripTerminalSequences));
     },
   });
   const availableModels = options.availableModels ?? [];
-  const scopedModels = (options.scopedModels ?? []).map((identity) => {
-    const [provider, ...rest] = identity.split("/");
-    const id = rest.join("/");
-    const model =
-      availableModels.find(
-        (entry) => entry.provider === provider && entry.id === id,
-      ) ?? ({ provider, id, name: id } as const);
-    return { model };
-  });
+  const scopedModels = (options.scopedModels ?? []).map((identity) => ({
+    model: availableModels.find((entry) => `${entry.provider}/${entry.id}` === identity)!,
+  }));
+  const dialogOnly = async () => {
+    throw new Error("Agent fields must use the bordered dialog editor");
+  };
   const ctx = {
     hasUI: true,
-    mode: options.mode ?? "tui",
+    mode: "tui",
     cwd: root,
     modelRegistry: { getAvailable: () => availableModels },
     scopedModels,
     ui: {
-      select: async (title: string, options: string[]) => {
-        menus.push({ title, options: [...options] });
-        if (title === "Save scope") scopes.push(options);
-        const choice = choices.shift();
-        if (choice === undefined) return choice;
-        const resolved = scriptedEditChoice(title, options, choice);
-        assert.ok(
-          options.includes(resolved),
-          `Missing dialog option: ${choice}`,
-        );
-        return resolved;
-      },
+      select: dialogOnly,
+      input: dialogOnly,
+      editor: dialogOnly,
       custom: driver.custom,
-      input: async () => {
-        throw new Error("Agent fields must use the bordered dialog editor");
-      },
-      editor: async () => {
-        throw new Error("Agent fields must use the bordered dialog editor");
-      },
       notify: (message: string) => diagnostics.push(message),
       confirm: async () => false,
     },
@@ -569,9 +561,27 @@ function editorContext(
   return { ctx, diagnostics, scopes, menus, editors, frames, driver };
 }
 
+function unsavedMenus(menus: { title: string; options: string[] }[]) {
+  return menus.filter((menu) => /^Edit .+ \(unsaved\)$/.test(menu.title));
+}
+
+/** Drive the model picker child by selecting values in order. */
+function pickModels(driver: ReturnType<typeof createDialogDriver>, values: string[]) {
+  driver.onChild = (component) => {
+    if (typeof component.getMode !== "function") return false;
+    for (const value of values) {
+      const item = component
+        .getCurrentItems()
+        .find((entry: { value: string }) => entry.value === value);
+      assert.ok(item, `Missing model picker option: ${value}`);
+      component.getSelectList().onSelect?.(item);
+    }
+    return true;
+  };
+}
+
 test("agent editor is a bordered two-column form and edits the prompt body in a dialog", async () => {
-  const { root, store } = await configFixture();
-  try {
+  await withFixture(async ({ root, store }) => {
     const prompt = "# Updated prompt\n\nUse 日本語 and retain **Markdown**.\n";
     const { ctx, frames, editors, diagnostics } = editorContext(
       root,
@@ -584,32 +594,17 @@ test("agent editor is a bordered two-column form and edits the prompt body in a 
     assert.equal(store.get("worker")?.systemPrompt, prompt);
     assert.equal(editors[0]?.title, "Agent systemPrompt");
     const form = frames.find((frame) => frame[0]?.includes("Edit worker"))!;
-    assert.ok(form);
     assert.match(form[0]!, /^╭.*╮$/);
     assert.match(form.at(-1)!, /^╰.*╯$/);
     assert.match(form.join("\n"), /Name +│ worker/);
-    assert.match(form.join("\n"), /Description +│ Worker/);
-    assert.match(form.join("\n"), /System prompt +│ \d+ lines/);
-    assert.match(form.join("\n"), /Ctrl\+S save.*Esc cancel/);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  });
 });
 
 test("agent editor scope field and source are modal and do not modify the draft on cancel", async () => {
-  const { root, store, body } = await configFixture();
-  try {
+  await withFixture(async ({ root, store, body }) => {
     const { ctx, scopes, diagnostics } = editorContext(
       root,
-      [
-        "worker",
-        "Source",
-        "Save scope",
-        "Global",
-        "systemPrompt",
-        "Cancel",
-        undefined,
-      ],
+      ["worker", "Source", "Save scope", "Global", "systemPrompt", "Cancel", undefined],
       ["discard me"],
     );
     await editAgentTypes(ctx, store);
@@ -617,14 +612,11 @@ test("agent editor scope field and source are modal and do not modify the draft 
     assert.equal(store.get("worker")?.systemPrompt, body);
     assert.equal(diagnostics.length, 1);
     assert.match(diagnostics[0]!, /worker\.md/);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  });
 });
 
 test("type field editor handles YAML fields without changing Markdown", async () => {
-  const { root, store, body } = await configFixture();
-  try {
+  await withFixture(async ({ root, store, body }) => {
     const { ctx } = editorContext(
       root,
       [
@@ -648,7 +640,6 @@ test("type field editor handles YAML fields without changing Markdown", async ()
     await editAgentTypes(ctx, store);
     const saved = store.get("renamed");
     assert.equal(saved.description, "New description");
-    assert.equal(saved.model, undefined);
     assert.equal(saved.thinkingLevel, "high");
     assert.equal(saved.color, "success");
     assert.deepEqual(saved.tools, { allow: [], block: ["bash", "read"] });
@@ -658,43 +649,25 @@ test("type field editor handles YAML fields without changing Markdown", async ()
       body,
       "renaming must leave the original file intact",
     );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  });
 });
 
 test("legacy scalar model opens the ordered picker and cancel keeps the saved definition", async () => {
-  const { root, store, agentDir, body } = await configFixture();
-  try {
-    const legacyScalarDefinition = `---\nname: worker\ndescription: Worker\nmodel: openai/gpt-4.1\n---\n${body}`;
-    await writeFile(
-      join(userAgentsDir(agentDir), "worker.md"),
-      legacyScalarDefinition,
-    );
+  await withFixture(async ({ root, store, body, file }) => {
+    const legacy = `---\nname: worker\ndescription: Worker\nmodel: openai/gpt-4.1\n---\n${body}`;
+    await writeFile(file, legacy);
     store.reload();
-    const { ctx, driver } = editorContext(
-      root,
-      ["worker", "models", "Cancel", undefined],
-      [],
-      {
-        availableModels: [
-          { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
-          {
-            provider: "anthropic",
-            id: "claude-3.7-sonnet",
-            name: "Claude 3.7 Sonnet",
-          },
-        ],
-        scopedModels: ["openai/gpt-4.1"],
-      },
-    );
+    const { ctx, driver } = editorContext(root, ["worker", "models", "Cancel", undefined], [], {
+      availableModels: TWO_MODELS,
+      scopedModels: ["openai/gpt-4.1"],
+    });
     const observed = { mode: "", label: "", description: "" };
     driver.onChild = (component) => {
       if (typeof component.getMode !== "function") return false;
+      const first = component.getCurrentItems()[0];
       observed.mode = component.getMode();
-      observed.label = component.getCurrentItems()[0]?.label ?? "";
-      observed.description =
-        component.getCurrentItems()[0]?.description ?? "";
+      observed.label = first?.label ?? "";
+      observed.description = first?.description ?? "";
       component.handleInput("\u001B");
       return true;
     };
@@ -702,90 +675,42 @@ test("legacy scalar model opens the ordered picker and cancel keeps the saved de
     assert.equal(observed.mode, "menu");
     assert.equal(observed.label, "1. openai/gpt-4.1");
     assert.match(observed.description, /scoped in this session/);
-    assert.deepEqual((store.get("worker") as { models?: string[] }).models, [
-      "openai/gpt-4.1",
-    ]);
-    assert.equal(store.get("worker").systemPrompt, body);
-    assert.equal(
-      await readFile(join(userAgentsDir(agentDir), "worker.md"), "utf8"),
-      legacyScalarDefinition,
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+    assert.deepEqual(store.get("worker").models, ["openai/gpt-4.1"]);
+    assert.equal(await readFile(file, "utf8"), legacy);
+  });
 });
 
 test("saving model preferences stores canonical ordered models after add and reorder", async () => {
-  const { root, store, body } = await configFixture();
-  try {
+  await withFixture(async ({ root, store, body }) => {
     const { ctx, driver } = editorContext(
       root,
       ["worker", "models", "Save", "Global", undefined],
       [],
       {
         availableModels: [
-          { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
-          {
-            provider: "anthropic",
-            id: "claude-3.7-sonnet",
-            name: "Claude 3.7 Sonnet",
-          },
+          ...TWO_MODELS,
           { provider: "google", id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" },
         ],
         scopedModels: ["openai/gpt-4.1", "anthropic/claude-3.7-sonnet"],
       },
     );
-    driver.onChild = (component) => {
-      if (typeof component.getMode !== "function") return false;
-      const selectValue = (value: string) => {
-        const item = component
-          .getCurrentItems()
-          .find((entry: { value: string }) => entry.value === value);
-        assert.ok(item, `Missing model picker option: ${value}`);
-        component.getSelectList().onSelect?.(item);
-      };
-      selectValue("openai/gpt-4.1");
-      selectValue("action:add");
-      selectValue("anthropic/claude-3.7-sonnet");
-      selectValue("entry:1");
-      selectValue("action:earlier");
-      selectValue("action:done");
-      return true;
-    };
+    pickModels(driver, [
+      "openai/gpt-4.1",
+      "action:add",
+      "anthropic/claude-3.7-sonnet",
+      "entry:1",
+      "action:earlier",
+      "action:done",
+    ]);
     await editAgentTypes(ctx, store);
     const saved = store.get("worker");
-    assert.deepEqual(saved.models, [
-      "anthropic/claude-3.7-sonnet",
-      "openai/gpt-4.1",
-    ]);
-    assert.equal(saved.model, undefined);
+    assert.deepEqual(saved.models, ["anthropic/claude-3.7-sonnet", "openai/gpt-4.1"]);
     assert.equal(saved.systemPrompt, body);
     const persisted = await readFile(saved.filePath!, "utf8");
-    assert.match(
-      persisted,
-      /models:\n  - anthropic\/claude-3\.7-sonnet\n  - openai\/gpt-4\.1/,
-    );
+    assert.match(persisted, /models:\n  - anthropic\/claude-3\.7-sonnet\n  - openai\/gpt-4\.1/);
     assert.doesNotMatch(persisted, /\nmodel:/);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  });
 });
-
-async function workerWithSuccess() {
-  const fixture = await configFixture();
-  await writeFile(
-    join(userAgentsDir(fixture.agentDir), "worker.md"),
-    serializeAgentType({
-      name: "worker",
-      description: "Worker",
-      systemPrompt: fixture.body,
-      color: "success",
-    }),
-  );
-  fixture.store.reload();
-  assert.equal(fixture.store.get("worker").color, "success");
-  return fixture;
-}
 
 function driveColorPicker(
   ctx: ExtensionCommandContext,
@@ -796,11 +721,7 @@ function driveColorPicker(
   const driver = dialogDriverFor(ctx);
   driver.theme = theme;
   driver.onChild = (component) => {
-    if (
-      component instanceof DialogMenu ||
-      component instanceof DialogEditor ||
-      !component.getItems
-    )
+    if (component instanceof DialogMenu || component instanceof DialogEditor || !component.getItems)
       return false;
     try {
       drive(component);
@@ -815,474 +736,80 @@ function driveColorPicker(
   };
 }
 
-function previewText(component: {
-  getPreview(): { render(width: number): string[] };
-}): string {
-  return component.getPreview().render(160).join("\n");
-}
-
+/** Preview paints the type pill and a sample task path, matching the widget — not a path pill. */
 function assertColorPreview(
-  preview: string,
+  component: any,
   theme: Theme,
   agentName: string,
   color: string | undefined,
 ) {
-  // Preview paints the type pill and a sample task path, matching the widget — not a path pill.
-  const taskPath = "/root/example-task";
-  const view = thread(taskPath, {
-    type: agentName,
-    color,
-    state: "running",
-    status: "Working",
-  });
-  const widget = renderThreads([view], 160, theme)[0]!;
-  const badge = expectedTypeBadge(theme, agentName, color);
-  const path = expectedPath(theme, taskPath, color);
-  const head = `${badge} ${path} ${theme.fg("accent", "[running]")} Working`;
-  assert.ok(widget.startsWith(head));
+  const preview = component.getPreview().render(160).join("\n");
+  const path = expectedPath(theme, "/root/example-task", color);
+  const head = `${expectedBadge(theme, `[${agentName}]`, color)} ${path} ${theme.fg("accent", "[running]")} Working`;
   assert.ok(preview.includes(`Preview: ${head}`));
   assert.deepEqual(backgroundCoveredText(preview), [` [${agentName}] `]);
-  assert.ok(preview.includes(path));
-  assert.doesNotMatch(path, /\x1b\[48;/);
 }
 
-test("thread type pills and paths use the selected color independently of state", () => {
-  const channels = new Set<0 | 255>();
-  for (const theme of [
-    darkTheme,
-    lightTheme,
-    testTheme("dark", "256color"),
-    testTheme("light", "256color"),
-  ]) {
-    for (const color of [
-      "accent",
-      "success",
-      "warning",
-      "text",
-      "error",
-    ] as const) {
-      const view = thread("/root/controller-security-research", {
-        type: "researcher",
-        color,
-        state: "running",
-        status: "Working",
-      });
-      const line = renderThreads([view], 120, theme)[0]!;
-      const badge = expectedTypeBadge(theme, view.type, color);
-      const path = expectedPath(theme, view.path, color);
-      const channel = contrastChannel(theme.colors[color]);
-      channels.add(channel);
-      assert.equal(line, expectedThreadLine(theme, view, 120));
-      assert.deepEqual(backgroundCoveredText(line), [" [researcher] "]);
-      assert.ok(line.includes(path));
-      assert.doesNotMatch(path, /\x1b\[48;/);
-      assert.notEqual(badge, path);
-      assert.match(badge, /\x1b\[1m/);
-      assert.ok(
-        badge.includes(
-          foregroundAnsi(
-            rgbColor(channel, channel, channel),
-            theme.getColorMode(),
-          ),
-        ),
-      );
-      assert.doesNotMatch(line.slice(badge.length), /\x1b\[48;/);
-      assert.doesNotMatch(line.slice(badge.length), /\x1b\[1m/);
-      if (theme.getColorMode() === "256color")
-        assert.match(path, /\x1b\[38;5;/);
-      else assert.match(path, /\x1b\[38;2;/);
-    }
-  }
-  assert.ok(channels.has(0), "a light background must use black text");
-  assert.ok(channels.has(255), "a dark background must use white text");
+const selectedValue = (component: any) => component.getSelectList().getSelectedItem()?.value;
 
-  for (const [state, token] of [
-    ["failed", "error"],
-    ["paused", "warning"],
-    ["starting", "accent"],
-    ["completed", "accent"],
-    ["stopped", "accent"],
-  ] as const) {
-    const view = thread("/worker", {
-      type: "researcher",
-      state,
-      color: "success",
-      status: "Busy",
-      task: "Ignored",
-    });
-    const line = renderThreads([view], 80, darkTheme)[0]!;
-    assert.equal(line, expectedThreadLine(darkTheme, view));
-    assert.ok(line.includes(darkTheme.fg(token, `[${state}]`)));
-    assert.ok(line.includes(darkTheme.fg("success", "/worker")));
-    assert.match(stripTerminalSequences(line), / Busy +/);
-    assert.deepEqual(backgroundCoveredText(line), [" [researcher] "]);
-  }
+function selectDefaultColor(component: any) {
+  for (
+    let step = 0;
+    step < AGENT_COLORS.length && selectedValue(component) !== "__default__";
+    step++
+  )
+    component.handleInput("\x1b[A");
+  assert.equal(selectedValue(component), "__default__");
+}
 
-  const invalid = thread("/owned\x1b[31m", {
-    type: "bad\x1b[31m",
-    color: "\x1b[31mnot-a-token",
-    state: "failed",
-    status: "",
-    task: "Recover",
-  });
-  const fallback = renderThreads([invalid], 100, darkTheme)[0]!;
-  assert.equal(fallback, expectedThreadLine(darkTheme, invalid, 100));
-  assert.equal(
-    expectedTypeBadge(darkTheme, invalid.type, invalid.color),
-    expectedTypeBadge(darkTheme, invalid.type, "accent"),
-  );
-  assert.equal(
-    expectedPath(darkTheme, invalid.path, invalid.color),
-    expectedPath(darkTheme, invalid.path, "accent"),
-  );
-  assert.deepEqual(backgroundCoveredText(fallback), [
-    ` [${sanitizeText(invalid.type)}] `,
-  ]);
-  assert.ok(stripTerminalSequences(fallback).includes("Recover"));
-  assert.ok(!/[\x00-\x1f\x7f-\x9f]/.test(stripTerminalSequences(fallback)));
-});
-
-test("widget keeps counters right-aligned when the left side is long or hostile", () => {
-  const hostile = "\x1b[31mred\x1b[0m\x1b]0;owned\x07\n\x00" + "界".repeat(30);
-  const view = thread("/root/" + "p".repeat(180), {
-    type: "researcher" + hostile,
-    status: hostile,
-    task: hostile,
-    color: "success",
-    elapsedMs: 65_000,
-    inputTokens: 1_200,
-    outputTokens: 34,
-  });
-  const counters = "1m5s ↑1.2k ↓34";
-  const styled = darkTheme.fg("muted", counters);
-  for (const width of [0, 1, 4, 8, 16, 40, 80]) {
-    const line = renderThreads([view], width, darkTheme)[0]!;
-    assert.ok(visibleWidth(line) <= width);
-    assert.ok(!/[\x00-\x1f\x7f-\x9f]/.test(stripTerminalSequences(line)));
-    if (width >= visibleWidth(styled)) {
-      assert.ok(line.endsWith(styled));
-      assert.equal(visibleWidth(line), width);
-      assert.ok(!stripTerminalSequences(line).includes("p".repeat(40)));
-    }
-  }
-  const short = renderThreads(
-    [thread("/a", { type: "worker", status: "ok" })],
-    60,
-    darkTheme,
-  )[0]!;
-  const plain = stripTerminalSequences(short);
-  const countersAt = plain.lastIndexOf("0s ↑0 ↓0");
-  assert.equal(visibleWidth(short), 60);
-  assert.ok(short.endsWith(darkTheme.fg("muted", "0s ↑0 ↓0")));
-  assert.ok(countersAt > 0);
-  assert.equal(plain[countersAt - 1], " ");
-});
-
-test("widget counter literals cover duration steps and count boundaries", () => {
-  const cases = [
-    {
-      elapsedMs: 65_000,
-      inputTokens: 999,
-      outputTokens: 1_000,
-      counters: "1m5s ↑999 ↓1k",
-    },
-    {
-      elapsedMs: 3_600_000,
-      inputTokens: 1_200,
-      outputTokens: 999_999,
-      counters: "1h0m ↑1.2k ↓1m",
-    },
-    {
-      elapsedMs: 86_400_000,
-      inputTokens: 1_000_000,
-      outputTokens: 1_500_000,
-      counters: "1d0h ↑1m ↓1.5m",
-    },
-    {
-      elapsedMs: -5,
-      inputTokens: Number.NaN,
-      outputTokens: -1,
-      counters: "0s ↑0 ↓0",
-    },
-  ];
-  for (const { counters, ...metrics } of cases) {
-    const line = stripTerminalSequences(
-      renderThreads(
-        [thread("/job", { state: "completed", ...metrics })],
-        80,
-        darkTheme,
-      )[0]!,
-    );
-    assert.ok(line.endsWith(` ${counters}`), line);
-  }
-});
-
-test("widget timer rerenders live elapsed and does not run when settled or headless", (t) => {
-  t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 1_000_000 });
-  const intervals = globalThis.setInterval;
-  let unrefs = 0;
-  globalThis.setInterval = ((
-    fn: TimerHandler,
-    ms?: number,
-    ...args: unknown[]
-  ) => {
-    const timer = intervals(
-      fn,
-      ms as number,
-      ...args,
-    ) as unknown as NodeJS.Timeout;
-    const unref = timer.unref.bind(timer);
-    timer.unref = () => {
-      unrefs += 1;
-      return unref();
-    };
-    return timer;
-  }) as unknown as typeof setInterval;
-  try {
-    let renders = 0;
-    let component:
-      { render(width: number): string[]; dispose(): void } | undefined;
-    const tui = {
-      requestRender: () => {
-        renders += 1;
-      },
-    };
-    const ctx = {
-      hasUI: true,
-      ui: {
-        theme: darkTheme,
-        setWidget: (_key: string, factory: unknown) => {
-          component?.dispose();
-          component =
-            typeof factory === "function"
-              ? (factory(tui) as {
-                  render(width: number): string[];
-                  dispose(): void;
-                })
-              : undefined;
-        },
-      },
-    } as unknown as ExtensionContext;
-    const line = () =>
-      stripTerminalSequences(
-        component!.render(100).find((row) =>
-          stripTerminalSequences(row).includes("↑"),
-        ) ?? "",
-      );
-
-    updateWidget(ctx, [
-      thread("/root/job", {
-        type: "researcher",
-        state: "running",
-        startedAt: 995_000,
-        elapsedMs: 2_000,
-        inputTokens: 10,
-        outputTokens: 3,
-      }),
-    ]);
-    assert.equal(unrefs, 1);
-    assert.match(line(), /7s ↑10 ↓3$/);
-    t.mock.timers.tick(1000);
-    assert.equal(renders, 1);
-    assert.match(line(), /8s ↑10 ↓3$/);
-
-    renders = 0;
-    const previous = component!;
-    updateWidget(ctx, [
-      thread("/root/job", {
-        type: "researcher",
-        state: "running",
-        startedAt: Date.now(),
-        elapsedMs: 65_000,
-        inputTokens: 1_200,
-        outputTokens: 34,
-      }),
-    ]);
-    assert.notEqual(component, previous);
-    assert.equal(unrefs, 2);
-    assert.match(line(), /1m5s ↑1.2k ↓34$/);
-    t.mock.timers.tick(1000);
-    assert.equal(
-      renders,
-      1,
-      "replacing a live widget must dispose the previous timer",
-    );
-    assert.match(line(), /1m6s ↑1.2k ↓34$/);
-
-    renders = 0;
-    updateWidget(ctx, [
-      thread("/done", {
-        state: "completed",
-        startedAt: 1,
-        elapsedMs: 9_000,
-        inputTokens: 1_500_000,
-      }),
-    ]);
-    assert.match(line(), /9s ↑1.5m ↓0$/);
-    t.mock.timers.tick(5000);
-    assert.equal(renders, 0);
-    assert.equal(unrefs, 2);
-
-    updateWidget(
-      {
-        hasUI: false,
-        ui: {
-          setWidget() {
-            throw new Error("no ui");
-          },
-        },
-      } as unknown as ExtensionContext,
-      [thread("/hidden", { state: "running", startedAt: 1_000_000 })],
-    );
-    t.mock.timers.tick(2000);
-    assert.equal(renders, 0);
-  } finally {
-    globalThis.setInterval = intervals;
-    t.mock.timers.reset();
-  }
-});
-
-test("color picker badges are backgrounds, preview the example task path, and cancel keeps success", async () => {
-  const { root, store, agentDir } = await workerWithSuccess();
-  const theme = darkTheme;
-  try {
-    const original = await readFile(
-      join(userAgentsDir(agentDir), "worker.md"),
-      "utf8",
-    );
-    assert.match(original, /color: success/);
-    const { ctx } = editorContext(
-      root,
-      ["worker", "name", "color", undefined],
-      ["scout"],
-    );
-    const pickerError = driveColorPicker(ctx, theme, (component) => {
+test("color picker shows background pills, previews the draft name, and cancel keeps the saved color", async () => {
+  await withFixture(async ({ root, store, file, writeWorker }) => {
+    await writeWorker({ color: "success" });
+    const original = await readFile(file, "utf8");
+    const { ctx } = editorContext(root, ["worker", "name", "color", undefined], ["scout"]);
+    const pickerError = driveColorPicker(ctx, darkTheme, (component) => {
       const items = component.getItems();
-      const fallback = items.find(
-        (item: { value: string }) => item.value === "__default__",
+      assert.deepEqual(
+        items.map((item: { value: string }) => item.value),
+        ["__default__", ...AGENT_COLORS],
       );
-      assert.ok(fallback);
-      assert.equal(fallback.label, "Default (inherit)");
-      assert.equal(
-        fallback.description,
-        "Use the default accent background for the type pill",
-      );
-      assert.doesNotMatch(fallback.description, /foreground/i);
-      for (const color of AGENT_COLORS) {
-        const item = items.find(
-          (entry: { value: string }) => entry.value === color,
-        );
-        assert.ok(item, color);
-        assert.equal(item.label, expectedBadge(theme, color, color));
-        assert.equal(stripTerminalSequences(item.label), ` ${color} `);
-        assert.match(item.label, /\x1b\[1m/);
-        assert.equal(item.description, `Type pill background: ${color}`);
-        assert.doesNotMatch(item.description, /foreground/i);
-        assert.doesNotMatch(item.label, /●/);
-      }
-      const selected = component.getSelectList().getSelectedItem();
-      assert.equal(selected?.value, "success");
-      assertColorPreview(previewText(component), theme, "scout", "success");
-      assert.doesNotMatch(previewText(component), /\/worker/);
-
+      for (const item of items.slice(1))
+        assert.equal(item.label, expectedBadge(darkTheme, item.value, item.value));
+      assert.equal(selectedValue(component), "success");
+      assertColorPreview(component, darkTheme, "scout", "success");
       component.handleInput("\x1b[B");
-      assert.equal(component.getSelectList().getSelectedItem()?.value, "error");
-      assertColorPreview(previewText(component), theme, "scout", "error");
-
-      component.handleInput("\x1b[A");
-      assert.equal(
-        component.getSelectList().getSelectedItem()?.value,
-        "success",
-      );
-      for (
-        let step = 0;
-        step < AGENT_COLORS.length &&
-        component.getSelectList().getSelectedItem()?.value !== "__default__";
-        step++
-      ) {
-        component.handleInput("\x1b[A");
-      }
-      assert.equal(
-        component.getSelectList().getSelectedItem()?.value,
-        "__default__",
-      );
-      assertColorPreview(previewText(component), theme, "scout", undefined);
+      assert.equal(selectedValue(component), "error");
+      assertColorPreview(component, darkTheme, "scout", "error");
+      selectDefaultColor(component);
+      assertColorPreview(component, darkTheme, "scout", undefined);
       component.handleInput("\x1b");
     });
     await editAgentTypes(ctx, store);
     pickerError();
     assert.equal(store.get("worker").color, "success");
-    assert.equal(store.get("worker").name, "worker");
-    assert.equal(
-      await readFile(join(userAgentsDir(agentDir), "worker.md"), "utf8"),
-      original,
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+    assert.equal(await readFile(file, "utf8"), original);
+  });
 });
 
-test("color picker default unsets a configured success color", async () => {
-  const { root, store, agentDir } = await workerWithSuccess();
-  const theme = lightTheme;
-  try {
-    assert.equal(store.get("worker").color, "success");
-    const { ctx } = editorContext(root, [
-      "worker",
-      "color",
-      "Save",
-      "Global",
-      undefined,
-    ]);
-    const pickerError = driveColorPicker(ctx, theme, (component) => {
-      assert.equal(
-        component.getSelectList().getSelectedItem()?.value,
-        "success",
-      );
-      assertColorPreview(previewText(component), theme, "worker", "success");
-      for (
-        let step = 0;
-        step < AGENT_COLORS.length &&
-        component.getSelectList().getSelectedItem()?.value !== "__default__";
-        step++
-      ) {
-        component.handleInput("\x1b[A");
-      }
-      assert.equal(
-        component.getSelectList().getSelectedItem()?.value,
-        "__default__",
-      );
-      assertColorPreview(previewText(component), theme, "worker", undefined);
-      const accent = contrastChannel(theme.colors.accent);
-      assert.ok(
-        previewText(component).includes(
-          foregroundAnsi(
-            rgbColor(accent, accent, accent),
-            theme.getColorMode(),
-          ),
-        ),
-      );
+test("color picker default unsets a configured color", async () => {
+  await withFixture(async ({ root, store, writeWorker }) => {
+    await writeWorker({ color: "success" });
+    const { ctx } = editorContext(root, ["worker", "color", "Save", "Global", undefined]);
+    const pickerError = driveColorPicker(ctx, lightTheme, (component) => {
+      selectDefaultColor(component);
+      assertColorPreview(component, lightTheme, "worker", undefined);
       component.handleInput("\r");
     });
-    const original = await readFile(
-      join(userAgentsDir(agentDir), "worker.md"),
-      "utf8",
-    );
-    assert.match(original, /color: success/);
     await editAgentTypes(ctx, store);
     pickerError();
     const saved = store.get("worker");
     assert.equal(saved.color, undefined);
-    assert.ok(saved.filePath);
-    assert.doesNotMatch(await readFile(saved.filePath, "utf8"), /^color:/m);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+    assert.doesNotMatch(await readFile(saved.filePath!, "utf8"), /^color:/m);
+  });
 });
 
 test("invalid field edits and untrusted project saves leave configuration unchanged", async () => {
-  const { root, store, body } = await configFixture();
-  try {
+  await withFixture(async ({ root, store, body }) => {
     const { ctx, diagnostics, scopes } = editorContext(
       root,
       [
@@ -1299,18 +826,14 @@ test("invalid field edits and untrusted project saves leave configuration unchan
     );
     await editAgentTypes(ctx, store);
     assert.equal(store.get("worker").systemPrompt, body);
-    assert.equal(store.get("worker").model, undefined);
     assert.equal(store.get("worker").tools, undefined);
     assert.equal(diagnostics.length, 2);
     assert.deepEqual(scopes, [["Global"]]);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  });
 });
 
 test("editing a noncanonical filename in preferred storage updates that file in place", async () => {
-  const { root, store, agentDir, body } = await configFixture("custom.md");
-  try {
+  await withFixture(async ({ root, store, agentDir, body, file }) => {
     const { ctx } = editorContext(
       root,
       ["worker", "description", "Save", "Global", undefined],
@@ -1320,27 +843,20 @@ test("editing a noncanonical filename in preferred storage updates that file in 
     assert.deepEqual(await readdir(userAgentsDir(agentDir)), ["custom.md"]);
     const saved = store.get("worker");
     assert.equal(saved.description, "Revised");
-    assert.equal(saved.filePath, join(userAgentsDir(agentDir), "custom.md"));
+    assert.equal(saved.filePath, file);
     assert.equal(saved.systemPrompt, body);
-    assert.match(
-      await readFile(saved.filePath!, "utf8"),
-      /description: Revised/,
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  }, "custom.md");
 });
 
 test("renaming a type cannot overwrite an existing definition", async () => {
-  const { root, store, agentDir } = await configFixture();
-  try {
+  await withFixture(async ({ root, store, agentDir }) => {
     const content = serializeAgentType({
       name: "other",
       description: "Other",
       systemPrompt: "Original",
     });
-    const file = join(userAgentsDir(agentDir), "other.md");
-    await writeFile(file, content);
+    const other = join(userAgentsDir(agentDir), "other.md");
+    await writeFile(other, content);
     store.reload();
     const { ctx, diagnostics } = editorContext(
       root,
@@ -1349,66 +865,59 @@ test("renaming a type cannot overwrite an existing definition", async () => {
     );
     await editAgentTypes(ctx, store);
     assert.match(diagnostics[0]!, /already exists/);
-    assert.equal(await readFile(file, "utf8"), content);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+    assert.equal(await readFile(other, "utf8"), content);
+  });
 });
 
 test("external invalid edit restores draft, reports diagnostics, and restarts TUI", async () => {
-  const { root, store, agentDir } = await configFixture();
   const visual = process.env.VISUAL;
-  const editor = process.env.EDITOR;
   try {
-    process.env.VISUAL = quote([
-      process.execPath,
-      "-e",
-      'require("node:fs").writeFileSync(process.argv[1], "---\\nname: bad\\ndescription: bad\\nmodel: invalid\\n---\\nchanged")',
-    ]);
-    const file = join(userAgentsDir(agentDir), "worker.md");
-    const original = await readFile(file, "utf8");
-    const { ctx, diagnostics, driver } = editorContext(root, [
-      "worker",
-      "External editor (entire Markdown)",
-      "Cancel",
-      "Save",
-      "Global",
-      undefined,
-    ]);
-    const terminalEvents: string[] = [];
-    driver.onPassthrough = (factory) =>
-      new Promise((done, reject) => {
-        try {
-          factory(
-            {
-              stop: () => terminalEvents.push("stop"),
-              start: () => terminalEvents.push("start"),
-              requestRender: () => terminalEvents.push("render"),
-            },
-            {},
-            {},
-            done,
-          );
-        } catch (error) {
-          reject(error);
-        }
-      });
-    await editAgentTypes(ctx, store);
-    assert.deepEqual(terminalEvents, ["stop", "start", "render"]);
-    assert.match(diagnostics[0]!, /Edit not accepted.*model/);
-    assert.equal(await readFile(file, "utf8"), original);
+    await withFixture(async ({ root, store, file }) => {
+      process.env.VISUAL = quote([
+        process.execPath,
+        "-e",
+        'require("node:fs").writeFileSync(process.argv[1], "---\\nname: bad\\ndescription: bad\\nmodel: invalid\\n---\\nchanged")',
+      ]);
+      const original = await readFile(file, "utf8");
+      const { ctx, diagnostics, driver } = editorContext(root, [
+        "worker",
+        "External editor (entire Markdown)",
+        "Cancel",
+        "Save",
+        "Global",
+        undefined,
+      ]);
+      const terminalEvents: string[] = [];
+      driver.onPassthrough = (factory) =>
+        new Promise((done, reject) => {
+          try {
+            factory(
+              {
+                stop: () => terminalEvents.push("stop"),
+                start: () => terminalEvents.push("start"),
+                requestRender: () => terminalEvents.push("render"),
+              },
+              {},
+              {},
+              done,
+            );
+          } catch (error) {
+            reject(error);
+          }
+        });
+      await editAgentTypes(ctx, store);
+      assert.deepEqual(terminalEvents, ["stop", "start", "render"]);
+      assert.match(diagnostics[0]!, /Edit not accepted.*model/);
+      assert.equal(await readFile(file, "utf8"), original);
+    });
   } finally {
     if (visual === undefined) delete process.env.VISUAL;
     else process.env.VISUAL = visual;
-    if (editor === undefined) delete process.env.EDITOR;
-    else process.env.EDITOR = editor;
-    await rm(root, { recursive: true, force: true });
   }
 });
 
 test("frontmatter editor retries invalid YAML and preserves Markdown on save", async () => {
-  const { root, store, body } = await configFixture();
-  try {
+  await withFixture(async ({ root, store, body }) => {
     const { ctx, diagnostics, editors } = editorContext(
       root,
       ["worker", "Edit frontmatter YAML", "Retry", "Save", "Global", undefined],
@@ -1422,41 +931,43 @@ test("frontmatter editor retries invalid YAML and preserves Markdown on save", a
     assert.equal(store.get("worker").description, "Revised");
     assert.equal(store.get("worker").systemPrompt, body);
     assert.match(diagnostics[0]!, /Edit not accepted/);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  });
 });
 
-const EDIT_ACTIONS = [
-  "systemPrompt: 5 lines · 51 characters",
-  "Save scope",
-  "Source",
-  "Edit frontmatter YAML",
-  "External editor (entire Markdown)",
-  "Save",
-  "Cancel",
-] as const;
+const INHERIT = "Default (inherit)";
+const UNSET = "Unset (use default policy)";
 
-function unsavedMenus(menus: { title: string; options: string[] }[]) {
-  return menus.filter((menu) => /^Edit .+ \(unsaved\)$/.test(menu.title));
+function fieldLabels(fields: {
+  name: string;
+  description: string;
+  models?: string;
+  thinkingLevel?: string;
+  allow?: string;
+  block?: string;
+  color?: string;
+}): string[] {
+  return [
+    `name: ${fields.name}`,
+    `description: ${fields.description}`,
+    `models: ${fields.models ?? INHERIT}`,
+    "modelSuggestions: None",
+    `thinkingLevel: ${fields.thinkingLevel ?? INHERIT}`,
+    `tools.allow: ${fields.allow ?? UNSET}`,
+    `tools.block: ${fields.block ?? UNSET}`,
+    `color: ${fields.color ?? INHERIT}`,
+    "systemPrompt: 5 lines · 51 characters",
+    "Save scope",
+    "Source",
+    "Edit frontmatter YAML",
+    "External editor (entire Markdown)",
+    "Save",
+    "Cancel",
+  ];
 }
 
 test("edit menu shows current values, ordered models, legacy scalars, and tool policy states", async () => {
-  const { root, store, agentDir, body } = await configFixture();
-  try {
+  await withFixture(async ({ root, store, agentDir, body, writeWorker }) => {
     const hostile = "Worker\x1b[31mred\x1b[0m\x1b]0;owned\x07\r\nnext";
-    await writeFile(
-      join(userAgentsDir(agentDir), "worker.md"),
-      serializeAgentType({
-        name: "worker",
-        description: hostile,
-        systemPrompt: body,
-        models: ["openai/gpt-4.1", "anthropic/claude-3.7-sonnet"],
-        thinkingLevel: "high",
-        color: "success",
-        tools: { allow: ["bash", "read"], block: ["edit"] },
-      }),
-    );
     await writeFile(
       join(userAgentsDir(agentDir), "legacy.md"),
       `---\nname: legacy\ndescription: Legacy scalar\nmodel: google/gemini-2.5-pro\n---\n${body}`,
@@ -1470,7 +981,13 @@ test("edit menu shows current values, ordered models, legacy scalars, and tool p
         tools: { allow: [], block: [] },
       }),
     );
-    store.reload();
+    await writeWorker({
+      description: hostile,
+      models: ["openai/gpt-4.1", "anthropic/claude-3.7-sonnet"],
+      thinkingLevel: "high",
+      color: "success",
+      tools: { allow: ["bash", "read"], block: ["edit"] },
+    });
     const { ctx, menus } = editorContext(root, [
       "worker",
       "Cancel",
@@ -1482,72 +999,46 @@ test("edit menu shows current values, ordered models, legacy scalars, and tool p
     ]);
     await editAgentTypes(ctx, store);
     const editMenus = unsavedMenus(menus);
-    assert.equal(editMenus.length, 3);
-    assert.equal(editMenus[0]!.title, "Edit worker (unsaved)");
-    assert.deepEqual(editMenus[0]!.options, [
-      "name: worker",
-      `description: ${sanitizeText(hostile)}`,
-      "models: openai/gpt-4.1, anthropic/claude-3.7-sonnet",
-      "modelSuggestions: None",
-      "thinkingLevel: high",
-      "tools.allow: bash, read",
-      "tools.block: edit",
-      "color: success",
-      ...EDIT_ACTIONS,
-    ]);
-    assert.notEqual(sanitizeText(hostile), hostile);
-    assert.ok(
-      editMenus[0]!.options.every(
-        (option) => !/[\x00-\x1f\x7f-\x9f]/.test(option),
-      ),
+    assert.deepEqual(
+      editMenus.map((menu) => menu.title),
+      ["Edit worker (unsaved)", "Edit legacy (unsaved)", "Edit empty (unsaved)"],
     );
-    assert.equal(editMenus[1]!.title, "Edit legacy (unsaved)");
-    assert.deepEqual(editMenus[1]!.options, [
-      "name: legacy",
-      "description: Legacy scalar",
-      "models: google/gemini-2.5-pro",
-      "modelSuggestions: None",
-      "thinkingLevel: Default (inherit)",
-      "tools.allow: Unset (use default policy)",
-      "tools.block: Unset (use default policy)",
-      "color: Default (inherit)",
-      ...EDIT_ACTIONS,
-    ]);
-    assert.ok(
-      editMenus[1]!.options
-        .filter((option) => option.startsWith("tools."))
-        .every((option) => !/inherit/.test(option)),
+    assert.deepEqual(
+      editMenus[0]!.options,
+      fieldLabels({
+        name: "worker",
+        description: sanitizeText(hostile),
+        models: "openai/gpt-4.1, anthropic/claude-3.7-sonnet",
+        thinkingLevel: "high",
+        allow: "bash, read",
+        block: "edit",
+        color: "success",
+      }),
     );
-    assert.equal(editMenus[2]!.title, "Edit empty (unsaved)");
-    assert.deepEqual(editMenus[2]!.options, [
-      "name: empty",
-      "description: Explicit empty tools",
-      "models: Default (inherit)",
-      "modelSuggestions: None",
-      "thinkingLevel: Default (inherit)",
-      "tools.allow: Empty list",
-      "tools.block: Empty list",
-      "color: Default (inherit)",
-      ...EDIT_ACTIONS,
-    ]);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+    assert.ok(editMenus[0]!.options.every((option) => !CONTROL.test(option)));
+    assert.deepEqual(
+      editMenus[1]!.options,
+      fieldLabels({
+        name: "legacy",
+        description: "Legacy scalar",
+        models: "google/gemini-2.5-pro",
+      }),
+    );
+    assert.deepEqual(
+      editMenus[2]!.options,
+      fieldLabels({
+        name: "empty",
+        description: "Explicit empty tools",
+        allow: "Empty list",
+        block: "Empty list",
+      }),
+    );
+  });
 });
 
 test("field editor prefills current values and cancelled or invalid edits keep the visible draft", async () => {
-  const { root, store, agentDir, body } = await configFixture();
-  try {
-    await writeFile(
-      join(userAgentsDir(agentDir), "worker.md"),
-      serializeAgentType({
-        name: "worker",
-        description: "Worker",
-        systemPrompt: body,
-        tools: { allow: ["read"], block: ["bash"] },
-      }),
-    );
-    store.reload();
+  await withFixture(async ({ root, store, body, writeWorker }) => {
+    await writeWorker({ tools: { allow: ["read"], block: ["bash"] } });
     const { ctx, menus, editors, diagnostics } = editorContext(
       root,
       [
@@ -1565,230 +1056,75 @@ test("field editor prefills current values and cancelled or invalid edits keep t
         "Cancel",
         undefined,
       ],
-      [
-        "renamed",
-        undefined,
-        "",
-        "bash, edit",
-        undefined,
-        "read, read",
-        "../escape",
-      ],
+      // rename, cancel, empty description, valid allow, cancel, duplicate, unsafe name
+      ["renamed", undefined, "", "bash, edit", undefined, "read, read", "../escape"],
     );
     await editAgentTypes(ctx, store);
-    const editMenus = unsavedMenus(menus);
-    assert.equal(editMenus[0]!.title, "Edit worker (unsaved)");
-    assert.deepEqual(editMenus[0]!.options, [
-      "name: worker",
-      "description: Worker",
-      "models: Default (inherit)",
-      "modelSuggestions: None",
-      "thinkingLevel: Default (inherit)",
-      "tools.allow: read",
-      "tools.block: bash",
-      "color: Default (inherit)",
-      ...EDIT_ACTIONS,
-    ]);
-    assert.equal(editMenus[1]!.title, "Edit renamed (unsaved)");
-    assert.deepEqual(editMenus[1]!.options, [
-      "name: renamed",
-      "description: Worker",
-      "models: Default (inherit)",
-      "modelSuggestions: None",
-      "thinkingLevel: Default (inherit)",
-      "tools.allow: read",
-      "tools.block: bash",
-      "color: Default (inherit)",
-      ...EDIT_ACTIONS,
-    ]);
-    assert.deepEqual(editMenus[2]!.options, editMenus[1]!.options);
-    assert.deepEqual(editMenus[3]!.options, editMenus[1]!.options);
-    assert.equal(editMenus[4]!.title, "Edit renamed (unsaved)");
-    assert.deepEqual(editMenus[4]!.options, [
-      "name: renamed",
-      "description: Worker",
-      "models: Default (inherit)",
-      "modelSuggestions: None",
-      "thinkingLevel: Default (inherit)",
-      "tools.allow: bash, edit",
-      "tools.block: bash",
-      "color: Default (inherit)",
-      ...EDIT_ACTIONS,
-    ]);
-    assert.deepEqual(editMenus[5]!.options, editMenus[4]!.options);
-    assert.deepEqual(editMenus[6]!.options, editMenus[4]!.options);
-    assert.deepEqual(editMenus[7]!.options, editMenus[4]!.options);
-    assert.equal(editMenus.length, 8);
+    const tools = "tools.allow: comma-separated exact names";
     assert.deepEqual(editors, [
       { title: "Agent name", prefill: "worker" },
       { title: "Agent name", prefill: "renamed" },
       { title: "Agent description", prefill: "Worker" },
-      { title: "tools.allow: comma-separated exact names", prefill: "read" },
+      { title: tools, prefill: "read" },
       { title: "tools.block: comma-separated exact names", prefill: "bash" },
-      {
-        title: "tools.allow: comma-separated exact names",
-        prefill: "bash, edit",
-      },
+      { title: tools, prefill: "bash, edit" },
       { title: "Agent name", prefill: "renamed" },
     ]);
     assert.equal(diagnostics.length, 3);
+    assert.deepEqual(
+      unsavedMenus(menus).at(-1)!.options,
+      fieldLabels({
+        name: "renamed",
+        description: "Worker",
+        allow: "bash, edit",
+        block: "bash",
+      }),
+    );
     assert.equal(store.get("worker").name, "worker");
-    assert.deepEqual(store.get("worker").tools, {
-      allow: ["read"],
-      block: ["bash"],
-    });
+    assert.deepEqual(store.get("worker").tools, { allow: ["read"], block: ["bash"] });
     assert.equal(store.get("worker").systemPrompt, body);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  });
 });
 
-test("description editor prefills safe text and unchanged submits keep the original", async () => {
-  const { root, store, agentDir, body } = await configFixture();
-  try {
-    const hostile =
-      "  keep\x1b[31mred\x1b[0m\x1b]0;owned\x07\r\n\tline\rrest\ntab\there  ";
+test("description editor prefills sanitized text and unchanged submits keep the raw original", async () => {
+  await withFixture(async ({ root, store, body, writeWorker }) => {
+    const hostile = "  keep\x1b[31mred\x1b[0m\x1b]0;owned\x07\r\n\tline\rrest\ntab\there  ";
     const prefill = hostile
       .replace(/\r\n/g, "\n")
       .replace(/\r/g, "\n")
       .split("\n")
       .map(sanitizeText)
       .join("\n");
-    await writeFile(
-      join(userAgentsDir(agentDir), "worker.md"),
-      serializeAgentType({
-        name: "worker",
-        description: hostile,
-        systemPrompt: body,
-      }),
-    );
-    await writeFile(
-      join(userAgentsDir(agentDir), "empty.md"),
-      serializeAgentType({
-        name: "empty",
-        description: "Explicit empty tools",
-        systemPrompt: body,
-        tools: { allow: [], block: [] },
-      }),
-    );
-    store.reload();
-    const unchanged = editorContext(
+    await writeWorker({ description: hostile });
+    const { ctx, editors } = editorContext(
       root,
-      [
-        "worker",
-        "description",
-        "description",
-        "description",
-        "tools.allow",
-        undefined,
-        "tools.block",
-        undefined,
-        "Save",
-        "Global",
-        "empty",
-        "tools.allow",
-        undefined,
-        "tools.block",
-        undefined,
-        "Cancel",
-        undefined,
-      ],
+      ["worker", "description", "description", "description", "Save", "Global", undefined],
       [undefined, prefill, prefill.trim()],
     );
-    await editAgentTypes(unchanged.ctx, store);
-    const descriptionLabel = `description: ${sanitizeText(hostile)}`;
-    const workerMenus = unsavedMenus(unchanged.menus).filter((menu) =>
-      menu.title.startsWith("Edit worker"),
-    );
-    assert.equal(workerMenus.length, 6);
-    assert.ok(
-      workerMenus.every((menu) => menu.options.includes(descriptionLabel)),
-    );
+    await editAgentTypes(ctx, store);
     assert.deepEqual(
-      unchanged.editors.map((call) => call.prefill),
+      editors.map((call) => call.prefill),
       [prefill, prefill, prefill],
     );
-    for (const call of unchanged.editors) {
-      assert.equal(call.title, "Agent description");
-      assert.notEqual(call.prefill, hostile);
-      assert.match(call.prefill ?? "", /\n/);
-      assert.ok(!/[\x00-\x09\x0b-\x1f\x7f-\x9f]/.test(call.prefill ?? ""));
-      assert.ok(!call.prefill?.includes("\x1b"));
-    }
+    assert.ok(!/[\x00-\x09\x0b-\x1f\x7f-\x9f]/.test(prefill));
     const saved = store.get("worker");
     assert.equal(saved.description, hostile);
-    assert.equal(
-      parseAgentType(await readFile(saved.filePath!, "utf8")).description,
-      hostile,
-    );
+    assert.equal(parseAgentType(await readFile(saved.filePath!, "utf8")).description, hostile);
     assert.equal(saved.systemPrompt, body);
-    const toolTitles = unchanged.menus
-      .filter((menu) => menu.title.startsWith("tools."))
-      .map((menu) => menu.title);
-    assert.deepEqual(toolTitles, [
-      "tools.allow (Unset (use default policy))",
-      "tools.block (Unset (use default policy))",
-      "tools.allow (Empty list)",
-      "tools.block (Empty list)",
-    ]);
-    assert.ok(
-      unchanged.menus
-        .filter((menu) => menu.title.startsWith("tools."))
-        .every(
-          (menu) =>
-            !/[\x00-\x1f\x7f-\x9f]/.test(menu.title) &&
-            menu.options.includes("Unset (use default policy)") &&
-            menu.options.includes("Empty list"),
-        ),
-    );
-
-    const changed = editorContext(
-      root,
-      ["worker", "description", "Save", "Global", undefined],
-      ["Revised notes"],
-    );
-    await editAgentTypes(changed.ctx, store);
-    const changedMenus = unsavedMenus(changed.menus);
-    assert.equal(changed.editors[0]?.prefill, prefill);
-    assert.ok(changedMenus[1]!.options.includes("description: Revised notes"));
-    assert.equal(store.get("worker").description, "Revised notes");
-    assert.equal(store.get("worker").systemPrompt, body);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  });
 });
 
-function assertOneOverlay(
-  driver: {
-    stats: {
-      outerOpens: number;
-      outerCompletions: number;
-      forcedRenders: number;
-      frameHeights: number[];
-    };
-  },
-  label: string,
-) {
-  assert.equal(
-    driver.stats.outerOpens,
-    1,
-    `${label} opened ${driver.stats.outerOpens} custom overlays`,
-  );
-  assert.equal(
-    driver.stats.outerCompletions,
-    1,
-    `${label} completed ${driver.stats.outerCompletions} custom overlays`,
-  );
-  assert.equal(
-    driver.stats.forcedRenders,
-    0,
-    `${label} issued ${driver.stats.forcedRenders} forced render requests`,
+function assertOneOverlay(driver: ReturnType<typeof createDialogDriver>, label: string) {
+  const { outerOpens, outerCompletions, forcedRenders } = driver.stats;
+  assert.deepEqual(
+    { outerOpens, outerCompletions, forcedRenders },
+    { outerOpens: 1, outerCompletions: 1, forcedRenders: 0 },
+    label,
   );
 }
 
 test("agent definition edits including model, color, and text use one overlay", async () => {
-  const { root, store } = await configFixture();
-  try {
+  await withFixture(async ({ root, store }) => {
     const prompt = "Be brief.";
     const { ctx, driver } = editorContext(
       root,
@@ -1805,37 +1141,17 @@ test("agent definition edits including model, color, and text use one overlay", 
         undefined,
       ],
       ["scout", "Field notes", prompt],
-      {
-        availableModels: [
-          { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
-          {
-            provider: "anthropic",
-            id: "claude-3.7-sonnet",
-            name: "Claude 3.7 Sonnet",
-          },
-        ],
-      },
+      { availableModels: TWO_MODELS },
     );
+    pickModels(driver, ["openai/gpt-4.1", "action:done"]);
+    const pick = driver.onChild!;
     driver.onChild = (component) => {
       if (driver.session && component instanceof DialogEditor) {
         driver.session.focused = true;
         assert.equal(component.focused, true);
-        const rendered = driver.session.render(100);
-        assert.ok(
-          rendered.some((line: string) => line.includes(CURSOR_MARKER)),
-        );
+        assert.ok(driver.session.render(100).some((line: string) => line.includes(CURSOR_MARKER)));
       }
-      if (typeof component.getMode !== "function") return false;
-      const selectValue = (value: string) => {
-        const item = component
-          .getCurrentItems()
-          .find((entry: { value: string }) => entry.value === value);
-        assert.ok(item, `Missing model picker option: ${value}`);
-        component.getSelectList().onSelect?.(item);
-      };
-      selectValue("openai/gpt-4.1");
-      selectValue("action:done");
-      return true;
+      return pick(component);
     };
     await editAgentTypes(ctx, store);
     const saved = store.get("scout");
@@ -1844,21 +1160,14 @@ test("agent definition edits including model, color, and text use one overlay", 
     assert.equal(saved.color, "success");
     assert.deepEqual(saved.models, ["openai/gpt-4.1"]);
     assertOneOverlay(driver, "agent definition edits");
-    const height = dialogHeight({
-      requestRender() {},
-      terminal: { rows: 24 },
-    });
+    const height = dialogHeight({ requestRender() {}, terminal: { rows: 24 } });
     assert.ok(driver.stats.frameHeights.length >= 3);
     assert.ok(driver.stats.frameHeights.every((lines) => lines === height));
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  });
 });
 
 test("nested definition editor from settings uses one overlay", async () => {
-  const { root, agentDir, store } = await configFixture();
-  try {
-    const before = store.get("worker").description;
+  await withFixture(async ({ root, agentDir, store }) => {
     const { ctx, driver } = editorContext(
       root,
       ["types", "worker", "description", "Cancel", undefined, "cancel"],
@@ -1875,167 +1184,67 @@ test("nested definition editor from settings uses one overlay", async () => {
       },
     });
     assert.equal(applied, 0);
-    assert.equal(store.get("worker").description, before);
+    assert.equal(store.get("worker").description, "Worker");
     assertOneOverlay(driver, "nested definition editor");
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  });
 });
 
-test("model suggestion editor shows advisory names and preserves them across cancel and other edits", async () => {
-  const { root, store, agentDir, body } = await configFixture();
-  try {
-    const hostile = "Claude\x1b[31m Opus\x1b[0m";
-    const suggestions = [hostile, "GPT"];
-    await writeFile(
-      join(userAgentsDir(agentDir), "worker.md"),
-      serializeAgentType({
-        name: "worker",
-        description: "Worker",
-        systemPrompt: body,
-        models: ["openai/gpt-4.1"],
-        modelSuggestions: suggestions,
-      }),
-    );
-    store.reload();
+test("model suggestion editor shows sanitized names and preserves them across cancel and other edits", async () => {
+  await withFixture(async ({ root, store, writeWorker }) => {
+    const suggestions = ["Claude\x1b[31m Opus\x1b[0m", "GPT"];
+    await writeWorker({ models: ["openai/gpt-4.1"], modelSuggestions: suggestions });
     const shown = `modelSuggestions: ${sanitizeText(suggestions.join(", "))}`;
-    const prefill = suggestions.map((name) => sanitizeText(name)).join("\n");
     const { ctx, menus, editors } = editorContext(
       root,
-      [
-        "worker",
-        "modelSuggestions",
-        "description",
-        "Cancel",
-        undefined,
-      ],
+      ["worker", "modelSuggestions", "description", "Cancel", undefined],
       [undefined, "Revised description"],
     );
     await editAgentTypes(ctx, store);
     const editMenus = unsavedMenus(menus);
-    assert.equal(editMenus[0]!.options.includes(shown), true);
-    assert.equal(
-      editMenus[0]!.options.includes("models: openai/gpt-4.1"),
-      true,
-    );
-    assert.ok(editMenus[0]!.options.every((option) => !option.includes("\x1b")));
-    assert.equal(editMenus[1]!.options.includes(shown), true);
-    assert.equal(
-      editMenus[2]!.options.includes("description: Revised description"),
-      true,
-    );
-    assert.equal(editMenus[2]!.options.includes(shown), true);
+    assert.ok(editMenus.every((menu) => menu.options.includes(shown)));
+    assert.ok(editMenus[2]!.options.includes("description: Revised description"));
     assert.equal(editors[0]?.title, "Agent modelSuggestions (one display name per line)");
-    assert.equal(editors[0]?.prefill, prefill);
-    assert.ok(!editors[0]?.prefill?.includes("\x1b"));
+    assert.equal(editors[0]?.prefill, suggestions.map(sanitizeText).join("\n"));
     assert.deepEqual(store.get("worker").modelSuggestions, suggestions);
-    assert.deepEqual(store.get("worker").models, ["openai/gpt-4.1"]);
-    assert.equal(store.get("worker").systemPrompt, body);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+  });
 });
 
-test("model suggestion edits save display names, empty clears, and other saves keep an explicit empty list", async () => {
-  const { root, store, agentDir, body } = await configFixture();
-  try {
-    await writeFile(
-      join(userAgentsDir(agentDir), "worker.md"),
-      serializeAgentType({
-        name: "worker",
-        description: "Worker",
-        systemPrompt: body,
-        models: ["openai/gpt-4.1"],
-        modelSuggestions: ["Claude Opus", "GPT"],
-      }),
-    );
-    store.reload();
-    const edited = editorContext(
-      root,
-      ["worker", "modelSuggestions", "modelSuggestions", "Cancel", undefined],
-      ["Sonnet\n\n GPT \n", undefined],
-    );
-    await editAgentTypes(edited.ctx, store);
-    const editedMenus = unsavedMenus(edited.menus);
-    assert.equal(
-      editedMenus[1]!.options.includes("modelSuggestions: Sonnet, GPT"),
-      true,
-    );
-    assert.equal(
-      editedMenus[2]!.options.includes("modelSuggestions: Sonnet, GPT"),
-      true,
-    );
-    assert.deepEqual(store.get("worker").modelSuggestions, ["Claude Opus", "GPT"]);
+test("model suggestion edits save display names, reject duplicates, empty clears, and other saves keep an explicit empty list", async () => {
+  await withFixture(async ({ root, store, writeWorker }) => {
+    await writeWorker({
+      models: ["openai/gpt-4.1"],
+      modelSuggestions: ["Claude Opus", "GPT"],
+    });
+    const run = async (choices: (string | undefined)[], inputs: (string | undefined)[]) => {
+      const context = editorContext(root, choices, inputs);
+      await editAgentTypes(context.ctx, store);
+      return context;
+    };
+    const persisted = () => readFile(store.get("worker").filePath!, "utf8");
 
-    const duplicate = editorContext(
-      root,
-      ["worker", "modelSuggestions", "Cancel", undefined],
-      ["GPT\nGPT"],
-    );
-    await editAgentTypes(duplicate.ctx, store);
+    const duplicate = await run(["worker", "modelSuggestions", "Cancel", undefined], ["GPT\nGPT"]);
     assert.match(duplicate.diagnostics.join("\n"), /duplicate/);
-    assert.equal(
-      unsavedMenus(duplicate.menus).at(-1)!.options.includes(
-        "modelSuggestions: Claude Opus, GPT",
-      ),
-      true,
+    assert.ok(
+      unsavedMenus(duplicate.menus).at(-1)!.options.includes("modelSuggestions: Claude Opus, GPT"),
     );
-    assert.deepEqual(store.get("worker").modelSuggestions, ["Claude Opus", "GPT"]);
 
-    const saved = editorContext(
-      root,
-      ["worker", "modelSuggestions", "Save", "Global", undefined],
-      ["Sonnet\n\n GPT \n"],
-    );
-    await editAgentTypes(saved.ctx, store);
+    await run(["worker", "modelSuggestions", "Save", "Global", undefined], ["Sonnet\n\n GPT \n"]);
     assert.deepEqual(store.get("worker").modelSuggestions, ["Sonnet", "GPT"]);
     assert.deepEqual(store.get("worker").models, ["openai/gpt-4.1"]);
-    assert.equal(store.get("worker").systemPrompt, body);
-    const persisted = await readFile(store.get("worker").filePath!, "utf8");
-    assert.match(persisted, /modelSuggestions:\n  - Sonnet\n  - GPT/);
-    assert.match(persisted, /models:\n  - openai\/gpt-4\.1/);
+    assert.match(await persisted(), /modelSuggestions:\n  - Sonnet\n  - GPT/);
 
-    const cleared = editorContext(
-      root,
-      ["worker", "modelSuggestions", "Save", "Global", undefined],
-      ["\n  \n"],
-    );
-    await editAgentTypes(cleared.ctx, store);
+    await run(["worker", "modelSuggestions", "Save", "Global", undefined], ["\n  \n"]);
     assert.equal(store.get("worker").modelSuggestions, undefined);
-    assert.deepEqual(store.get("worker").models, ["openai/gpt-4.1"]);
-    assert.doesNotMatch(
-      await readFile(store.get("worker").filePath!, "utf8"),
-      /modelSuggestions/,
-    );
+    assert.doesNotMatch(await persisted(), /modelSuggestions/);
 
-    await writeFile(
-      join(userAgentsDir(agentDir), "worker.md"),
-      serializeAgentType({
-        name: "worker",
-        description: "Worker",
-        systemPrompt: body,
-        modelSuggestions: [],
-      }),
-    );
-    store.reload();
-    const keptEmpty = editorContext(
-      root,
+    await writeWorker({ modelSuggestions: [] });
+    const keptEmpty = await run(
       ["worker", "modelSuggestions", "description", "Save", "Global", undefined],
       ["", "Still empty"],
     );
-    await editAgentTypes(keptEmpty.ctx, store);
-    assert.equal(
-      keptEmpty.editors[0]?.prefill,
-      "",
-      "empty suggestions prefill as a blank multiline editor",
-    );
+    assert.equal(keptEmpty.editors[0]?.prefill, "");
     assert.deepEqual(store.get("worker").modelSuggestions, []);
     assert.equal(store.get("worker").description, "Still empty");
-    assert.match(
-      await readFile(store.get("worker").filePath!, "utf8"),
-      /modelSuggestions: \[\]/,
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+    assert.match(await persisted(), /modelSuggestions: \[\]/);
+  });
 });

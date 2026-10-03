@@ -25,148 +25,69 @@ test("canonical ancestry is structural, not prefix matching or URL normalization
 });
 
 test("context snapshots strip unfinished/orphaned tool exchanges and clone messages", () => {
-  const assistant = (
-    content: any[],
-    stopReason: "toolUse" | "error" = "toolUse",
-  ): AgentMessage => ({
-    role: "assistant",
-    content,
-    api: "openai-responses",
-    provider: "openai",
-    model: "model",
-    usage: {
-      input: 1,
-      output: 1,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 2,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason,
-    timestamp: 1,
-  });
-  const messages: AgentMessage[] = [
+  const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2 };
+  const assistant = (text: string, calls: [string, string][], stopReason = "toolUse") =>
+    ({
+      role: "assistant",
+      content: [
+        { type: "text", text },
+        ...calls.map(([id, name]) => ({ type: "toolCall", id, name, arguments: {} })),
+      ],
+      api: "openai-responses",
+      provider: "openai",
+      model: "model",
+      usage: { ...usage, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason,
+      timestamp: 1,
+    }) as AgentMessage;
+  const result = (toolCallId: string, text: string) =>
+    ({
+      role: "toolResult",
+      toolCallId,
+      toolName: "read",
+      content: [{ type: "text", text }],
+      isError: false,
+      timestamp: 1,
+    }) as AgentMessage;
+  const messages = [
     { role: "system", content: "parent prompt", timestamp: 1 },
     { role: "user", content: "parent context", timestamp: 1 },
-    {
-      role: "custom",
-      customType: "parent-note",
-      content: "keep custom context",
-      display: false,
-      timestamp: 1,
-    } as unknown as AgentMessage,
-    {
-      role: "bashExecution",
-      command: "echo inherited",
-      output: "keep shell context",
-      exitCode: 0,
-      cancelled: false,
-      truncated: false,
-      timestamp: 1,
-    } as unknown as AgentMessage,
-    assistant([
-      { type: "text", text: "Checking" },
-      { type: "toolCall", id: "repeat", name: "read", arguments: { path: "first" } },
-      { type: "toolCall", id: "pending", name: "agent_spawn", arguments: {} },
+    { role: "custom", customType: "note", content: "keep custom", display: false, timestamp: 1 },
+    { role: "bashExecution", command: "echo", output: "keep shell", exitCode: 0, timestamp: 1 },
+    assistant("Checking", [
+      ["repeat", "read"],
+      ["pending", "agent_spawn"],
     ]),
-    {
-      role: "toolResult",
-      toolCallId: "repeat",
-      toolName: "read",
-      content: [{ type: "text", text: "first result" }],
-      isError: false,
-      timestamp: 1,
-    },
-    {
-      role: "toolResult",
-      toolCallId: "repeat",
-      toolName: "read",
-      content: [{ type: "text", text: "duplicate orphan result" }],
-      isError: false,
-      timestamp: 1,
-    },
-    {
-      role: "toolResult",
-      toolCallId: "orphan",
-      toolName: "read",
-      content: [],
-      isError: false,
-      timestamp: 1,
-    },
-    assistant([
-      { type: "text", text: "Retrying" },
-      { type: "toolCall", id: "repeat", name: "read", arguments: { path: "second" } },
-    ]),
-    {
-      role: "toolResult",
-      toolCallId: "repeat",
-      toolName: "read",
-      content: [{ type: "text", text: "second result" }],
-      isError: false,
-      timestamp: 1,
-    },
-    assistant([
-      { type: "text", text: "Still waiting" },
-      { type: "toolCall", id: "repeat", name: "read", arguments: { path: "third" } },
-    ]),
-    assistant(
-      [
-        { type: "text", text: "Broken" },
-        { type: "toolCall", id: "ignored", name: "read", arguments: { path: "broken" } },
-      ],
-      "error",
-    ),
-    {
-      role: "toolResult",
-      toolCallId: "ignored",
-      toolName: "read",
-      content: [{ type: "text", text: "ignored result" }],
-      isError: false,
-      timestamp: 1,
-    },
-  ];
-  const inherited = inheritContext(messages);
-  assert.deepEqual(
-    inherited.map((message) => message.role),
-    [
-      "user",
-      "custom",
-      "bashExecution",
-      "assistant",
-      "toolResult",
-      "assistant",
-      "toolResult",
-      "assistant",
-    ],
+    result("repeat", "first result"),
+    result("repeat", "duplicate orphan result"),
+    result("orphan", ""),
+    assistant("Retrying", [["repeat", "read"]]),
+    result("repeat", "second result"),
+    assistant("Still waiting", [["repeat", "read"]]),
+    assistant("Broken", [["ignored", "read"]], "error"),
+    result("ignored", "ignored result"),
+  ] as unknown as AgentMessage[];
+
+  const inherited = inheritContext(messages) as any[];
+  const summary = inherited.map((message) =>
+    message.role === "assistant"
+      ? [message.stopReason, ...message.content.map((block: any) => block.id ?? block.text)]
+      : message.role === "toolResult"
+        ? message.content[0].text
+        : message.role,
   );
-  assert.deepEqual(
-    (inherited[3] as any).content.map((block: any) => block.id ?? block.text),
-    ["Checking", "repeat"],
-  );
-  assert.equal((inherited[3] as any).stopReason, "toolUse");
-  assert.equal(((inherited[4] as any).content[0] as any).text, "first result");
-  assert.deepEqual(
-    (inherited[5] as any).content.map((block: any) => block.id ?? block.text),
-    ["Retrying", "repeat"],
-  );
-  assert.equal(((inherited[6] as any).content[0] as any).text, "second result");
-  assert.deepEqual(
-    (inherited[7] as any).content.map((block: any) => block.id ?? block.text),
-    ["Still waiting"],
-  );
-  assert.equal((inherited[7] as any).stopReason, "stop");
-  assert.deepEqual(
-    inherited.flatMap((message: any) =>
-      message.role === "assistant"
-        ? message.content
-            .filter((block: any) => block.type === "toolCall")
-            .map((block: any) => block.id)
-        : [],
-    ),
-    ["repeat", "repeat"],
-  );
-  (inherited[1] as any).content = "child mutation";
-  assert.equal((messages[2] as any).content, "keep custom context");
-  ((inherited[3] as any).content[0] as any).text = "changed";
-  assert.equal(((messages[4] as any).content[0] as any).text, "Checking");
+  assert.deepEqual(summary, [
+    "user",
+    "custom",
+    "bashExecution",
+    ["toolUse", "Checking", "repeat"],
+    "first result",
+    ["toolUse", "Retrying", "repeat"],
+    "second result",
+    ["stop", "Still waiting"],
+  ]);
+  inherited[1].content = "child mutation";
+  inherited[3].content[0].text = "changed";
+  assert.equal((messages[2] as any).content, "keep custom");
+  assert.equal((messages[4] as any).content[0].text, "Checking");
 });

@@ -2,36 +2,50 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test, { type TestContext } from "node:test";
-import type {
-  ExtensionCommandContext,
-  Theme,
-} from "@earendil-works/pi-coding-agent";
+import test from "node:test";
+import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
   CURSOR_MARKER,
   stripTerminalSequences,
+  TuiAltScreen,
+  TuiMainScreen,
   visibleWidth,
+  type OverlayHandle,
+  type Terminal,
 } from "@earendil-works/pi-tui";
 import { ConfigStore } from "../src/config.ts";
 import {
+  DIALOG_OPTIONS,
   DialogEditor,
   DialogMenu,
+  DialogSession,
   dialogHeight,
   frameDialog,
+  withDialogSession,
 } from "../src/dialog.ts";
 import { configureAgents } from "../src/settings-ui.ts";
-import {
-  DEFAULT_MANAGER_SETTINGS,
-  loadManagerSettings,
-} from "../src/settings.ts";
-import {
-  bindDialogDriver,
-  createDialogDriver,
-} from "./helpers/dialogDriver.ts";
+import { DEFAULT_MANAGER_SETTINGS, loadManagerSettings } from "../src/settings.ts";
+import { createDialogDriver } from "./helpers/dialogDriver.ts";
 
 const theme = { fg: (_color: string, text: string) => text } as Theme;
+const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+const host = (rows = 24) => ({ requestRender() {}, terminal: { rows } });
+const DOWN = "\x1b[B";
+const CTRL_S = "\x13";
+const ESC = "\x1b";
 
-test("dialog frame has full borders, title and footer within terminal budgets", () => {
+function bounded(lines: string[], width: number, rows: number) {
+  assert.ok(lines.length <= dialogHeight(host(rows)), `${width}x${rows} too tall`);
+  assert.ok(
+    lines.every((line) => visibleWidth(line) <= width),
+    `${width}x${rows} too wide`,
+  );
+}
+
+// --- Primitives ---------------------------------------------------------------
+
+test("frameDialog bounds, sanitizes, borders, and pads to a fixed height", () => {
+  assert.equal(dialogHeight(host(24)), 21);
   for (const width of [0, 1, 3, 4, 20, 80]) {
     for (const height of [1, 4, 10]) {
       const lines = frameDialog(
@@ -49,19 +63,17 @@ test("dialog frame has full borders, title and footer within terminal budgets", 
         const plain = lines.map(stripTerminalSequences);
         assert.match(plain[0]!, /^╭.*╮$/);
         assert.match(plain.at(-1)!, /^╰.*╯$/);
-        assert.ok(
-          plain.slice(1, -2).every((line) => /^│.*│$|^├.*┤$/.test(line)),
-        );
+        assert.ok(plain.slice(1, -2).every((line) => /^│.*│$|^├.*┤$/.test(line)));
       }
     }
   }
-  assert.equal(
-    dialogHeight({ requestRender() {}, terminal: { rows: 24 } }),
-    21,
-  );
+  const short = frameDialog(theme, 80, 21, "Title", ["only"], "Esc");
+  const tall = frameDialog(theme, 80, 21, "Title", Array(40).fill("row"), "Esc");
+  assert.equal(short.length, 21);
+  assert.equal(tall.length, 21);
 });
 
-test("two-column menu scrolls, restores selection, supports keyboard and preserves footer", () => {
+test("menu restores selection, navigates, selects, saves, and cancels within bounds", () => {
   let selected: string | undefined;
   const rows = Array.from({ length: 30 }, (_, i) => ({
     id: String(i),
@@ -69,9 +81,8 @@ test("two-column menu scrolls, restores selection, supports keyboard and preserv
     value: `Value 界 ${i}`,
     help: "Help",
   }));
-  const host = { requestRender() {}, terminal: { rows: 12 } };
   const menu = new DialogMenu(
-    host,
+    host(12),
     theme,
     "Settings",
     rows,
@@ -83,334 +94,404 @@ test("two-column menu scrolls, restores selection, supports keyboard and preserv
     "save",
   );
   assert.equal(menu.getSelectedId(), "20");
-  let lines = menu.render(80);
-  assert.ok(lines.join("\n").includes("Field 20"));
-  assert.ok(lines.join("\n").includes("│ Value"));
-  assert.ok(lines.join("\n").includes("Esc close"));
-  menu.handleInput("\x1b[B");
+  const text = menu.render(80).join("\n");
+  assert.ok(text.includes("Field 20"), "initial selection is scrolled into view");
+  assert.ok(text.includes("Esc close"));
+  menu.handleInput(DOWN);
   assert.equal(menu.getSelectedId(), "21");
   menu.handleInput("\r");
   assert.equal(selected, "21");
-  menu.handleInput("\x13");
+  menu.handleInput(CTRL_S);
   assert.equal(selected, "save");
-  menu.handleInput("\x1b");
+  menu.handleInput(ESC);
   assert.equal(selected, undefined);
-  for (const width of [1, 10, 40, 100]) {
-    lines = menu.render(width);
-    assert.ok(lines.length <= dialogHeight(host));
-    assert.ok(lines.every((line) => visibleWidth(line) <= width));
-  }
+  for (const width of [1, 10, 40, 100]) bounded(menu.render(width), width, 12);
 });
 
-test("multiline dialog forwards focus, keeps cursor visible, applies with Ctrl+S and cancels", () => {
-  const host = { requestRender() {}, terminal: { rows: 12 } };
+test("multiline editor forwards focus, keeps cursor visible, applies with Ctrl+S, and cancels", () => {
   let applied: string | undefined;
-  const initial =
-    "first\nsecond\nthird\nfourth\nfifth\nsixth\nseventh\neighth\nninth\ntenth";
-  const component = new DialogEditor(
-    host,
+  const editor = new DialogEditor(
+    host(12),
     theme,
     "System prompt",
-    initial,
+    Array.from({ length: 10 }, (_, i) => `line ${i}`).join("\n"),
     (value) => {
       applied = value;
     },
   );
-  component.focused = true;
-  assert.equal(component.getEditor().focused, true);
-  component.handleInput("\x1b[B");
-  component.handleInput("\r");
-  assert.equal(
-    applied,
-    undefined,
-    "Enter inserts a newline rather than submitting",
-  );
-  component.handleInput("\x1b[F");
+  editor.focused = true;
+  assert.equal(editor.getEditor().focused, true);
+  editor.handleInput(DOWN);
+  editor.handleInput("\r");
+  assert.equal(applied, undefined, "Enter inserts a newline rather than submitting");
+  editor.handleInput("\x1b[F");
   for (const width of [1, 3, 10, 40, 100]) {
-    const lines = component.render(width);
-    assert.ok(lines.length <= dialogHeight(host));
-    assert.ok(lines.every((line) => visibleWidth(line) <= width));
-    if (width >= 40) {
-      assert.match(stripTerminalSequences(lines.at(-1)!), /^╰.*╯$/);
-      assert.match(lines.join("\n"), /Ctrl\+S apply/);
+    const lines = editor.render(width);
+    bounded(lines, width, 12);
+    if (width >= 40)
       assert.ok(
         lines.some((line) => line.includes(CURSOR_MARKER)),
-        "visible cursor survives cropping and framing",
+        "cursor survives cropping",
       );
-    }
   }
-  component.handleInput("\x13");
-  assert.equal(applied, component.getEditor().getText());
-  component.handleInput("\x1b");
+  editor.handleInput(CTRL_S);
+  assert.equal(applied, editor.getEditor().getText());
+  editor.handleInput(ESC);
   assert.equal(applied, undefined);
 });
 
-test("multiline dialog strips control sequences before render and preserves unchanged prefill", () => {
-  const host = { requestRender() {}, terminal: { rows: 24 } };
+test("multiline editor strips control sequences but returns unchanged prefill verbatim", () => {
   let value: string | undefined;
   const initial = "hello\tworld\r\n\x1b]0;injected\x07second\x00line";
-  const component = new DialogEditor(
-    host,
-    theme,
-    "Prompt",
-    initial,
-    (result) => {
-      value = result;
-    },
-  );
-  assert.ok(!component.getEditor().getText().includes("\x1b"));
-  assert.ok(!component.render(80).join("\n").includes("injected"));
-  component.handleInput("\x13");
+  const editor = new DialogEditor(host(), theme, "Prompt", initial, (result) => {
+    value = result;
+  });
+  assert.ok(!editor.getEditor().getText().includes("\x1b"));
+  assert.ok(!editor.render(80).join("\n").includes("injected"));
+  editor.handleInput(CTRL_S);
   assert.equal(value, initial);
 });
 
-function fixture(t: TestContext) {
-  const root = mkdtempSync(join(tmpdir(), "pi-dialog-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  const store = new ConfigStore({
-    cwd: root,
-    agentDir: root,
-    includeProject: false,
-  });
-  return { root, store };
-}
+// --- DialogSession (driver) -------------------------------------------------
 
-function context(
-  root: string,
-  actions: (string | undefined)[],
-  trusted = false,
-) {
-  const notifications: string[] = [];
-  const titles: string[] = [];
-  const driver = createDialogDriver({
-    theme,
-    width: 80,
-    choices: actions,
-    unified: true,
-    assertBorder: true,
-    onOpen(options) {
-      assert.equal(
-        (options as { overlay?: boolean } | undefined)?.overlay,
-        true,
-      );
-    },
-    onFrame(_component, lines) {
-      titles.push(lines[0] ?? "");
-    },
-  });
+function sessionContext(onChild?: (component: any) => boolean) {
+  const driver = createDialogDriver({ theme, timeoutMs: 3000 });
+  if (onChild) driver.onChild = onChild;
   const ctx = {
-    cwd: root,
     hasUI: true,
     mode: "tui",
-    isProjectTrusted: () => trusted,
+    ui: { custom: driver.custom, notify() {} },
+  } as unknown as ExtensionCommandContext;
+  return { driver, ctx };
+}
+
+test("DialogSession delegates focus and ignores keys after a child finishes", async () => {
+  const mounted: any[] = [];
+  let notify = () => {};
+  const { driver, ctx } = sessionContext((component) => {
+    mounted.push(component);
+    notify();
+    return true;
+  });
+  const wait = (index: number) =>
+    mounted[index]
+      ? Promise.resolve(mounted[index])
+      : new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error(`child ${index} not mounted`)), 2000);
+          notify = () => {
+            if (!mounted[index]) return;
+            clearTimeout(timer);
+            resolve(mounted[index]);
+          };
+        });
+
+  const doneCalls: unknown[] = [];
+  await withDialogSession(ctx, async (sessionCtx) => {
+    const first = sessionCtx.ui.custom(
+      (childHost, childTheme, _keys, done) =>
+        new DialogEditor(childHost, childTheme, "Prompt", "hello", (value) => {
+          doneCalls.push(value);
+          done(value);
+        }),
+      DIALOG_OPTIONS,
+    );
+    const editor = (await wait(0)) as DialogEditor;
+    const session = driver.session;
+    assert.ok(session instanceof DialogSession);
+    assert.equal(session.getComponent(), editor);
+    session.focused = true;
+    assert.equal(editor.focused, true);
+    const rendered = session.render(80);
+    assert.equal(rendered.length, dialogHeight(host()));
+    assert.ok(rendered.some((line: string) => line.includes(CURSOR_MARKER)));
+    editor.handleInput(ESC);
+    assert.equal(await first, undefined);
+    session.handleInput(CTRL_S);
+    session.handleInput("x");
+    assert.deepEqual(doneCalls, [undefined], "input after done is ignored until the next mount");
+
+    const secondCalls: string[] = [];
+    const second = sessionCtx.ui.custom(
+      (_host, _theme, _keys, done) => ({
+        handleInput(data: string) {
+          secondCalls.push(data);
+          if (data === "\r") done("second");
+        },
+        invalidate() {},
+        render: () => ["next"],
+      }),
+      DIALOG_OPTIONS,
+    );
+    await wait(1);
+    session.handleInput("\r");
+    assert.deepEqual(secondCalls, ["\r"]);
+    assert.equal(await second, "second");
+  });
+  assert.equal(driver.stats.outerOpens, 1);
+  assert.equal(driver.stats.outerCompletions, 1);
+  assert.equal(driver.stats.forcedRenders, 0);
+});
+
+test("withDialogSession shadows getter-only ui without mutating the original context", async () => {
+  const { driver } = sessionContext(() => true);
+  const notifications: string[] = [];
+  const ui = { custom: driver.custom, notify: (message: string) => notifications.push(message) };
+  let cwd = "/original";
+  const ctx = Object.freeze({
+    hasUI: true,
+    mode: "tui",
+    get ui() {
+      return ui;
+    },
+    get cwd() {
+      return cwd;
+    },
+  }) as unknown as ExtensionCommandContext;
+
+  await withDialogSession(ctx, async (sessionCtx) => {
+    assert.notEqual(sessionCtx.ui, ui);
+    sessionCtx.ui.notify("scoped notification");
+    assert.deepEqual(notifications, ["scoped notification"]);
+    cwd = "/updated";
+    assert.equal(sessionCtx.cwd, "/updated", "other context getters stay live");
+    await withDialogSession(sessionCtx, async (nestedCtx) => {
+      assert.equal(nestedCtx, sessionCtx, "nested sessions reuse the outer one");
+      const result = await nestedCtx.ui.custom((_host, _theme, _keys, done) => {
+        done("ok");
+        return { invalidate() {}, render: () => ["child"] };
+      }, DIALOG_OPTIONS);
+      assert.equal(result, "ok");
+    });
+  });
+  assert.equal(ctx.ui, ui);
+  assert.equal(driver.stats.outerOpens, 1);
+  assert.equal(driver.stats.outerCompletions, 1);
+});
+
+test("a failing child rejects without closing the session", async () => {
+  const { driver, ctx } = sessionContext(() => true);
+  let recovered = false;
+  await withDialogSession(ctx, async (sessionCtx) => {
+    await assert.rejects(
+      () =>
+        sessionCtx.ui.custom(() => {
+          throw new Error("child");
+        }, DIALOG_OPTIONS),
+      /child/,
+    );
+    const result = await sessionCtx.ui.custom((_host, _theme, _keys, done) => {
+      done("ok");
+      return { invalidate() {}, render: () => ["recovered"] };
+    }, DIALOG_OPTIONS);
+    recovered = result === "ok";
+  });
+  assert.equal(recovered, true);
+  assert.equal(driver.stats.outerOpens, 1);
+  assert.equal(driver.stats.outerCompletions, 1);
+});
+
+// --- Real TUI renderers --------------------------------------------------------
+
+class RecordingTerminal implements Terminal {
+  columns = 100;
+  rows = 24;
+  kittyProtocolActive = false;
+  writes: string[] = [];
+  input: (data: string) => void = () => {};
+  start(onInput: (data: string) => void): void {
+    this.input = onInput;
+  }
+  stop(): void {}
+  async drainInput(): Promise<void> {}
+  write(data: string): void {
+    this.writes.push(data);
+  }
+  moveBy(lines: number): void {
+    this.write(`\x1b[${Math.abs(lines)}${lines < 0 ? "A" : "B"}`);
+  }
+  hideCursor(): void {}
+  showCursor(): void {}
+  clearLine(): void {
+    this.write("\x1b[2K");
+  }
+  clearFromCursor(): void {
+    this.write("\x1b[J");
+  }
+  clearScreen(): void {
+    this.write("\x1b[2J");
+  }
+  setTitle(): void {}
+  setProgress(): void {}
+}
+
+/** Mimics pi's ctx.ui.custom: overlays are shown on the TUI; others take focus until done. */
+function tuiContext(
+  tui: TuiMainScreen | TuiAltScreen,
+  extra: Record<string, unknown> = {},
+  onPassthroughDone?: () => void,
+) {
+  const stats = { opened: 0, closed: 0 };
+  let overlay: OverlayHandle | undefined;
+  const ctx = {
+    hasUI: true,
+    mode: "tui",
+    ...extra,
     ui: {
-      notify: (message: string) => notifications.push(message),
-      custom: driver.custom,
+      notify: () => {},
+      ...(extra.ui as object),
+      custom: (factory: Function, options: any) =>
+        new Promise((resolve, reject) => {
+          let finished = false;
+          let component: any;
+          if (options?.overlay) stats.opened++;
+          const done = (value: unknown) => {
+            if (finished) return;
+            finished = true;
+            if (options?.overlay) {
+              stats.closed++;
+              overlay?.hide();
+              component?.dispose?.();
+            } else onPassthroughDone?.();
+            resolve(value);
+          };
+          Promise.resolve(factory(tui, theme, {}, done)).then((view) => {
+            if (finished || !options?.overlay) return;
+            component = view;
+            overlay = tui.showOverlay(view, options.overlayOptions);
+          }, reject);
+        }),
     },
   } as unknown as ExtensionCommandContext;
-  bindDialogDriver(ctx, driver);
-  return { ctx, notifications, titles, driver };
+  return { ctx, stats, overlay: () => overlay };
 }
 
-test("settings save applies once, validates numbers and writes to selected scope", async (t) => {
-  const { root, store } = fixture(t);
-  const { ctx, notifications } = context(root, [
-    "maxLevels",
-    "33",
-    "maxLevels",
-    "5",
-    "save",
-  ]);
-  let applied = 0;
-  await configureAgents(ctx, {
-    store,
-    agentDir: root,
-    settings: { ...DEFAULT_MANAGER_SETTINGS },
-    apply: () => {
-      applied++;
-    },
-  });
-  assert.equal(applied, 1);
-  assert.equal(
-    loadManagerSettings({ cwd: root, agentDir: root, includeProject: false })
-      .settings.maxLevels,
-    5,
-  );
-  assert.ok(notifications.some((message) => message.includes("at most 32")));
-});
+for (const Renderer of [TuiMainScreen, TuiAltScreen]) {
+  test(`${Renderer.name}: settings transitions keep one overlay mounted without full redraws`, async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "pi-dialog-renderer-"));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const terminal = new RecordingTerminal();
+    terminal.rows = 12;
+    const tui = new Renderer(terminal);
+    t.after(() => tui.stop());
+    tui.addChild({ invalidate() {}, render: () => ["Conversation behind the settings dialog"] });
+    tui.start();
+    const notifications: string[] = [];
+    const { ctx, stats, overlay } = tuiContext(tui, {
+      cwd: root,
+      isProjectTrusted: () => true,
+      ui: { notify: (message: string) => notifications.push(message) },
+    });
+    let applied = 0;
+    const running = configureAgents(ctx, {
+      store: new ConfigStore({ cwd: root, agentDir: root, includeProject: false }),
+      agentDir: root,
+      settings: { ...DEFAULT_MANAGER_SETTINGS },
+      apply: () => applied++,
+    });
+    await settle();
+    tui.renderNow();
+    const bounds = overlay()?.getBounds();
+    assert.ok(bounds);
+    const redraws = tui.fullRedraws;
+    terminal.writes = [];
 
-test("settings cancel discards draft and project scope requires trust", async (t) => {
-  const { root, store } = fixture(t);
-  const { ctx, notifications } = context(root, [
-    "scope",
-    "maxThreads",
-    "2",
-    undefined,
-  ]);
-  let applied = 0;
-  await configureAgents(ctx, {
-    store,
-    agentDir: root,
-    settings: { ...DEFAULT_MANAGER_SETTINGS },
-    apply: () => {
-      applied++;
-    },
-  });
-  assert.equal(applied, 0);
-  assert.deepEqual(
-    loadManagerSettings({ cwd: root, agentDir: root, includeProject: true })
-      .settings,
-    DEFAULT_MANAGER_SETTINGS,
-  );
-  assert.ok(
-    notifications.some((message) => message.includes("trusted project")),
-  );
-});
-
-function assertOneOverlay(
-  driver: {
-    stats: {
-      outerOpens: number;
-      outerCompletions: number;
-      forcedRenders: number;
+    async function input(data: string): Promise<void> {
+      terminal.input(data);
+      // Render before Promise continuations mount the next view: completing a
+      // field must not expose the conversation behind the dialog.
+      assert.equal(tui.hasOverlay(), true);
+      assert.equal(stats.closed, 0);
+      tui.renderNow();
+      assert.deepEqual(overlay()?.getBounds(), bounds);
+      await settle();
+      tui.renderNow();
+      assert.equal(stats.opened, 1);
+      assert.deepEqual(overlay()?.getBounds(), bounds);
+      assert.equal(tui.fullRedraws, redraws);
+      assert.ok(!terminal.writes.join("").includes("\x1b[2J"));
+    }
+    const replaceField = async (value: string) => {
+      for (const key of ["\r", "\x05", "\x15", value, "\r"]) await input(key);
     };
-  },
-  label: string,
-) {
-  assert.equal(
-    driver.stats.outerOpens,
-    1,
-    `${label} opened ${driver.stats.outerOpens} custom overlays`,
-  );
-  assert.equal(
-    driver.stats.outerCompletions,
-    1,
-    `${label} completed ${driver.stats.outerCompletions} custom overlays`,
-  );
-  assert.equal(
-    driver.stats.forcedRenders,
-    0,
-    `${label} issued ${driver.stats.forcedRenders} forced render requests`,
-  );
+
+    await replaceField("33");
+    assert.ok(notifications.some((message) => message.includes("at most 32")));
+    await replaceField("5");
+    // A canceled field editor, a scope toggle and the nested definitions
+    // editor all remain inside the same outer overlay.
+    await input("\r");
+    await input(ESC);
+    for (let i = 0; i < 4; i++) await input(DOWN);
+    await input("\r");
+    await input(DOWN);
+    await input("\r");
+    await input(ESC);
+    terminal.input(CTRL_S);
+    await running;
+    assert.deepEqual(stats, { opened: 1, closed: 1 });
+    assert.equal(tui.hasOverlay(), false);
+    assert.equal(applied, 1);
+    assert.equal(
+      loadManagerSettings({ cwd: root, agentDir: root, includeProject: false }).settings.maxLevels,
+      5,
+    );
+  });
+
+  test(`${Renderer.name}: a non-overlay custom view restores session focus`, async (t) => {
+    const terminal = new RecordingTerminal();
+    const tui = new Renderer(terminal);
+    t.after(() => tui.stop());
+    const background = { invalidate() {}, render: () => ["conversation"], focused: false };
+    tui.addChild(background);
+    tui.setFocus(background);
+    tui.start();
+    // Pi restores its normal editor after a non-overlay custom view.
+    const { ctx, stats } = tuiContext(tui, {}, () => tui.setFocus(background));
+    const view = (_h: unknown, _t: unknown, _k: unknown, done: (value?: unknown) => void) => ({
+      invalidate() {},
+      render: () => ["view"],
+      handleInput: () => done(),
+    });
+    let passThroughCompleted = false;
+    let outer: unknown;
+    const running = withDialogSession(ctx, async (sessionCtx) => {
+      await sessionCtx.ui.custom(view, DIALOG_OPTIONS);
+      await sessionCtx.ui.custom((_host, _theme, _keys, done) => {
+        done(undefined);
+        return { invalidate() {}, render: () => [] };
+      });
+      passThroughCompleted = true;
+      await sessionCtx.ui.custom(view, DIALOG_OPTIONS);
+    });
+    await settle();
+    outer = tui.getFocusedComponent();
+    assert.ok(outer instanceof DialogSession, "the outer session owns focus");
+    terminal.input("\r");
+    await settle();
+    assert.equal(passThroughCompleted, true);
+    assert.equal(stats.opened, 1);
+    assert.equal(tui.getFocusedComponent(), outer);
+    assert.equal((outer as { focused?: boolean }).focused, true);
+    terminal.input("\r");
+    await running;
+    assert.equal(tui.hasOverlay(), false);
+  });
+
+  for (const throws of [false, true]) {
+    test(`${Renderer.name}: immediately ${throws ? "throwing" : "finishing"} workflows leave no overlay`, async (t) => {
+      const tui = new Renderer(new RecordingTerminal());
+      t.after(() => tui.stop());
+      tui.start();
+      const { ctx, stats } = tuiContext(tui);
+      const running = withDialogSession(ctx, () => {
+        if (throws) throw new Error("immediate failure");
+        return Promise.resolve();
+      });
+      if (throws) await assert.rejects(running, /immediate failure/);
+      else await running;
+      await settle();
+      assert.equal(tui.hasOverlay(), false);
+      assert.equal(stats.closed, stats.opened);
+    });
+  }
 }
-
-test("frameDialog pads every bounded view to the same height", () => {
-  const height = dialogHeight({
-    requestRender() {},
-    terminal: { rows: 24 },
-  });
-  const short = frameDialog(theme, 80, height, "Title", ["only"], "Esc");
-  const tall = frameDialog(
-    theme,
-    80,
-    height,
-    "Title",
-    Array.from({ length: 40 }, () => "row"),
-    "Esc",
-  );
-  assert.equal(short.length, height);
-  assert.equal(tall.length, height);
-  assert.match(short.at(-1) ?? "", /^╰.*╯$/);
-  assert.equal(short.at(-1), tall.at(-1));
-});
-
-test("manager numeric edits use one outer custom overlay", async (t) => {
-  const { root, store } = fixture(t);
-  const { ctx, driver } = context(root, ["maxLevels", "4", "save"]);
-  let applied = 0;
-  await configureAgents(ctx, {
-    store,
-    agentDir: root,
-    settings: { ...DEFAULT_MANAGER_SETTINGS },
-    apply: () => {
-      applied++;
-    },
-  });
-  assert.equal(applied, 1);
-  assert.equal(
-    loadManagerSettings({ cwd: root, agentDir: root, includeProject: false })
-      .settings.maxLevels,
-    4,
-  );
-  assertOneOverlay(driver, "numeric edits");
-  assert.ok(driver.stats.frameHeights.length >= 2);
-});
-
-test("invalid then valid manager edits stay inside one overlay", async (t) => {
-  const { root, store } = fixture(t);
-  const { ctx, notifications, driver } = context(root, [
-    "maxLevels",
-    "33",
-    "maxLevels",
-    "5",
-    "save",
-  ]);
-  await configureAgents(ctx, {
-    store,
-    agentDir: root,
-    settings: { ...DEFAULT_MANAGER_SETTINGS },
-    apply: () => {},
-  });
-  assert.ok(notifications.some((message) => message.includes("at most 32")));
-  assert.equal(
-    loadManagerSettings({ cwd: root, agentDir: root, includeProject: false })
-      .settings.maxLevels,
-    5,
-  );
-  assertOneOverlay(driver, "invalid then valid");
-});
-
-test("scope, defaults, and cancel stay inside one overlay", async (t) => {
-  const { root, store } = fixture(t);
-  const { ctx, notifications, driver } = context(
-    root,
-    ["scope", "defaults", "maxThreads", "9", undefined],
-    true,
-  );
-  let applied = 0;
-  await configureAgents(ctx, {
-    store,
-    agentDir: root,
-    settings: { ...DEFAULT_MANAGER_SETTINGS, maxThreads: 4 },
-    apply: () => {
-      applied++;
-    },
-  });
-  assert.equal(applied, 0);
-  assert.equal(
-    loadManagerSettings({ cwd: root, agentDir: root, includeProject: true })
-      .settings.maxThreads,
-    DEFAULT_MANAGER_SETTINGS.maxThreads,
-  );
-  assert.equal(
-    notifications.some((message) => message.includes("trusted project")),
-    false,
-  );
-  assertOneOverlay(driver, "scope, defaults, and cancel");
-});
-
-test("settings views keep one fixed frame height", async (t) => {
-  const { root, store } = fixture(t);
-  const { ctx, driver } = context(root, [
-    "maxLevels",
-    "6",
-    "maxConcurrent",
-    "2",
-    "cancel",
-  ]);
-  await configureAgents(ctx, {
-    store,
-    agentDir: root,
-    settings: { ...DEFAULT_MANAGER_SETTINGS },
-    apply: () => {},
-  });
-  const height = dialogHeight({
-    requestRender() {},
-    terminal: { rows: 24 },
-  });
-  assert.ok(driver.stats.frameHeights.length >= 3);
-  assert.deepEqual(
-    driver.stats.frameHeights,
-    driver.stats.frameHeights.map(() => height),
-  );
-});

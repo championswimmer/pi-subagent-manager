@@ -37,42 +37,25 @@ function fixture(t: TestContext, options: Partial<ManagerOptions> = {}) {
   return { manager, running, spawn };
 }
 
-test("two L2 agents and their four L3 agents overlap before any completion", async (t) => {
-  const { manager, running, spawn } = fixture(t);
-  await Promise.all([spawn("/root", "a"), spawn("/root", "b")]);
-  await Promise.all(
-    ["/root/a", "/root/b"].flatMap((parent) => [spawn(parent, "x"), spawn(parent, "y")]),
-  );
-  await tick();
-  assert.equal(running.size, 6);
-  assert.equal(manager.list().filter((thread) => thread.state === "running").length, 6);
-  for (const finish of running.values()) finish();
-  await Promise.all(manager.list().map((thread) => manager.scope("/root").wait(thread.path)));
-  assert.ok(manager.list().every((thread) => thread.state === "completed"));
-});
-
-test("default three levels apply equally to normal and independent roots", async (t) => {
-  const { manager, spawn } = fixture(t);
-  for (const parent of ["/root/a", "/k"]) {
-    await spawn("/root", parent);
-    await spawn(parent, "child");
-    await assert.rejects(spawn(`${parent}/child`, "l4"), /depth limit/);
-    // Main-thread authority must not bypass the level limit either.
-    await assert.rejects(spawn("/root", `${parent}/child/l4`), /depth limit/);
-  }
-  assert.equal(manager.list().length, 4);
-});
-
-test("one level prevents all children; four levels permits L4 but not L5", async (t) => {
-  const rootOnly = fixture(t, { maxLevels: 1 });
-  await assert.rejects(rootOnly.spawn("/root", "a"), /depth limit/);
-  await assert.rejects(rootOnly.spawn("/root", "/k"), /depth limit/);
-  const deeper = fixture(t, { maxLevels: 4 });
-  for (const parent of ["/root/a", "/k"]) {
-    await deeper.spawn("/root", parent);
-    await deeper.spawn(parent, "b");
-    await deeper.spawn(`${parent}/b`, "c");
-    await assert.rejects(deeper.spawn(`${parent}/b/c`, "d"), /depth limit/);
+test("level limits apply equally to normal and independent roots", async (t) => {
+  // maxLevels -> number of agent levels allowed below the main thread.
+  for (const [settings, allowed] of [
+    [{ maxLevels: 1 }, 0],
+    [{}, 2], // default three levels
+    [{ maxLevels: 4 }, 3],
+  ] as const) {
+    const { spawn } = fixture(t, settings);
+    for (const top of ["/root/a", "/k"]) {
+      let parent = "/root";
+      for (let level = 0; level < allowed; level++) {
+        const child = level === 0 ? top : `l${level + 2}`;
+        await spawn(parent, child);
+        parent = level === 0 ? top : `${parent}/${child}`;
+      }
+      await assert.rejects(spawn(parent, "deep"), /depth limit/);
+      // Main-thread authority must not bypass the level limit either.
+      if (allowed) await assert.rejects(spawn("/root", `${parent}/deep`), /depth limit/);
+    }
   }
 });
 

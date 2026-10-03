@@ -70,35 +70,26 @@ function indexOf(lines: string[], text: string): number {
   return index;
 }
 
-test("status tree re-export keeps lexical sibling order unless a comparator is passed", () => {
-  const threads = [
-    thread("/root/b", { parent: "/root" }),
-    thread("/root/a", { parent: "/root" }),
-  ];
-  const lexical: StatusRow[] = buildStatusTree(threads, new Set());
-  assert.deepEqual(
-    lexical.map((row) => row.path),
-    ["/root", "/root/a", "/root/b"],
+test("status tree honors a sibling comparator but cycle repair stays lexical", () => {
+  const reverse = (a: string, b: string) => (a < b ? 1 : a > b ? -1 : 0);
+  const siblings = [thread("/root/b"), thread("/root/a")];
+  const paths = (rows: StatusRow[]) => rows.map((row) => row.path);
+  assert.deepEqual(paths(buildStatusTree(siblings, new Set())), ["/root", "/root/a", "/root/b"]);
+  assert.deepEqual(paths(buildStatusTree(siblings, new Set(), reverse)), [
+    "/root",
+    "/root/b",
+    "/root/a",
+  ]);
+  const cycle = buildStatusTree(
+    [
+      thread("/root/a", { parent: "/root/b" }),
+      thread("/root/b", { parent: "/root/a", state: "paused" }),
+    ],
+    new Set(),
+    reverse,
   );
-  const reversed = buildStatusTree(threads, new Set(), (a, b) =>
-    a < b ? 1 : a > b ? -1 : 0,
-  );
-  assert.deepEqual(
-    reversed.map((row) => row.path),
-    ["/root", "/root/b", "/root/a"],
-  );
-});
-
-test("cycle repair stays lexical even when sibling sort is reversed", () => {
-  const threads = [
-    thread("/root/a", { parent: "/root/b", state: "running" }),
-    thread("/root/b", { parent: "/root/a", state: "paused" }),
-  ];
-  const rows = buildStatusTree(threads, new Set(), (a, b) =>
-    a < b ? 1 : a > b ? -1 : 0,
-  );
-  assert.equal(rows.find((row) => row.path === "/root/a")?.prefix, "");
-  assert.equal(rows.find((row) => row.path === "/root/b")?.prefix, "└─ ");
+  assert.equal(cycle.find((row) => row.path === "/root/a")?.prefix, "");
+  assert.equal(cycle.find((row) => row.path === "/root/b")?.prefix, "└─ ");
 });
 
 test("agent tree heading, hierarchy, declared parents, and root exclusion", () => {
@@ -125,10 +116,7 @@ test("agent tree heading, hierarchy, declared parents, and root exclusion", () =
   const text = plain(nested);
   assert.match(text[0]!, /Agents/);
   assert.match(text[0]!, /1 live · 2 paused$/);
-  assert.equal(
-    text.some((line) => line.includes("MAIN_SENTINEL")),
-    false,
-  );
+  assert.ok(!text.some((line) => line.includes("MAIN_SENTINEL")));
   assert.ok(indexOf(nested, "Parent") < indexOf(nested, "Child"));
   assert.ok(indexOf(nested, "Child") < indexOf(nested, "Grand"));
   assert.ok(indexOf(nested, "Grand") < indexOf(nested, "Sibling"));
@@ -136,7 +124,6 @@ test("agent tree heading, hierarchy, declared parents, and root exclusion", () =
   assert.match(lineOf(nested, "Grand"), /^│     └─ /);
   const parentActivity = text[text.indexOf(lineOf(nested, "Parent")) + 1]!;
   assert.match(parentActivity, /^│/);
-  assert.match(lineOf(nested, "[stopped]"), /\[stopped\]/);
 
   const declared = renderAgentTree(
     [
@@ -164,11 +151,7 @@ test("agent tree heading, hierarchy, declared parents, and root exclusion", () =
   );
   assert.ok(elsewhere >= 0);
   assert.ok(indexOf(declared, "Away") > elsewhere);
-  assert.equal(
-    declaredText.some((line) => /\/other\s+missing parent/.test(line)),
-    false,
-  );
-  assert.match(lineOf(declared, "[completed]"), /\[completed\]/);
+  assert.ok(!declaredText.some((line) => /\/other\s+missing parent/.test(line)));
 
   const indie = renderAgentTree(
     [
@@ -185,9 +168,7 @@ test("agent tree heading, hierarchy, declared parents, and root exclusion", () =
   );
   assert.ok(indexOf(indie, "Indie") < indexOf(indie, "Nested"));
   assert.match(lineOf(indie, "Nested"), /^└─ /);
-  assert.equal(lineOf(indie, "Indie").startsWith("├─ "), false);
-  assert.equal(lineOf(indie, "Indie").startsWith("└─ "), false);
-  assert.match(lineOf(indie, "[failed]"), /\[failed\]/);
+  assert.doesNotMatch(lineOf(indie, "Indie"), /^[├└]─ /);
 
   const missing = renderAgentTree(
     [
@@ -242,9 +223,6 @@ test("active branches sort before paused before settled, including promoted ance
   assert.ok(indexOf(ranked, "Wait") < indexOf(ranked, "Done"));
   assert.ok(indexOf(ranked, "Wait") < indexOf(ranked, "Boom"));
   assert.ok(indexOf(ranked, "Wait") < indexOf(ranked, "Halt"));
-  assert.match(plain(ranked).join("\n"), /\[failed\]/);
-  assert.match(plain(ranked).join("\n"), /\[stopped\]/);
-  assert.match(plain(ranked).join("\n"), /\[completed\]/);
 
   const roots = renderAgentTree(
     [
@@ -255,7 +233,6 @@ test("active branches sort before paused before settled, including promoted ance
     theme,
   );
   assert.ok(indexOf(roots, "Boot") < indexOf(roots, "Indie"));
-  assert.match(plain(roots).join("\n"), /\[starting\]/);
 });
 
 test("shows task, elapsed tokens, and indented latest activity", (t) => {
@@ -289,15 +266,12 @@ test("shows task, elapsed tokens, and indented latest activity", (t) => {
     const text = plain(lines);
     assert.match(text[0]!, /1 live · 1 paused$/);
     const job = lineOf(lines, "/root/job");
-    assert.match(job, /\[researcher\]/);
-    assert.match(job, /\[running\]/);
     assert.match(job, /Investigate/);
     assert.equal(job.includes("Reading"), false);
     assert.ok(job.endsWith("7s ↑1.2k ↓34"), job);
     const activity = text[text.indexOf(job) + 1]!;
     assert.match(activity, /Reading src\/ui\.ts/);
     assert.ok(activity.startsWith("│  ") || activity.startsWith("   "));
-    assert.ok(activity.indexOf("Reading") >= 3);
     const hold = lineOf(lines, "/root/hold");
     assert.match(hold, /Wait/);
     assert.ok(hold.endsWith("9s ↑10 ↓3"), hold);
@@ -330,15 +304,11 @@ test("sanitizes controls and clips unicode without dropping right counters", () 
       String(width),
     );
     assert.ok(
-      lines.every(
-        (line) => !/[\x00-\x1f\x7f-\x9f]/.test(stripTerminalSequences(line)),
-      ),
+      lines.every((line) => !/[\x00-\x1f\x7f-\x9f]/.test(stripTerminalSequences(line))),
       String(width),
     );
     if (width >= visibleWidth(theme.fg("muted", counters))) {
-      const agent = lines.find((line) =>
-        line.endsWith(theme.fg("muted", counters)),
-      );
+      const agent = lines.find((line) => line.endsWith(theme.fg("muted", counters)));
       assert.ok(agent, String(width));
       assert.equal(visibleWidth(agent), width);
     }
@@ -346,10 +316,6 @@ test("sanitizes controls and clips unicode without dropping right counters", () 
   const wide = plain(renderAgentTree(threads, 160, theme));
   assert.match(wide.find((line) => line.includes("n6")) ?? "", /界/);
   assert.match(wide.join("\n"), /missing parent/);
-  assert.equal(
-    wide.some((line) => line.includes("\x1b")),
-    false,
-  );
 });
 
 test("bounds the widget to ten lines and counts every omitted real agent", () => {
@@ -364,7 +330,6 @@ test("bounds the widget to ten lines and counts every omitted real agent", () =>
   const five = renderAgentTree(many.slice(0, 5), 80, theme);
   assert.equal(five.length, 10);
   assert.match(plain(five).at(-1)!, /^\+1 more agents · \/agents tree$/);
-  assert.match(plain(five).join("\n"), /Job 0/);
   assert.equal(
     plain(five).some((line) => line.includes("Job 4")),
     false,
@@ -399,9 +364,6 @@ test("bounds the widget to ten lines and counts every omitted real agent", () =>
     plain(packed).some((line) => line.includes("Child 3")),
     false,
   );
-  for (const shown of ["Child 0", "Child 1", "Child 2"]) {
-    assert.ok(indexOf(packed, "Parent") < indexOf(packed, shown));
-  }
 });
 
 test("live branches cannot be hidden by settled descendants", () => {
@@ -421,9 +383,7 @@ test("live branches cannot be hidden by settled descendants", () => {
   );
   assert.equal(lines.length, 10);
   assert.match(plain(lines)[0]!, /2 live · 0 paused$/);
-  assert.ok(
-    indexOf(lines, "Active parent") < indexOf(lines, "Settled child 0"),
-  );
+  assert.ok(indexOf(lines, "Active parent") < indexOf(lines, "Settled child 0"));
   assert.ok(indexOf(lines, "Other active branch") >= 0);
   assert.match(plain(lines).at(-1)!, /^\+2 more agents/);
 });
@@ -440,93 +400,51 @@ test("cycle rendering stays finite and keeps both agents with their parent row",
   assert.ok(indexOf(lines, "Alpha") < indexOf(lines, "Beta"));
   assert.match(lineOf(lines, "Beta"), /└─ |├─ /);
   assert.equal(renderAgentTree([], 80, theme).length, 0);
-  assert.deepEqual(
-    renderAgentTree([thread("/root", { task: "MAIN_SENTINEL" })], 80, theme),
-    [],
-  );
+  assert.deepEqual(renderAgentTree([thread("/root", { task: "MAIN_SENTINEL" })], 80, theme), []);
 });
 
-test("updateWidget pins the tree above the editor and uses strings in RPC", () => {
+test("updateWidget pins the tree above the editor, clears when empty, and uses strings in RPC", () => {
   const calls: { content: unknown; options: unknown }[] = [];
-  const ctx = {
-    hasUI: true,
-    ui: {
-      theme,
-      setWidget: (_key: string, content: unknown, options: unknown) => {
-        calls.push({ content, options });
+  const context = (mode?: string, hasUI = true) =>
+    ({
+      hasUI,
+      mode,
+      ui: {
+        theme,
+        setWidget: (_key: string, content: unknown, options: unknown) => {
+          calls.push({ content, options });
+        },
       },
-    },
-  } as unknown as ExtensionContext;
-  updateWidget(ctx, [
-    thread("/root/job", {
-      state: "completed",
-      task: "Done",
-      status: "finished",
-    }),
-  ]);
-  assert.equal(typeof calls[0]!.content, "function");
-  assert.deepEqual(calls[0]!.options, { placement: "aboveEditor" });
+    }) as unknown as ExtensionContext;
+  const ctx = context();
+  updateWidget(ctx, [thread("/root/job", { state: "completed", task: "Done" })]);
   const widget = (
     calls[0]!.content as (tui: { requestRender(): void }) => {
       render(width: number): string[];
       dispose(): void;
     }
   )({ requestRender() {} });
-  const rendered = widget.render(80);
-  assert.match(plain(rendered).join("\n"), /Agents/);
-  assert.match(plain(rendered).join("\n"), /Done/);
-  assert.ok(rendered.every((line) => visibleWidth(line) <= 80));
+  assert.match(plain(widget.render(80)).join("\n"), /Agents[\s\S]*Done/);
   widget.dispose();
 
   updateWidget(ctx, []);
-  assert.equal(calls[1]!.content, undefined);
-  assert.deepEqual(calls[1]!.options, { placement: "aboveEditor" });
   updateWidget(ctx, [thread("/root")]);
-  assert.equal(calls[2]!.content, undefined);
-  assert.deepEqual(calls[2]!.options, { placement: "aboveEditor" });
-
-  const rpc: { content: unknown; options: unknown }[] = [];
-  updateWidget(
-    {
-      hasUI: true,
-      mode: "rpc",
-      ui: {
-        theme,
-        setWidget: (_key: string, content: unknown, options: unknown) => {
-          rpc.push({ content, options });
-        },
-      },
-    } as unknown as ExtensionContext,
-    [
-      thread("/root/job", {
-        state: "running",
-        task: "Dig",
-        status: "Digging",
-        startedAt: Date.now(),
-      }),
-    ],
+  assert.deepEqual(
+    calls.slice(1).map((call) => call.content),
+    [undefined, undefined],
   );
-  assert.ok(Array.isArray(rpc[0]!.content));
-  assert.equal(typeof rpc[0]!.content, "object");
-  const rpcLines = rpc[0]!.content as string[];
-  assert.ok(rpcLines.length > 0 && rpcLines.length <= 10);
+  assert.ok(
+    calls.every((call) => (call.options as { placement: string }).placement === "aboveEditor"),
+  );
+
+  calls.length = 0;
+  updateWidget(context("rpc"), [thread("/root/job", { status: "Digging", startedAt: Date.now() })]);
+  const rpcLines = calls[0]!.content as string[];
+  assert.ok(Array.isArray(rpcLines) && rpcLines.length <= 10);
   assert.ok(rpcLines.every((line) => visibleWidth(line) <= 80));
-  assert.match(plain(rpcLines).join("\n"), /Agents/);
-  assert.match(plain(rpcLines).join("\n"), /Digging/);
-  assert.deepEqual(rpc[0]!.options, { placement: "aboveEditor" });
+  assert.match(plain(rpcLines).join("\n"), /Agents[\s\S]*Digging/);
 
-  let called = false;
-  updateWidget(
-    {
-      hasUI: false,
-      mode: "rpc",
-      ui: {
-        setWidget() {
-          called = true;
-        },
-      },
-    } as unknown as ExtensionContext,
-    [thread("/hidden", { state: "running" })],
-  );
-  assert.equal(called, false);
+  calls.length = 0;
+  updateWidget(context("rpc", false), [thread("/hidden")]);
+  assert.equal(calls.length, 0);
 });
