@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import { ConfigStore } from "../src/config.ts";
+import { dialogHeight } from "../src/dialog.ts";
 import { configureAgents } from "../src/settings-ui.ts";
 import {
   DEFAULT_MANAGER_SETTINGS,
@@ -14,152 +15,120 @@ import {
 import { createDialogDriver } from "./helpers/dialogDriver.ts";
 
 const theme = { fg: (_color: string, text: string) => text } as Theme;
+type Menu = { title: string; rows: { id: string; value?: string }[] };
 
-function fixture(t: TestContext) {
+/** Runs configureAgents with scripted menu/input choices and reports what reached disk. */
+async function run(
+  t: TestContext,
+  actions: (string | undefined)[],
+  { settings = DEFAULT_MANAGER_SETTINGS, trusted = false } = {} as {
+    settings?: ManagerSettings;
+    trusted?: boolean;
+  },
+) {
   const root = mkdtempSync(join(tmpdir(), "pi-settings-ui-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const store = new ConfigStore({
-    cwd: root,
-    agentDir: root,
-    includeProject: false,
-  });
-  return { root, store };
-}
-
-function context(root: string, actions: (string | undefined)[]) {
   const notifications: string[] = [];
-  const menus: {
-    title: string;
-    rows: { id: string; label: string; value?: string }[];
-  }[] = [];
+  const menus: Menu[] = [];
   const driver = createDialogDriver({
     theme,
-    width: 80,
     choices: actions,
     unified: true,
-    onMenu(menu) {
+    assertBorder: true,
+    onOpen: (options) => assert.equal((options as { overlay?: boolean }).overlay, true),
+    onMenu: (menu) =>
       menus.push({
         title: menu.title,
-        rows: menu.rows.map((row) => ({
-          id: row.id,
-          label: row.label,
-          value: row.value,
-        })),
-      });
-    },
+        rows: menu.rows.map((row) => ({ id: row.id, value: row.value })),
+      }),
   });
   const ctx = {
     cwd: root,
     hasUI: true,
     mode: "tui",
-    isProjectTrusted: () => false,
-    ui: {
-      notify: (message: string) => notifications.push(message),
-      custom: driver.custom,
-    },
+    isProjectTrusted: () => trusted,
+    ui: { notify: (message: string) => notifications.push(message), custom: driver.custom },
   } as unknown as ExtensionCommandContext;
-  return { ctx, notifications, menus };
-}
-
-function filteringRow(
-  menus: { rows: { id: string; label: string; value?: string }[] }[],
-  index: number,
-) {
-  const row = menus[index]?.rows.find((entry) => entry.id === "scopedModelFiltering");
-  assert.ok(row, `menu ${index} missing scopedModelFiltering`);
-  return row;
-}
-
-async function open(
-  t: TestContext,
-  actions: (string | undefined)[],
-  settings: ManagerSettings = { ...DEFAULT_MANAGER_SETTINGS },
-) {
-  const { root, store } = fixture(t);
-  const { ctx, notifications, menus } = context(root, actions);
   let applied = 0;
   await configureAgents(ctx, {
-    store,
+    store: new ConfigStore({ cwd: root, agentDir: root, includeProject: false }),
     agentDir: root,
-    settings,
-    apply: () => {
-      applied++;
-    },
+    settings: { ...settings },
+    apply: () => applied++,
   });
-  const loaded = loadManagerSettings({
-    cwd: root,
-    agentDir: root,
-    includeProject: false,
-  });
+  // Every settings flow stays inside one outer overlay with a fixed frame height.
+  assert.equal(driver.stats.outerOpens, 1);
+  assert.equal(driver.stats.outerCompletions, 1);
+  assert.equal(driver.stats.forcedRenders, 0);
+  const height = dialogHeight({ requestRender() {}, terminal: { rows: 24 } });
+  assert.ok(driver.stats.frameHeights.every((frame) => frame === height));
+  const value = (menu: number, id: string) => menus[menu]?.rows.find((row) => row.id === id)?.value;
   return {
-    root,
     applied,
     notifications,
     menus,
-    loaded,
-    file: join(root, "subagent-manager", "settings.json"),
+    value,
+    loaded: loadManagerSettings({ cwd: root, agentDir: root, includeProject: true }),
+    userFile: join(root, "subagent-manager", "settings.json"),
+    projectFile: join(root, ".pi", "agent", "subagent-manager", "settings.json"),
   };
 }
 
-test("scoped model filtering is a separate on/off draft toggle", async (t) => {
-  const result = await open(t, ["scopedModelFiltering", "maxLevels", "4", "cancel"]);
-  assert.equal(result.applied, 0);
-  assert.equal(existsSync(result.file), false);
-  assert.deepEqual(result.loaded.settings, DEFAULT_MANAGER_SETTINGS);
-  assert.deepEqual(
-    result.notifications.filter((message) => /positive|integer|at most/i.test(message)),
-    [],
-  );
-  assert.equal(filteringRow(result.menus, 0).label, "Scoped model filtering");
-  assert.equal(filteringRow(result.menus, 0).value, "on");
-  assert.equal(filteringRow(result.menus, 1).value, "off");
-  assert.match(result.menus[1]?.title ?? "", /unsaved/);
-  assert.equal(
-    result.menus[1]?.rows.find((row) => row.id === "maxLevels")?.value,
-    String(DEFAULT_MANAGER_SETTINGS.maxLevels),
-  );
-  assert.equal(result.menus[2]?.rows.find((row) => row.id === "maxLevels")?.value, "4");
-  assert.equal(filteringRow(result.menus, 2).value, "off");
-});
-
-test("toggle saves through the existing callback and persists false", async (t) => {
-  const result = await open(t, ["scopedModelFiltering", "save"]);
+test("invalid numbers are rejected in place and valid edits save once to the user scope", async (t) => {
+  const result = await run(t, ["maxLevels", "33", "maxLevels", "0", "maxLevels", "5", "save"]);
   assert.equal(result.applied, 1);
-  assert.equal(result.loaded.settings.scopedModelFiltering, false);
-  assert.equal(result.loaded.settings.maxLevels, DEFAULT_MANAGER_SETTINGS.maxLevels);
-  assert.equal(result.loaded.diagnostics.length, 0);
-  assert.match(readFileSync(result.file, "utf8"), /"scopedModelFiltering": false/);
-  assert.equal(
-    result.notifications.some((message) => message.includes(result.file)),
-    true,
-  );
+  assert.equal(result.loaded.settings.maxLevels, 5);
+  assert.equal(result.notifications.filter((message) => message.includes("at most 32")).length, 2);
+  assert.ok(result.notifications.some((message) => message.includes(result.userFile)));
+  assert.equal(existsSync(result.projectFile), false);
 });
 
-test("a second toggle and restore defaults reset the draft to true", async (t) => {
-  const toggled = await open(t, ["scopedModelFiltering", "scopedModelFiltering", "save"]);
-  assert.equal(toggled.applied, 1);
-  assert.equal(toggled.loaded.settings.scopedModelFiltering, true);
-
-  const restored = await open(t, ["defaults", "save"], {
-    ...DEFAULT_MANAGER_SETTINGS,
-    scopedModelFiltering: false,
-    maxLevels: 9,
-  });
-  assert.equal(restored.applied, 1);
-  assert.deepEqual(restored.loaded.settings, DEFAULT_MANAGER_SETTINGS);
-  assert.equal(restored.loaded.settings.scopedModelFiltering, true);
-  assert.equal(filteringRow(restored.menus, 0).value, "off");
-  assert.equal(filteringRow(restored.menus, 1).value, "on");
-});
-
-test("cancel discards a filtering toggle and save writes the complete default draft", async (t) => {
-  const canceled = await open(t, ["scopedModelFiltering", undefined]);
+test("filtering toggle and other edits are draft-only until save", async (t) => {
+  const canceled = await run(t, ["scopedModelFiltering", "maxLevels", "4", "cancel"]);
   assert.equal(canceled.applied, 0);
-  assert.equal(existsSync(canceled.file), false);
-  assert.equal(canceled.loaded.settings.scopedModelFiltering, true);
+  assert.equal(existsSync(canceled.userFile), false);
+  assert.deepEqual(canceled.loaded.settings, DEFAULT_MANAGER_SETTINGS);
+  assert.equal(canceled.value(0, "scopedModelFiltering"), "on");
+  assert.equal(canceled.value(1, "scopedModelFiltering"), "off");
+  assert.match(canceled.menus[1]?.title ?? "", /unsaved/);
+  assert.equal(canceled.value(2, "maxLevels"), "4");
 
-  const saved = await open(t, ["save"]);
+  const escaped = await run(t, ["scopedModelFiltering", undefined]);
+  assert.equal(escaped.applied, 0);
+  assert.equal(existsSync(escaped.userFile), false);
+
+  const saved = await run(t, ["scopedModelFiltering", "save"]);
   assert.equal(saved.applied, 1);
-  assert.deepEqual(saved.loaded.settings, DEFAULT_MANAGER_SETTINGS);
-  assert.match(readFileSync(saved.file, "utf8"), /"scopedModelFiltering": true/);
+  assert.equal(saved.loaded.settings.scopedModelFiltering, false);
+  assert.equal(saved.loaded.diagnostics.length, 0);
+  assert.match(readFileSync(saved.userFile, "utf8"), /"scopedModelFiltering": false/);
+});
+
+test("restore defaults resets the whole draft before save", async (t) => {
+  const result = await run(t, ["defaults", "save"], {
+    settings: { ...DEFAULT_MANAGER_SETTINGS, scopedModelFiltering: false, maxLevels: 9 },
+  });
+  assert.equal(result.applied, 1);
+  assert.equal(result.value(1, "scopedModelFiltering"), "on");
+  assert.deepEqual(result.loaded.settings, DEFAULT_MANAGER_SETTINGS);
+  assert.match(readFileSync(result.userFile, "utf8"), /"scopedModelFiltering": true/);
+});
+
+test("project scope requires trust; trusted projects save to the project file", async (t) => {
+  const untrusted = await run(t, ["scope", "maxThreads", "2", undefined]);
+  assert.equal(untrusted.applied, 0);
+  assert.ok(untrusted.notifications.some((message) => message.includes("trusted project")));
+  assert.deepEqual(untrusted.loaded.settings, DEFAULT_MANAGER_SETTINGS);
+
+  const trusted = await run(t, ["maxThreads", "9", "save"], { trusted: true });
+  assert.equal(trusted.applied, 1);
+  assert.equal(trusted.loaded.settings.maxThreads, 9);
+  assert.equal(existsSync(trusted.projectFile), true);
+  assert.equal(existsSync(trusted.userFile), false);
+
+  const toggled = await run(t, ["scope", "save"], { trusted: true });
+  assert.equal(toggled.value(0, "scope"), "Trusted project");
+  assert.equal(toggled.value(1, "scope"), "Global");
+  assert.equal(existsSync(toggled.userFile), true);
+  assert.equal(existsSync(toggled.projectFile), false);
 });

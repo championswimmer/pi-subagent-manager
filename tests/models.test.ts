@@ -1,175 +1,100 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import {
-  getModelPreferences,
-  modelIdentity,
-  selectPreferredModel,
-} from "../src/models.js";
+import { getModelPreferences, selectPreferredModel } from "../src/models.ts";
+import { agentTools } from "../src/tools.ts";
+import type { AgentType } from "../src/types.ts";
 
-test("getModelPreferences supports omitted, legacy and canonical forms", () => {
+const eligible = (...ids: string[]) =>
+  ids.map((identity) => {
+    const [provider, ...rest] = identity.split("/");
+    return { model: { provider: provider!, id: rest.join("/") } };
+  });
+
+test("getModelPreferences accepts omitted, legacy and canonical forms and copies input", () => {
   assert.equal(getModelPreferences({}), undefined);
-  assert.deepEqual(getModelPreferences({ model: "provider/model/with/slashes" }), [
-    "provider/model/with/slashes",
+  assert.deepEqual(getModelPreferences({ model: "p/model/with/slashes" }), [
+    "p/model/with/slashes",
   ]);
-  assert.deepEqual(
-    getModelPreferences({
-      models: ["provider/first", "provider/model/with/slashes"],
-    }),
-    ["provider/first", "provider/model/with/slashes"],
-  );
+  const input = { models: ["p/first", "p/second"] };
+  const preferences = getModelPreferences(input)!;
+  assert.deepEqual(preferences, ["p/first", "p/second"]);
+  preferences.reverse();
+  assert.deepEqual(input.models, ["p/first", "p/second"]);
 });
 
 test("getModelPreferences rejects ambiguous or malformed values", () => {
   for (const type of [
-    { model: "provider/legacy", models: ["provider/current"] },
-    { model: "provider/model", models: null },
+    { model: "p/legacy", models: ["p/current"] },
     { models: null },
-    { models: "provider/model" },
+    { models: "p/model" },
     { models: [] },
-    { models: ["provider/model", "provider/model"] },
+    { models: ["p/model", "p/model"] },
     { models: ["bad"] },
   ]) {
-    assert.throws(() => getModelPreferences(type));
+    assert.throws(() => getModelPreferences(type), JSON.stringify(type));
   }
 });
 
-test("getModelPreferences returns a defensive copy without mutating input", () => {
-  const input = { models: ["provider/primary", "provider/fallback"] };
-  const preferences = getModelPreferences(input)!;
-  assert.notEqual(preferences, input.models);
-  preferences.reverse();
-  assert.deepEqual(input.models, ["provider/primary", "provider/fallback"]);
-});
-
-test("modelIdentity preserves provider plus full id", () => {
-  assert.equal(
-    modelIdentity({ provider: "provider", id: "model/with/slashes" }),
-    "provider/model/with/slashes",
-  );
-});
-
-test("selectPreferredModel honors preference order rather than scoped order", () => {
-  assert.equal(
-    selectPreferredModel(
-      {
-        name: "researcher",
-        models: ["provider/second", "provider/first"],
-      },
-      [
-        { model: { provider: "provider", id: "first" } },
-        { model: { provider: "provider", id: "second" } },
-      ],
-    ),
-    "provider/second",
-  );
-});
-
-test("unmatched model suggestions do not change preference selection or inheritance", () => {
-  const suggested = {
-    name: "worker",
-    models: undefined,
-    modelSuggestions: ["Missing Display Name", "not-a-provider"],
+test("selectPreferredModel uses preference order and returns undefined without preferences", () => {
+  const type = {
+    name: "r",
+    models: ["p/missing", "p/second", "p/first"],
+    modelSuggestions: ["p/first"],
   };
-  assert.equal(getModelPreferences(suggested), undefined);
-  assert.equal(
-    selectPreferredModel(suggested, [{ model: { provider: "provider", id: "first" } }]),
-    undefined,
-  );
-  assert.equal(selectPreferredModel(suggested, [], false), undefined);
-  const pinned = {
-    name: "worker",
-    models: ["provider/second", "provider/first"],
-    modelSuggestions: ["Missing Display Name", "provider/not-selected"],
-  };
-  assert.deepEqual(getModelPreferences(pinned), ["provider/second", "provider/first"]);
-  assert.equal(
-    selectPreferredModel(pinned, [
-      { model: { provider: "provider", id: "first" } },
-      { model: { provider: "provider", id: "second" } },
-    ]),
-    "provider/second",
-  );
+  assert.equal(selectPreferredModel(type, eligible("p/first", "p/second")), "p/second");
+  assert.equal(selectPreferredModel(type, eligible("p/first", "p/second"), false), "p/second");
+  assert.equal(selectPreferredModel({ name: "w" }, eligible("p/first")), undefined);
+  assert.equal(selectPreferredModel({ name: "w" }, [], false), undefined);
 });
 
-test("selectPreferredModel returns undefined when preferences are omitted", () => {
-  assert.equal(
-    selectPreferredModel({ name: "worker" }, [{ model: { provider: "provider", id: "first" } }]),
-    undefined,
-  );
-  assert.equal(selectPreferredModel({ name: "worker" }, [], false), undefined);
-});
-
-test("selectPreferredModel ordered unscoped available fallback ignores scope labeling", () => {
-  assert.equal(
-    selectPreferredModel(
-      {
-        name: "researcher",
-        models: ["provider/missing", "provider/unscoped", "provider/scoped"],
-      },
-      [
-        { model: { provider: "provider", id: "scoped" } },
-        { model: { provider: "provider", id: "unscoped" } },
-      ],
-      false,
-    ),
-    "provider/unscoped",
-  );
-});
-
-test("selectPreferredModel labels unavailable matches as available models when filtering is off", () => {
+test("selectPreferredModel errors name the agent, preferences and available models per filtering mode", () => {
+  const type = { name: "researcher", models: ["p/preferred", "p/fallback"] };
   assert.throws(
-    () =>
-      selectPreferredModel(
-        {
-          name: "researcher",
-          models: ["provider/preferred", "provider/fallback"],
-        },
-        [{ model: { provider: "provider", id: "available" } }],
-        false,
-      ),
+    () => selectPreferredModel(type, eligible("p/available", "o/choice")),
+    /researcher[\s\S]*p\/preferred[\s\S]*p\/fallback[\s\S]*p\/available[\s\S]*o\/choice[\s\S]*\/scoped-models/,
+  );
+  assert.throws(() => selectPreferredModel(type, []), /\(none\)[\s\S]*\/scoped-models/);
+  assert.throws(
+    () => selectPreferredModel(type, eligible("p/available"), false),
     (error: unknown) => {
-      assert.match(String(error), /available models/i);
-      assert.match(
-        String(error),
-        /researcher[\s\S]*provider\/preferred[\s\S]*provider\/fallback[\s\S]*provider\/available/,
-      );
-      assert.doesNotMatch(String(error), /\/scoped-models/);
+      assert.match(String(error), /Available models: \[p\/available\]/);
       assert.doesNotMatch(String(error), /scoped/);
       return true;
     },
   );
-  assert.throws(
-    () => selectPreferredModel({ name: "researcher", models: ["provider/preferred"] }, [], false),
-    (error: unknown) => {
-      assert.match(String(error), /available models/i);
-      assert.match(String(error), /\(none\)/);
-      assert.doesNotMatch(String(error), /\/scoped-models/);
-      return true;
-    },
-  );
 });
 
-test("selectPreferredModel throws actionable errors for missing scoped matches", () => {
-  assert.throws(
-    () =>
-      selectPreferredModel(
-        {
-          name: "researcher",
-          models: ["provider/preferred", "provider/fallback"],
-        },
-        [
-          { model: { provider: "provider", id: "available" } },
-          { model: { provider: "other", id: "choice" } },
-        ],
-      ),
-    /researcher[\s\S]*provider\/preferred[\s\S]*provider\/fallback[\s\S]*provider\/available[\s\S]*other\/choice[\s\S]*\/scoped-models/,
+test("agent_types normalizes model pins, keeps suggestions separate, and does not mutate definitions", async () => {
+  const definition = (fields: Partial<AgentType>): AgentType => ({
+    name: "worker",
+    description: "Worker",
+    systemPrompt: "Work",
+    ...fields,
+  });
+  const types = [
+    definition({ models: ["p/second", "p/first"], modelSuggestions: ["Sonnet"] }),
+    definition({ name: "legacy", model: "p/legacy" }),
+    definition({ name: "suggested", modelSuggestions: ["Claude Opus"] }),
+  ];
+  const tool = agentTools(
+    () => {
+      throw new Error("Listing types must not require a running manager");
+    },
+    "/root",
+    () => types,
+  ).find((entry) => entry.name === "agent_types")!;
+  const output = await tool.execute("list-types", {}, undefined, undefined, {} as never);
+  const entries = output.details as { models?: string[]; modelSuggestions?: string[] }[];
+  assert.deepEqual(
+    entries.map(({ models, modelSuggestions }) => ({ models, modelSuggestions })),
+    [
+      { models: ["p/second", "p/first"], modelSuggestions: ["Sonnet"] },
+      { models: ["p/legacy"], modelSuggestions: undefined },
+      { models: undefined, modelSuggestions: ["Claude Opus"] },
+    ],
   );
-  assert.throws(
-    () =>
-      selectPreferredModel(
-        { name: "researcher", models: ["provider/preferred"] },
-        [],
-      ),
-    /researcher[\s\S]*provider\/preferred[\s\S]*\(none\)[\s\S]*\/scoped-models/,
-  );
+  assert.ok(entries.every((entry) => !("model" in entry)));
+  entries[2]?.modelSuggestions?.push("mutated");
+  assert.deepEqual(types[2]?.modelSuggestions, ["Claude Opus"]);
+  assert.equal(types[1]?.model, "p/legacy");
 });

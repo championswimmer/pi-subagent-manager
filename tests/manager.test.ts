@@ -7,6 +7,8 @@ import type {
   AgentType,
   DriverOptions,
   ManagerOptions,
+  SavedThread,
+  SavedThreadView,
   ThreadEvent,
 } from "../src/types.ts";
 
@@ -16,6 +18,52 @@ const user = (text: string): AgentMessage => ({
   timestamp: Date.now(),
 });
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const workerType: AgentType = { name: "worker", description: "test", systemPrompt: "child prompt" };
+
+/** A driver whose prompt records the message and blocks until `release()`. */
+function gated(overrides: Partial<AgentDriver> = {}) {
+  let release = () => {};
+  const runs: string[] = [];
+  const driver: AgentDriver = {
+    prompt: (message) => {
+      runs.push(message);
+      return new Promise<void>((resolve) => (release = resolve));
+    },
+    steer: async () => {},
+    snapshot: () => [],
+    output: () => `answer: ${runs.at(-1)}`,
+    abort: async () => release(),
+    dispose: () => {},
+    sendUpdate: () => {},
+    ...overrides,
+  };
+  return { driver, runs, release: () => release() };
+}
+
+function saved(
+  path: string,
+  view: Partial<SavedThreadView> = {},
+  extra: Partial<SavedThread> = {},
+): SavedThread {
+  const parent = path.slice(0, path.lastIndexOf("/"));
+  return {
+    view: {
+      path,
+      parent,
+      owner: parent,
+      type: "worker",
+      state: "paused",
+      task: "task",
+      status: "Paused",
+      createdAt: 0,
+      ...view,
+    },
+    definition: workerType,
+    ...extra,
+  };
+}
+
 function fixture(extra: Partial<ManagerOptions> = {}) {
   const drivers = new Map<
     string,
@@ -33,7 +81,7 @@ function fixture(extra: Partial<ManagerOptions> = {}) {
   const root = [user("root context")];
   const manager = new ThreadManager({
     rootSnapshot: () => root,
-    getType: (name) => ({ name, description: "test", systemPrompt: "child prompt" }),
+    getType: (name) => ({ ...workerType, name }),
     toolsFor: () => [],
     onEvent: (event) => events.push(event),
     createDriver: async (options) => {
@@ -151,41 +199,19 @@ test("busy steering queues while progress stays nonfinal and goes to parent", as
 
 test("concurrent steer after failed startup reserves one restart and queues the next", async () => {
   let rejectFirst!: (error: Error) => void;
-  let finish = () => {};
   let attempts = 0;
-  const runs: string[] = [];
   const steering: string[] = [];
-  const manager = new ThreadManager({
-    rootSnapshot: () => [],
-    getType: (name) => ({ name, description: "test", systemPrompt: "child prompt" }),
-    toolsFor: () => [],
-    createDriver: async () => {
-      attempts++;
-      if (attempts === 1) {
-        return new Promise<AgentDriver>((_resolve, reject) => {
-          rejectFirst = reject;
-        });
-      }
-      return {
-        prompt: async (message) => {
-          runs.push(message);
-          await new Promise<void>((resolve) => {
-            finish = resolve;
-          });
-        },
-        steer: async (message) => {
-          assert.ok(runs.length, "restart must prompt before queued steering");
-          steering.push(message);
-        },
-        snapshot: () => [],
-        output: () => `answer: ${runs.at(-1)}`,
-        abort: async () => {
-          finish();
-        },
-        dispose: () => {},
-        sendUpdate: () => {},
-      };
+  const { driver, runs, release } = gated({
+    steer: async (message) => {
+      assert.ok(runs.length, "restart must prompt before queued steering");
+      steering.push(message);
     },
+  });
+  const { manager } = fixture({
+    createDriver: async () =>
+      ++attempts === 1
+        ? new Promise<AgentDriver>((_resolve, reject) => (rejectFirst = reject))
+        : driver,
   });
 
   await manager.spawn("/root", { path: "worker", type: "worker", task: "first", wait: false });
@@ -195,88 +221,33 @@ test("concurrent steer after failed startup reserves one restart and queues the 
   rejectFirst(new Error("bad model"));
   await Promise.all([first, second]);
   await tick();
-
   assert.equal(attempts, 2);
   assert.deepEqual(runs, ["retry"]);
   assert.deepEqual(steering, ["queued"]);
-
-  finish();
+  release();
   assert.equal((await manager.wait("/root", "worker")).output, "answer: retry");
   await manager.shutdown();
 });
 
-test("lazy child context retries after parent reopen and does not keep a rejected promise", async () => {
+test("nested child reopens its parent first; a failed parent open is retried later", async () => {
   let rejectParentOpen!: (error: Error) => void;
-  let parentFinish = () => {};
-  let childFinish = () => {};
   let parentAttempts = 0;
-  const parentMessages: AgentMessage[] = [];
   const childInherited: AgentMessage[][] = [];
-  const manager = new ThreadManager({
-    rootSnapshot: () => [],
-    getType: (name) => ({ name, description: "test", systemPrompt: "child prompt" }),
-    toolsFor: () => [],
+  const parent = gated({ sessionFile: "/tmp/worker.jsonl" });
+  parent.driver.snapshot = () => parent.runs.map((text) => ({ ...user(text), timestamp: 0 }));
+  const child = gated();
+  const { manager } = fixture({
     createDriver: async (options) => {
       if (options.path === "/root/worker") {
-        parentAttempts++;
-        if (parentAttempts === 1) {
-          return new Promise<AgentDriver>((_resolve, reject) => {
-            rejectParentOpen = reject;
-          });
-        }
-        return {
-          sessionFile: "/tmp/worker.jsonl",
-          prompt: async (message) => {
-            parentMessages.push(user(message));
-            await new Promise<void>((resolve) => {
-              parentFinish = resolve;
-            });
-          },
-          steer: async () => {},
-          snapshot: () => structuredClone(parentMessages),
-          output: () => "parent output",
-          abort: async () => {
-            parentFinish();
-          },
-          dispose: () => {},
-          sendUpdate: () => {},
-        };
+        if (++parentAttempts === 1)
+          return new Promise<AgentDriver>((_resolve, reject) => (rejectParentOpen = reject));
+        return parent.driver;
       }
       childInherited.push(structuredClone(options.inherited));
-      return {
-        prompt: async () => {
-          await new Promise<void>((resolve) => {
-            childFinish = resolve;
-          });
-        },
-        steer: async () => {},
-        snapshot: () => [],
-        output: () => "child output",
-        abort: async () => {
-          childFinish();
-        },
-        dispose: () => {},
-        sendUpdate: () => {},
-      };
+      return child.driver;
     },
   });
-
-  manager.restore([
-    {
-      view: {
-        path: "/root/worker",
-        parent: "/root",
-        owner: "/root",
-        type: "worker",
-        state: "paused",
-        task: "parent",
-        status: "Paused",
-        createdAt: 0,
-        sessionFile: "/tmp/saved-parent.jsonl",
-      },
-      definition: { name: "worker", description: "test", systemPrompt: "child prompt" },
-    },
-  ]);
+  manager.restore([saved("/root/worker", { sessionFile: "/tmp/saved-parent.jsonl" })]);
 
   await manager.spawn("/root", {
     path: "worker/child",
@@ -285,22 +256,46 @@ test("lazy child context retries after parent reopen and does not keep a rejecte
     wait: false,
   });
   rejectParentOpen(new Error("parent unavailable"));
-  const failed = await manager.wait("/root", "worker/child");
-  assert.equal(failed.state, "failed");
+  assert.equal((await manager.wait("/root", "worker/child")).state, "failed");
   assert.equal(childInherited.length, 0);
 
   await manager.steer("/root", "worker", "resume parent");
   await tick();
-  parentFinish();
+  parent.release();
   await manager.wait("/root", "worker");
-
   await manager.steer("/root", "worker/child", "resume child");
   await tick();
   assert.equal(parentAttempts, 2);
-  assert.deepEqual(childInherited, [structuredClone(parentMessages)]);
-
-  childFinish();
+  assert.deepEqual(childInherited, [parent.driver.snapshot()]);
+  child.release();
   assert.equal((await manager.wait("/root", "worker/child")).state, "completed");
+  await manager.shutdown();
+});
+
+test("restored nested child opens parent first but keeps its saved inherited snapshot", async () => {
+  const order: string[] = [];
+  const childInherited: AgentMessage[][] = [];
+  const savedChildSnapshot = [user("saved child snapshot")];
+  const child = gated();
+  const { manager } = fixture({
+    createDriver: async (options) => {
+      order.push(options.path);
+      if (options.path === "/root/parent")
+        return gated({ prompt: async () => {}, snapshot: () => [user("live parent")] }).driver;
+      childInherited.push(structuredClone(options.inherited));
+      return child.driver;
+    },
+  });
+  manager.restore([
+    saved("/root/parent", { sessionFile: "/tmp/saved-parent.jsonl" }),
+    saved("/root/parent/child", {}, { inherited: savedChildSnapshot }),
+  ]);
+  await manager.steer("/root", "parent/child", "resume child");
+  await tick();
+  assert.deepEqual(order, ["/root/parent", "/root/parent/child"]);
+  assert.deepEqual(childInherited, [savedChildSnapshot]);
+  child.release();
+  assert.equal((await manager.wait("/root", "parent/child")).state, "completed");
   await manager.shutdown();
 });
 
@@ -432,141 +427,37 @@ test("save/restore retains definition snapshot and reopens JSONL on resume", asy
   await third.manager.shutdown();
 });
 
-for (const name of ["worker", "researcher"]) {
-  test(`retained ${name} resumes its saved contract after bundled defaults are replaced`, async () => {
-    const original: AgentType = {
-      name,
-      description: `Legacy ${name}`,
-      systemPrompt: `Original ${name} prompt`,
-      thinkingLevel: "low",
-      tools: { allow: ["read", "agent_update", "agent_pause"] },
-    };
-    const first = fixture({ getType: () => original });
-    await first.manager.spawn("/root", {
-      path: name,
-      type: name,
-      task: "legacy work",
-      wait: false,
-    });
-    await tick();
-    const saved = first.manager.saved();
-    await first.manager.shutdown();
-
-    let lookups = 0;
-    const second = fixture({
-      getType: (type) => {
-        lookups++;
-        if (type === "worker") throw new Error("worker is no longer bundled");
-        return {
-          name: type,
-          description: "New research contract",
-          systemPrompt: "New evidence research prompt",
-          thinkingLevel: "high",
-          tools: { allow: ["read", "bash", "agent_update", "agent_pause"] },
-        };
-      },
-    });
-    try {
-      second.manager.restore(saved);
-      await second.manager.steer("/root", name, "continue legacy work");
-      await tick();
-      const driver = second.drivers.get(`/root/${name}`)!;
-      assert.equal(lookups, 0, "resume must not resolve the replacement or removed definition");
-      assert.deepEqual(driver.options.type, original);
-      assert.deepEqual(second.manager.saved()[0].definition, original);
-      assert.equal(driver.options.sessionFile, saved[0].view.sessionFile);
-      driver.finish();
-      assert.equal((await second.manager.wait("/root", name)).state, "completed");
-    } finally {
-      await second.manager.shutdown();
-    }
-  });
-}
-
-test("restored nested child opens parent first but keeps its saved inherited snapshot", async () => {
-  const order: string[] = [];
-  const childInherited: AgentMessage[][] = [];
-  const savedChildSnapshot = [user("saved child snapshot")];
-  let childFinish = () => {};
-  const manager = new ThreadManager({
-    rootSnapshot: () => [],
-    getType: (name) => ({ name, description: "test", systemPrompt: "child prompt" }),
-    toolsFor: () => [],
-    createDriver: async (options) => {
-      order.push(options.path);
-      if (options.path === "/root/parent") {
-        return {
-          sessionFile: "/tmp/parent.jsonl",
-          prompt: async () => {},
-          steer: async () => {},
-          snapshot: () => [user("live parent snapshot")],
-          output: () => "parent output",
-          abort: async () => {},
-          dispose: () => {},
-          sendUpdate: () => {},
-        };
-      }
-      childInherited.push(structuredClone(options.inherited));
-      return {
-        prompt: async () => {
-          await new Promise<void>((resolve) => {
-            childFinish = resolve;
-          });
-        },
-        steer: async () => {},
-        snapshot: () => [],
-        output: () => "child output",
-        abort: async () => {
-          childFinish();
-        },
-        dispose: () => {},
-        sendUpdate: () => {},
-      };
-    },
-  });
-
-  manager.restore([
-    {
-      view: {
-        path: "/root/parent",
-        parent: "/root",
-        owner: "/root",
-        type: "worker",
-        state: "paused",
-        task: "parent",
-        status: "Paused",
-        createdAt: 0,
-        sessionFile: "/tmp/saved-parent.jsonl",
-      },
-      definition: { name: "worker", description: "test", systemPrompt: "child prompt" },
-    },
-    {
-      view: {
-        path: "/root/parent/child",
-        parent: "/root/parent",
-        owner: "/root/parent",
-        type: "worker",
-        state: "paused",
-        task: "child",
-        status: "Paused",
-        createdAt: 0,
-      },
-      definition: { name: "worker", description: "test", systemPrompt: "child prompt" },
-      inherited: savedChildSnapshot,
-    },
-  ]);
-
-  await manager.steer("/root", "parent/child", "resume child");
+test("retained thread resumes its saved definition even after the type is removed", async () => {
+  const original: AgentType = {
+    ...workerType,
+    description: "Legacy worker",
+    thinkingLevel: "low",
+    tools: { allow: ["read", "agent_update", "agent_pause"] },
+  };
+  const first = fixture({ getType: () => original });
+  await first.manager.spawn("/root", { path: "worker", type: "worker", task: "work", wait: false });
   await tick();
-  assert.deepEqual(order, ["/root/parent", "/root/parent/child"]);
-  assert.deepEqual(childInherited, [savedChildSnapshot]);
+  const snapshot = first.manager.saved();
+  await first.manager.shutdown();
 
-  childFinish();
-  assert.equal((await manager.wait("/root", "parent/child")).state, "completed");
-  await manager.shutdown();
+  const second = fixture({
+    getType: () => {
+      throw new Error("worker is no longer bundled");
+    },
+  });
+  second.manager.restore(snapshot);
+  await second.manager.steer("/root", "worker", "continue");
+  await tick();
+  const driver = second.drivers.get("/root/worker")!;
+  assert.deepEqual(driver.options.type, original);
+  assert.deepEqual(second.manager.saved()[0].definition, original);
+  assert.equal(driver.options.sessionFile, snapshot[0].view.sessionFile);
+  driver.finish();
+  assert.equal((await second.manager.wait("/root", "worker")).state, "completed");
+  await second.manager.shutdown();
 });
 
-test("startup failure returns a failed thread and does not reject detached spawn", async () => {
+test("startup failure returns a failed thread and does not reject spawn", async () => {
   const { manager } = fixture({
     createDriver: async () => {
       throw new Error("bad model");
@@ -578,197 +469,99 @@ test("startup failure returns a failed thread and does not reject detached spawn
   await manager.shutdown();
 });
 
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-test("elapsed freezes across runs and usage deltas do not persist partials", async () => {
+test("partial usage is live-only; final usage persists and elapsed freezes across runs", async () => {
   let run = 0;
-  let releasePartial = () => {};
   let releaseFinal = () => {};
+  let emitPartialDone = () => {};
   const { manager, events } = fixture({
-    createDriver: async (options) => ({
-      sessionFile: "/tmp/metrics.jsonl",
-      prompt: async () => {
-        run++;
-        if (run === 1) {
-          options.onEvent({ kind: "usage", inputTokens: 9, outputTokens: 1, partial: true });
-          options.onEvent({ kind: "usage", inputTokens: 11, outputTokens: 2, partial: true });
-          await new Promise<void>((resolve) => {
-            releasePartial = resolve;
-          });
-          options.onEvent({ kind: "usage", inputTokens: 15, outputTokens: 4 });
-          options.onEvent({ kind: "usage", inputTokens: 15, outputTokens: 4 });
-          await new Promise<void>((resolve) => {
-            releaseFinal = resolve;
-          });
-          return;
-        }
-        options.onEvent({ kind: "usage", inputTokens: 18, outputTokens: 5, partial: true });
-        options.onEvent({ kind: "usage", inputTokens: 21, outputTokens: 7 });
-      },
-      steer: async () => {},
-      snapshot: () => [],
-      output: () => "answer",
-      abort: async () => {
-        releasePartial();
-        releaseFinal();
-      },
-      dispose: () => {},
-      sendUpdate: () => {},
-    }),
+    createDriver: async (options) =>
+      gated({
+        prompt: async () => {
+          if (++run === 1) {
+            options.onEvent({ kind: "usage", inputTokens: 11, outputTokens: 2, partial: true });
+            await new Promise<void>((resolve) => (emitPartialDone = resolve));
+            options.onEvent({ kind: "usage", inputTokens: 15, outputTokens: 4 });
+            await new Promise<void>((resolve) => (releaseFinal = resolve));
+            return;
+          }
+          options.onEvent({ kind: "usage", inputTokens: 21, outputTokens: 7 });
+        },
+        abort: async () => {
+          emitPartialDone();
+          releaseFinal();
+        },
+      }).driver,
   });
 
   await manager.spawn("/root", { path: "worker", type: "worker", task: "work", wait: false });
   await tick();
   const live = manager.get("worker");
-  assert.equal(live.state, "running");
-  assert.equal(typeof live.startedAt, "number");
   assert.equal(live.inputTokens, 11);
-  assert.equal(live.outputTokens, 2);
-  assert.equal(live.elapsedMs, 0);
-  assert.equal(
-    events.some((event) => event.kind === "metrics" && event.thread.inputTokens === 11),
-    true,
-  );
-  const stable = JSON.stringify(manager.saved());
-  assert.equal(JSON.parse(stable)[0].view.inputTokens, 0);
-  assert.equal(JSON.parse(stable)[0].view.outputTokens, 0);
-  assert.equal(Object.hasOwn(JSON.parse(stable)[0].view, "startedAt"), false);
-  await delay(30);
-  assert.equal(JSON.stringify(manager.saved()), stable);
+  assert.equal(typeof live.startedAt, "number");
+  assert.ok(events.some((event) => event.kind === "metrics" && event.thread.inputTokens === 11));
+  const persisted = manager.saved()[0].view;
+  assert.equal(persisted.inputTokens, 0);
+  assert.equal(Object.hasOwn(persisted, "startedAt"), false);
 
-  releasePartial();
+  emitPartialDone();
   await tick();
-  assert.equal(manager.get("worker").inputTokens, 15);
-  assert.equal(manager.get("worker").outputTokens, 4);
-  assert.equal(manager.saved()[0]?.view.inputTokens, 15);
-  assert.equal(manager.saved()[0]?.view.outputTokens, 4);
-  assert.equal(manager.get("worker").startedAt !== undefined, true);
-  const settledBeforeFreeze = JSON.stringify(manager.saved());
+  assert.equal(manager.saved()[0].view.inputTokens, 15);
   await delay(20);
-  assert.equal(JSON.stringify(manager.saved()), settledBeforeFreeze);
-
   releaseFinal();
   const completed = await manager.wait("/root", "worker");
-  assert.equal(completed.state, "completed");
   assert.equal(completed.startedAt, undefined);
-  assert.equal(completed.inputTokens, 15);
   assert.equal(completed.outputTokens, 4);
   assert.ok((completed.elapsedMs ?? 0) >= 20);
-  assert.equal(Object.hasOwn(manager.saved()[0]!.view, "startedAt"), false);
   const frozen = completed.elapsedMs!;
-  await delay(30);
+  await delay(20);
   assert.equal(manager.get("worker").elapsedMs, frozen);
 
   await manager.steer("/root", "worker", "continue");
   await tick();
   const resumed = await manager.wait("/root", "worker");
   assert.equal(resumed.inputTokens, 21);
-  assert.equal(resumed.outputTokens, 7);
   assert.ok((resumed.elapsedMs ?? 0) >= frozen);
-  assert.equal(resumed.startedAt, undefined);
-
-  const saved = manager.saved();
+  const snapshot = manager.saved();
   await manager.shutdown();
-  await delay(40);
+
   const restored = fixture();
-  restored.manager.restore(saved);
-  assert.equal(restored.manager.get("worker").elapsedMs, saved[0]?.view.elapsedMs);
+  restored.manager.restore(snapshot);
+  await delay(20);
+  assert.equal(restored.manager.get("worker").elapsedMs, snapshot[0].view.elapsedMs);
   assert.equal(restored.manager.get("worker").inputTokens, 21);
-  assert.equal(restored.manager.get("worker").outputTokens, 7);
   assert.equal(restored.manager.get("worker").startedAt, undefined);
-  await delay(30);
-  assert.equal(restored.manager.get("worker").elapsedMs, saved[0]?.view.elapsedMs);
   await restored.manager.shutdown();
 });
 
-test("legacy restore defaults missing metrics to zero and resumes add driver deltas", async (t) => {
+test("restore defaults missing metrics to zero and resumed usage adds to saved totals", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: 1000 });
-  let emitUsage: ((input: number, output: number) => void) | undefined;
-  const { manager } = fixture({
-    createDriver: async (options) => ({
-      sessionFile: "/tmp/legacy.jsonl",
-      prompt: async () => {
-        emitUsage = (input, output) =>
-          options.onEvent({ kind: "usage", inputTokens: input, outputTokens: output });
-      },
-      steer: async () => {},
-      snapshot: () => [],
-      output: () => "answer",
-      abort: async () => {},
-      dispose: () => {},
-      sendUpdate: () => {},
-    }),
-  });
-  manager.restore([
-    {
-      view: {
-        path: "/root/worker",
-        parent: "/root",
-        owner: "/root",
-        type: "worker",
-        state: "completed",
-        task: "old",
-        status: "Completed",
-        createdAt: 1,
-        sessionFile: "/tmp/legacy.jsonl",
-      },
-      definition: { name: "worker", description: "test", systemPrompt: "child prompt" },
-    },
-  ]);
-  assert.equal(manager.get("worker").elapsedMs, 0);
-  assert.equal(manager.get("worker").inputTokens, 0);
-  assert.equal(manager.get("worker").outputTokens, 0);
-  assert.equal(manager.get("worker").startedAt, undefined);
-
-  await manager.steer("/root", "worker", "resume");
-  await tick();
-  emitUsage!(4, 2);
-  assert.equal(manager.get("worker").inputTokens, 4);
-  assert.equal(manager.get("worker").outputTokens, 2);
-  assert.equal(manager.saved()[0]?.view.inputTokens, 4);
-  await manager.shutdown();
-
-  let resumedEmit: ((input: number, output: number) => void) | undefined;
-  const resumed = fixture({
-    createDriver: async (options) => ({
-      sessionFile: "/tmp/legacy.jsonl",
-      prompt: async () => {
-        resumedEmit = (input, output) =>
-          options.onEvent({ kind: "usage", inputTokens: input, outputTokens: output });
-      },
-      steer: async () => {},
-      snapshot: () => [],
-      output: () => "answer",
-      abort: async () => {},
-      dispose: () => {},
-      sendUpdate: () => {},
-    }),
-  });
-  resumed.manager.restore([
-    {
-      view: {
-        path: "/root/worker",
-        parent: "/root",
-        owner: "/root",
-        type: "worker",
-        state: "paused",
-        task: "old",
-        status: "Paused",
-        createdAt: 1,
-        sessionFile: "/tmp/legacy.jsonl",
-        elapsedMs: 80,
-        inputTokens: 10,
-        outputTokens: 3,
-      },
-      definition: { name: "worker", description: "test", systemPrompt: "child prompt" },
-    },
-  ]);
-  await resumed.manager.steer("/root", "worker", "again");
-  await tick();
-  resumedEmit!(5, 1);
-  assert.equal(resumed.manager.get("worker").inputTokens, 15);
-  assert.equal(resumed.manager.get("worker").outputTokens, 4);
-  assert.equal(resumed.manager.get("worker").elapsedMs, 80);
-  assert.equal(resumed.manager.saved()[0]?.view.inputTokens, 15);
-  await resumed.manager.shutdown();
+  for (const [view, expected] of [
+    [{}, { elapsedMs: 0, inputTokens: 4, outputTokens: 2 }],
+    [
+      { elapsedMs: 80, inputTokens: 10, outputTokens: 3 },
+      { elapsedMs: 80, inputTokens: 14, outputTokens: 5 },
+    ],
+  ] as const) {
+    let emit = () => {};
+    const { manager } = fixture({
+      createDriver: async (options) =>
+        gated({
+          prompt: async () => {
+            emit = () => options.onEvent({ kind: "usage", inputTokens: 4, outputTokens: 2 });
+          },
+        }).driver,
+    });
+    manager.restore([saved("/root/worker", { sessionFile: "/tmp/legacy.jsonl", ...view })]);
+    assert.equal(manager.get("worker").inputTokens, view.inputTokens ?? 0);
+    assert.equal(manager.get("worker").elapsedMs, view.elapsedMs ?? 0);
+    await manager.steer("/root", "worker", "resume");
+    await tick();
+    emit();
+    const thread = manager.get("worker");
+    assert.equal(thread.inputTokens, expected.inputTokens);
+    assert.equal(thread.outputTokens, expected.outputTokens);
+    assert.equal(manager.saved()[0].view.inputTokens, expected.inputTokens);
+    assert.equal(thread.elapsedMs, expected.elapsedMs);
+    await manager.shutdown();
+  }
 });

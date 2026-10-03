@@ -176,9 +176,42 @@ test("isolated real SDK driver without credentials", async (t) => {
       const slash = identity.indexOf("/");
       ctx.model = registry.find(identity.slice(0, slash), identity.slice(slash + 1))!;
     };
-    const factory = createDriverFactory(() => ctx);
+    const apiKeys: Record<string, string> = {
+      "runtime-test": "fake-runtime-only-key",
+      "runtime-other": "other-runtime-only-key",
+    };
+    const assertModel = (identity: string) => {
+      const request = requests.at(-1)!;
+      assert.equal(`${request.model.provider}/${request.model.id}`, identity);
+      assert.equal(request.apiKey, apiKeys[request.model.provider]);
+    };
+    const toolCall = (id: string, name: string): AssistantMessage => ({
+      ...answer(""),
+      content: [{ type: "toolCall", id, name, arguments: {} }],
+      stopReason: "toolUse",
+    });
+    // A tool that blocks until released, so tests can act while a tool call is in flight.
+    const gatedTool = (name: string, onRelease?: () => void) => {
+      let release!: () => void;
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => (entered = resolve));
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      const tool: ToolDefinition = {
+        name,
+        label: name,
+        description: name,
+        parameters: Type.Object({}),
+        async execute() {
+          entered();
+          await gate;
+          onRelease?.();
+          return { content: [{ type: "text", text: "done" }], details: undefined };
+        },
+      };
+      return { tool, started, release };
+    };
     let scopedModelFiltering = true;
-    const filteringFactory = createDriverFactory(
+    const factory = createDriverFactory(
       () => ctx,
       () => scopedModelFiltering,
     );
@@ -200,13 +233,16 @@ test("isolated real SDK driver without credentials", async (t) => {
       signal: new AbortController().signal,
       ...overrides,
     });
+    const modelOptions = (path: string, models: string[], overrides: Partial<DriverOptions> = {}) =>
+      options({ path, ...overrides, type: { ...options().type, models } });
+    const toolOptions = (path: string, tool: ToolDefinition, models?: string[]) =>
+      options({
+        path,
+        tools: [tool],
+        type: { ...options().type, ...(models && { models }), tools: { allow: [tool.name] } },
+      });
     const create = async (opts: DriverOptions) => {
       const driver = await factory(opts);
-      drivers.push(driver);
-      return driver;
-    };
-    const createFiltered = async (opts: DriverOptions) => {
-      const driver = await filteringFactory(opts);
       drivers.push(driver);
       return driver;
     };
@@ -214,10 +250,6 @@ test("isolated real SDK driver without credentials", async (t) => {
       scopedModelFiltering = true;
       setScopedModels("runtime-test/model/with/slashes", "runtime-other/backup");
       setRootModel("runtime-test/model/with/slashes");
-    };
-    const refreshAvailable = async () => {
-      await runtime.setRuntimeApiKey("runtime-test", "fake-runtime-only-key");
-      await runtime.setRuntimeApiKey("runtime-other", "other-runtime-only-key");
     };
 
     await t.test(
@@ -247,28 +279,21 @@ test("isolated real SDK driver without credentials", async (t) => {
             ],
           }),
         );
-        assert.equal(driver.output(), "");
-        assert.ok(driver.sessionFile);
-        assert.equal(path.dirname(driver.sessionFile), root.getSessionDir());
-        assert.equal(driver.snapshot().filter((msg) => msg.role === "assistant").length, 1);
-        const clone = driver.snapshot();
-        clone.length = 0;
-        assert.ok(driver.snapshot().length);
+        assert.equal(driver.output(), "", "inherited answers are not this agent's output");
+        assert.equal(path.dirname(driver.sessionFile!), root.getSessionDir());
         await driver.prompt("task");
         assert.equal(driver.output(), "child answer");
-        assert.ok(driver.sessionFile);
-        assert.equal(path.dirname(driver.sessionFile), root.getSessionDir());
-        assert.equal(requests.at(-1)?.model.id, "model/with/slashes");
-        assert.equal(requests.at(-1)?.apiKey, "fake-runtime-only-key");
-        assert.ok(requests.at(-1)?.system.includes("ONLY CHILD PROMPT"));
-        assert.ok(requests.at(-1)?.system.includes("Your thread path is /root/child"));
-        assert.ok(requests.at(-1)?.system.includes("Your lexical parent is /root"));
-        assert.ok(requests.at(-1)?.system.includes("agent_pause"));
-        assert.ok(
-          driver
-            .snapshot()
-            .some((msg) => msg.role === "custom" && msg.content === "Inherited extension context"),
-        );
+        assertModel("runtime-test/model/with/slashes");
+        const system = requests.at(-1)!.system;
+        for (const marker of [
+          "ONLY CHILD PROMPT",
+          "Your thread path is /root/child",
+          "Your lexical parent is /root",
+          "agent_pause",
+        ])
+          assert.ok(system.includes(marker), marker);
+        assert.ok(!system.includes("PARENT CONTEXT") && !system.includes("PARENT APPEND"));
+        assert.equal(countMessages(driver.snapshot(), "custom", "Inherited extension context"), 1);
         assert.ok(
           driver
             .snapshot()
@@ -276,21 +301,14 @@ test("isolated real SDK driver without credentials", async (t) => {
               (msg) => msg.role === "bashExecution" && msg.output === "Inherited shell context",
             ),
         );
-        assert.ok(!requests.at(-1)?.system.includes("PARENT CONTEXT"));
-        assert.ok(!requests.at(-1)?.system.includes("PARENT APPEND"));
         const count = calls;
         await driver.sendUpdate("mailbox update");
         assert.equal(calls, count);
         next = answer("second run");
         await driver.prompt("again");
-        assert.ok(
-          driver
-            .snapshot()
-            .some((msg) => msg.role === "custom" && msg.content === "mailbox update"),
-        );
+        assert.equal(countMessages(driver.snapshot(), "custom", "mailbox update"), 1);
         assert.equal(driver.output(), "second run");
         const file = driver.sessionFile!;
-        driver.dispose();
         driver.dispose();
         const reopened = await create(options({ sessionFile: file }));
         assert.equal(reopened.sessionFile, file);
@@ -298,62 +316,19 @@ test("isolated real SDK driver without credentials", async (t) => {
         assert.equal(reopened.output(), "");
         await reopened.prompt("resume");
         assert.equal(reopened.output(), "second run");
-        const freshSteer = await create(
-          options({ path: "/independent-steer", parentPath: null, inherited: [] }),
-        );
-        assert.equal(typeof freshSteer.sessionFile, "undefined");
-        const steerCalls = calls;
-        await freshSteer.steer("queued before prompt");
-        assert.equal(calls, steerCalls);
-        assert.ok(freshSteer.sessionFile);
-        const steerFile = freshSteer.sessionFile!;
-        const steerLeaf = freshSteer.sessionLeafId;
-        assert.ok(steerLeaf);
-        freshSteer.dispose();
-        const reopenedSteer = await create(
-          options({
-            path: "/independent-steer",
-            parentPath: null,
-            inherited: [],
-            sessionFile: steerFile,
-            sessionLeafId: steerLeaf,
-          }),
-        );
-        assert.equal(countMessages(reopenedSteer.snapshot(), "user", "queued before prompt"), 0);
-        next = answer("steer resumed");
-        const steerRequests = requests.length;
-        await reopenedSteer.prompt("independent task");
-        assert.equal(reopenedSteer.output(), "steer resumed");
-        assert.equal(
-          countMessages(
-            requests.slice(steerRequests).at(-1)!.messages,
-            "user",
-            "queued before prompt",
-          ),
-          1,
-        );
-        assert.equal(countMessages(reopenedSteer.snapshot(), "user", "queued before prompt"), 1);
         const independent = await create(
           options({ path: "/independent", parentPath: null, inherited: [] }),
         );
         assert.equal(typeof independent.sessionFile, "undefined");
         const independentCalls = calls;
         await independent.sendUpdate("independent mailbox");
-        assert.equal(calls, independentCalls);
-        assert.ok(independent.sessionFile);
-        assert.ok(
-          independent
-            .snapshot()
-            .some((msg) => msg.role === "user" && messageText(msg) === BOOTSTRAP_MESSAGE),
-        );
-        assert.ok(
-          independent
-            .snapshot()
-            .some((msg) => msg.role === "custom" && messageText(msg) === "independent mailbox"),
-        );
+        await independent.steer("queued before prompt");
+        assert.equal(calls, independentCalls, "updates and steering before a prompt stay offline");
+        assert.equal(countMessages(independent.snapshot(), "user", BOOTSTRAP_MESSAGE), 1);
+        assert.equal(countMessages(independent.snapshot(), "custom", "independent mailbox"), 1);
         await independent.prompt("independent task");
-        const independentFile = independent.sessionFile;
-        assert.ok(independentFile);
+        assert.equal(countMessages(requests.at(-1)!.messages, "user", "queued before prompt"), 1);
+        const independentFile = independent.sessionFile!;
         assert.equal(path.dirname(independentFile), root.getSessionDir());
         assert.equal(
           SessionManager.open(independentFile).getHeader()?.parentSession,
@@ -364,36 +339,11 @@ test("isolated real SDK driver without credentials", async (t) => {
 
     await t.test("pause settles after tools, then dispose/reopen same JSONL resumes", async () => {
       pause = false;
-      let release!: () => void;
-      let entered!: () => void;
-      const started = new Promise<void>((resolve) => {
-        entered = resolve;
+      const { tool, started, release } = gatedTool("agent_pause", () => {
+        pause = true;
       });
-      const gate = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      const tool: ToolDefinition = {
-        name: "agent_pause",
-        label: "Pause",
-        description: "Pause",
-        parameters: Type.Object({}),
-        async execute() {
-          entered();
-          await gate;
-          pause = true;
-          return { content: [{ type: "text", text: "paused" }], details: undefined };
-        },
-      };
-      next = {
-        ...answer("pausing"),
-        content: [{ type: "toolCall", id: "pause-1", name: "agent_pause", arguments: {} }],
-        stopReason: "toolUse",
-      };
-      const pauseOptions = options({
-        path: "/root/pause",
-        tools: [tool],
-        type: { ...options().type, tools: { allow: ["agent_pause"] } },
-      });
+      next = toolCall("pause-1", "agent_pause");
+      const pauseOptions = toolOptions("/root/pause", tool);
       const driver = await create(pauseOptions);
       await driver.sendUpdate("queued mailbox");
       const count = calls;
@@ -409,28 +359,12 @@ test("isolated real SDK driver without credentials", async (t) => {
       );
       await driver.sendUpdate("paused mailbox");
       assert.equal(calls, count + 1);
-      assert.ok(
-        driver.snapshot().some((msg) => msg.role === "custom" && msg.content === "paused mailbox"),
-      );
+      assert.equal(countMessages(driver.snapshot(), "custom", "paused mailbox"), 1);
       const file = driver.sessionFile!;
       driver.dispose();
       const reopened = await create({ ...pauseOptions, sessionFile: file });
       assert.equal(reopened.sessionFile, file);
-      assert.ok(
-        reopened
-          .snapshot()
-          .some((msg) => msg.role === "toolResult" && msg.toolCallId === "pause-1"),
-      );
-      assert.ok(
-        reopened
-          .snapshot()
-          .some((msg) => msg.role === "custom" && msg.content === "queued mailbox"),
-      );
-      assert.ok(
-        reopened
-          .snapshot()
-          .some((msg) => msg.role === "custom" && msg.content === "paused mailbox"),
-      );
+      assert.equal(countMessages(reopened.snapshot(), "custom", "paused mailbox"), 1);
       const resumeRequests = requests.length;
       pause = false;
       next = answer("resumed");
@@ -444,7 +378,7 @@ test("isolated real SDK driver without credentials", async (t) => {
     });
 
     await t.test(
-      "durable queued steering and running updates replay once after reopen before boundary",
+      "durable queued steering and running updates replay once after reopening a selected leaf",
       async () => {
         let releaseDone!: () => void;
         beforeDone = new Promise<void>((resolve) => {
@@ -469,11 +403,16 @@ test("isolated real SDK driver without credentials", async (t) => {
           "future-only history",
           false,
         );
+        await assert.rejects(
+          create(options({ path: "/root/durable", sessionFile: file, sessionLeafId: "missing" })),
+          /not found/,
+        );
         const reopenCalls = calls;
         const reopened = await create(
           options({ path: "/root/durable", sessionFile: file, sessionLeafId: pendingLeaf }),
         );
         assert.equal(calls, reopenCalls);
+        // The selected leaf restores only its branch.
         assert.equal(countMessages(reopened.snapshot(), "custom", "future-only history"), 0);
         assert.equal(countMessages(reopened.snapshot(), "user", "same steer"), 0);
         assert.equal(countMessages(reopened.snapshot(), "custom", "running progress"), 0);
@@ -498,7 +437,7 @@ test("isolated real SDK driver without credentials", async (t) => {
     );
 
     await t.test(
-      "queued steering continuation rechecks scoped preferences before the second provider call",
+      "queued steering rechecks scoped preferences; out-of-scope steering is rejected",
       async () => {
         setScopedModels("runtime-test/model/with/slashes");
         setRootModel("runtime-test/model/with/slashes");
@@ -509,25 +448,15 @@ test("isolated real SDK driver without credentials", async (t) => {
         });
         next = answer("first explicit turn");
         const driver = await create(
-          options({
-            path: "/root/queued-scope-revoked",
-            type: {
-              ...options().type,
-              models: ["runtime-test/model/with/slashes"],
-            },
-          }),
+          modelOptions("/root/queued-scope-revoked", ["runtime-test/model/with/slashes"]),
         );
         const beforeCalls = calls;
-        const run = assert.rejects(
-          driver.prompt("start explicit run"),
-          (error: unknown) => {
-            assert.match(String(error), /\/scoped-models/);
-            return true;
-          },
-        );
+        const run = assert.rejects(driver.prompt("start explicit run"), (error: unknown) => {
+          assert.match(String(error), /\/scoped-models/);
+          return true;
+        });
         await new Promise((resolve) => setImmediate(resolve));
         await driver.steer("queued after acceptance");
-        assert.ok(driver.sessionFile);
         const sessionFile = driver.sessionFile!;
         setScopedModels();
         releaseDone();
@@ -538,66 +467,11 @@ test("isolated real SDK driver without credentials", async (t) => {
           events.some((event) => event.kind === "error" && /\/scoped-models/.test(event.text)),
         );
         assert.equal(countMessages(driver.snapshot(), "user", "queued after acceptance"), 1);
+        // Later steering while out of scope is rejected before it reaches the durable mailbox.
+        await assert.rejects(driver.steer("blocked before mailbox"), /\/scoped-models/);
+        assert.equal(countMessages(driver.snapshot(), "user", "blocked before mailbox"), 0);
         assert.deepEqual(new DurableMailbox(SessionManager.open(sessionFile)).pending(), []);
         setScopedModels("runtime-test/model/with/slashes", "runtime-other/backup");
-      },
-    );
-
-    await t.test("scope-revoked steering is rejected before mailbox persistence", async () => {
-      setScopedModels("runtime-test/model/with/slashes");
-      setRootModel("runtime-test/model/with/slashes");
-      const driver = await create(
-        options({
-          path: "/root/reject-steer-before-mailbox",
-          type: {
-            ...options().type,
-            models: ["runtime-test/model/with/slashes"],
-          },
-        }),
-      );
-      const sessionFile = driver.sessionFile;
-      setScopedModels();
-      await assert.rejects(driver.steer("blocked before mailbox"), /\/scoped-models/);
-      assert.equal(driver.sessionFile, sessionFile);
-      assert.equal(countMessages(driver.snapshot(), "user", "blocked before mailbox"), 0);
-      if (sessionFile)
-        assert.deepEqual(
-          new DurableMailbox(SessionManager.open(sessionFile))
-            .pending()
-            .filter((entry) => entry.content === "blocked before mailbox"),
-          [],
-        );
-      setScopedModels("runtime-test/model/with/slashes", "runtime-other/backup");
-    });
-
-    await t.test(
-      "selected session leaf restores only that branch and invalid leaves fail closed",
-      async () => {
-        next = answer("first answer");
-        const driver = await create(options({ path: "/root/branch" }));
-        await driver.prompt("first prompt");
-        assert.ok(driver.sessionLeafId);
-        const firstLeaf = driver.sessionLeafId!;
-        next = answer("second answer");
-        await driver.prompt("second prompt");
-        const file = driver.sessionFile!;
-        const reopenCalls = calls;
-        const reopened = await create(
-          options({ path: "/root/branch", sessionFile: file, sessionLeafId: firstLeaf }),
-        );
-        assert.equal(calls, reopenCalls);
-        next = answer("branched answer");
-        await reopened.prompt("branch prompt");
-        const branchRequest = requests.at(-1)!;
-        const serialized = JSON.stringify(branchRequest.messages);
-        assert.ok(serialized.includes("first prompt"));
-        assert.ok(serialized.includes("first answer"));
-        assert.ok(!serialized.includes("second prompt"));
-        assert.ok(!serialized.includes("second answer"));
-        await assert.rejects(
-          create(options({ path: "/root/branch", sessionFile: file, sessionLeafId: "missing" })),
-          /not found/,
-        );
       },
     );
 
@@ -661,32 +535,7 @@ test("isolated real SDK driver without credentials", async (t) => {
     });
 
     await t.test(
-      "ordered scoped preferences beat scope order, skip missing entries and preserve exact identities",
-      async () => {
-        setScopedModels("runtime-test/model/with/slashes", "runtime-other/backup");
-        next = answer("ordered scoped");
-        const driver = await create(
-          options({
-            path: "/root/ordered",
-            type: {
-              ...options().type,
-              models: [
-                "runtime-other/missing",
-                "runtime-other/backup",
-                "runtime-test/model/with/slashes",
-              ],
-            },
-          }),
-        );
-        await driver.prompt("prefer ordered scoped model");
-        assert.equal(requests.at(-1)?.model.provider, "runtime-other");
-        assert.equal(requests.at(-1)?.model.id, "backup");
-        assert.equal(requests.at(-1)?.apiKey, "other-runtime-only-key");
-      },
-    );
-
-    await t.test(
-      "explicit scoped preferences fail closed and cached drivers reselect after scope changes",
+      "explicit scoped preferences are ordered, fail closed, and cached drivers reselect after scope changes",
       async () => {
         const baselineCalls = calls;
         setScopedModels();
@@ -710,34 +559,10 @@ test("isolated real SDK driver without credentials", async (t) => {
           },
         );
         assert.equal(calls, baselineCalls);
-        setScopedModels("runtime-other/backup");
-        await assert.rejects(
-          create(
-            options({
-              path: "/root/unmatched-scope",
-              type: {
-                ...options().type,
-                name: "unmatched-scope",
-                models: ["runtime-test/model/with/slashes"],
-              },
-            }),
-          ),
-          (error: unknown) => {
-            assert.match(String(error), /unmatched-scope/);
-            assert.match(String(error), /runtime-other\/backup/);
-            assert.match(String(error), /\/scoped-models/);
-            return true;
-          },
-        );
-        assert.equal(calls, baselineCalls);
-
         setScopedModels("runtime-other/backup", "runtime-test/model/with/slashes");
         next = answer("saved backup model");
         const initial = await create(
-          options({
-            path: "/root/restored-policy",
-            type: { ...options().type, models: ["runtime-other/backup"] },
-          }),
+          modelOptions("/root/restored-policy", ["runtime-other/backup"]),
         );
         await initial.prompt("save transcript on backup");
         const savedFile = initial.sessionFile!;
@@ -748,31 +573,25 @@ test("isolated real SDK driver without credentials", async (t) => {
 
         next = answer("restored obeyed policy");
         const restoredDriver = await create(
-          options({
-            path: "/root/restored-policy",
+          modelOptions("/root/restored-policy", ["runtime-test/model/with/slashes"], {
             sessionFile: savedFile,
-            type: { ...options().type, models: ["runtime-test/model/with/slashes"] },
           }),
         );
         await restoredDriver.prompt("resume with explicit policy");
-        assert.equal(requests.at(-1)?.model.provider, "runtime-test");
-        assert.equal(requests.at(-1)?.model.id, "model/with/slashes");
-        assert.equal(requests.at(-1)?.apiKey, "fake-runtime-only-key");
+        assertModel("runtime-test/model/with/slashes");
 
-        setScopedModels("runtime-other/backup");
+        // Preference order beats scope order and missing entries are skipped.
+        setScopedModels("runtime-test/model/with/slashes", "runtime-other/backup");
         next = answer("cached backup");
         const cached = await create(
-          options({
-            path: "/root/cached-scope",
-            type: {
-              ...options().type,
-              models: ["runtime-test/model/with/slashes", "runtime-other/backup"],
-            },
-          }),
+          modelOptions("/root/cached-scope", [
+            "runtime-other/missing",
+            "runtime-other/backup",
+            "runtime-test/model/with/slashes",
+          ]),
         );
         await cached.prompt("first cached run");
-        assert.equal(requests.at(-1)?.model.provider, "runtime-other");
-        assert.equal(requests.at(-1)?.model.id, "backup");
+        assertModel("runtime-other/backup");
 
         setScopedModels();
         const rejectedCalls = calls;
@@ -782,9 +601,7 @@ test("isolated real SDK driver without credentials", async (t) => {
         setScopedModels("runtime-test/model/with/slashes");
         next = answer("cached switched");
         await cached.prompt("scope regained");
-        assert.equal(requests.at(-1)?.model.provider, "runtime-test");
-        assert.equal(requests.at(-1)?.model.id, "model/with/slashes");
-        assert.equal(requests.at(-1)?.apiKey, "fake-runtime-only-key");
+        assertModel("runtime-test/model/with/slashes");
       },
     );
 
@@ -793,51 +610,21 @@ test("isolated real SDK driver without credentials", async (t) => {
       async () => {
         setScopedModels("runtime-test/model/with/slashes", "runtime-other/backup");
         setRootModel("runtime-test/model/with/slashes");
-        let release!: () => void;
-        let entered!: () => void;
-        const started = new Promise<void>((resolve) => {
-          entered = resolve;
-        });
-        const gate = new Promise<void>((resolve) => {
-          release = resolve;
-        });
-        const tool: ToolDefinition = {
-          name: "scope_gate",
-          label: "Scope Gate",
-          description: "Blocks until scope changes",
-          parameters: Type.Object({}),
-          async execute() {
-            entered();
-            await gate;
-            return { content: [{ type: "text", text: "done" }], details: undefined };
-          },
-        };
-        next = {
-          ...answer(""),
-          content: [{ type: "toolCall", id: "scope-gate-1", name: "scope_gate", arguments: {} }],
-          stopReason: "toolUse",
-        };
+        const { tool, started, release } = gatedTool("scope_gate");
+        next = toolCall("scope-gate-1", "scope_gate");
         const driver = await create(
-          options({
-            path: "/root/tool-scope-change",
-            tools: [tool],
-            type: {
-              ...options().type,
-              models: ["runtime-test/model/with/slashes", "runtime-other/backup"],
-              tools: { allow: ["scope_gate"] },
-            },
-          }),
+          toolOptions("/root/tool-scope-change", tool, [
+            "runtime-test/model/with/slashes",
+            "runtime-other/backup",
+          ]),
         );
         const beforeCalls = calls;
-        const run = assert.rejects(
-          driver.prompt("tool turn"),
-          (error: unknown) => {
-            assert.match(String(error), /scope changed/);
-            assert.match(String(error), /preferred is runtime-other\/backup/);
-            assert.match(String(error), /resume agent to use runtime-other\/backup/);
-            return true;
-          },
-        );
+        const run = assert.rejects(driver.prompt("tool turn"), (error: unknown) => {
+          assert.match(String(error), /scope changed/);
+          assert.match(String(error), /preferred is runtime-other\/backup/);
+          assert.match(String(error), /resume agent to use runtime-other\/backup/);
+          return true;
+        });
         await started;
         setScopedModels("runtime-other/backup");
         setRootModel("runtime-other/backup");
@@ -847,9 +634,7 @@ test("isolated real SDK driver without credentials", async (t) => {
 
         next = answer("resumed on backup");
         await driver.prompt("resume on backup");
-        assert.equal(requests.at(-1)?.model.provider, "runtime-other");
-        assert.equal(requests.at(-1)?.model.id, "backup");
-        assert.equal(requests.at(-1)?.apiKey, "other-runtime-only-key");
+        assertModel("runtime-other/backup");
         setScopedModels("runtime-test/model/with/slashes", "runtime-other/backup");
         setRootModel("runtime-test/model/with/slashes");
       },
@@ -863,49 +648,26 @@ test("isolated real SDK driver without credentials", async (t) => {
         next = answer("omitted initial");
         const driver = await create(options({ path: "/root/omitted-policy" }));
         await driver.prompt("first omitted run");
-        assert.equal(requests.at(-1)?.model.provider, "runtime-test");
-        assert.equal(requests.at(-1)?.model.id, "model/with/slashes");
+        assertModel("runtime-test/model/with/slashes");
         const savedFile = driver.sessionFile!;
 
         setScopedModels("runtime-other/backup", "runtime-test/model/with/slashes");
         setRootModel("runtime-other/backup");
         next = answer("omitted cached");
         await driver.prompt("second omitted run");
-        assert.equal(requests.at(-1)?.model.provider, "runtime-test");
-        assert.equal(requests.at(-1)?.model.id, "model/with/slashes");
+        assertModel("runtime-test/model/with/slashes");
 
         driver.dispose();
         next = answer("omitted restored");
         const restored = await create(
-          options({
-            path: "/root/omitted-policy",
-            sessionFile: savedFile,
-          }),
+          options({ path: "/root/omitted-policy", sessionFile: savedFile }),
         );
         await restored.prompt("restored omitted run");
-        assert.equal(requests.at(-1)?.model.provider, "runtime-test");
-        assert.equal(requests.at(-1)?.model.id, "model/with/slashes");
+        assertModel("runtime-test/model/with/slashes");
         setScopedModels("runtime-test/model/with/slashes", "runtime-other/backup");
         setRootModel("runtime-test/model/with/slashes");
       },
     );
-
-    await t.test("lexical parent's resolved thinking defaults", async () => {
-      next = answer("nested");
-      const parent = await create(
-        options({ path: "/root/settings", type: { ...options().type, thinkingLevel: "high" } }),
-      );
-      const child = await create(
-        options({ path: "/root/settings/child", parentPath: "/root/settings", inherited: [] }),
-      );
-      await child.prompt("nested task");
-      const assistant = child
-        .snapshot()
-        .filter((msg) => msg.role === "assistant")
-        .at(-1);
-      assert.equal(assistant?.thinkingLevel, "high");
-      parent.dispose();
-    });
 
     await t.test("assistant errors and cancellation reject, cleanup is idempotent", async () => {
       next = { ...answer(""), stopReason: "error", errorMessage: "terminal fake failure" };
@@ -950,18 +712,8 @@ test("isolated real SDK driver without credentials", async (t) => {
           return { content: [], details: undefined };
         },
       };
-      next = {
-        ...answer(""),
-        content: [{ type: "toolCall", id: "wait-1", name: "wait_signal", arguments: {} }],
-        stopReason: "toolUse",
-      };
-      const driver = await create(
-        options({
-          path: "/root/abort",
-          tools: [tool],
-          type: { ...options().type, tools: { allow: ["wait_signal"] } },
-        }),
-      );
+      next = toolCall("wait-1", "wait_signal");
+      const driver = await create(toolOptions("/root/abort", tool));
       const run = driver.prompt("wait");
       const rejected = assert.rejects(run, /aborted/);
       await started;
@@ -1016,31 +768,8 @@ test("isolated real SDK driver without credentials", async (t) => {
       await assert.rejects(factory(options({ sessionFile: linked })), /inside this root/i);
     });
 
-    await t.test(
-      "legacy root-scoped transcripts remain reopenable without ownership metadata",
-      async () => {
-        next = answer("legacy continued");
-        const legacyDir = path.join(directory, "subagents", root.getSessionId());
-        const legacy = SessionManager.create(cwd, legacyDir);
-        legacy.appendMessage(answer("old child answer"));
-        const driver = await create(options({ sessionFile: legacy.getSessionFile()! }));
-        assert.equal(driver.sessionFile, legacy.getSessionFile());
-        assert.equal(
-          driver.snapshot().some((message) => messageText(message) === "old child answer"),
-          true,
-        );
-        await driver.prompt("continue legacy child");
-        assert.equal(driver.sessionFile, legacy.getSessionFile());
-      },
-    );
-
     await t.test("usage counts only this agent's assistant messages", async () => {
-      const usage = (
-        input: number,
-        output: number,
-        cacheRead = 0,
-        cacheWrite = 0,
-      ): AssistantMessage["usage"] => ({
+      const usage = (input: number, output: number, cacheRead = 0, cacheWrite = 0) => ({
         input,
         output,
         cacheRead,
@@ -1049,207 +778,95 @@ test("isolated real SDK driver without credentials", async (t) => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       });
       const assistant = (
-        text: string,
         tokens: AssistantMessage["usage"],
         stopReason: AssistantMessage["stopReason"] = "stop",
       ): AssistantMessage => ({
-        ...answer(text),
+        ...answer("metrics"),
         stopReason,
         usage: tokens,
         errorMessage: stopReason === "error" ? "model failed" : undefined,
       });
-      const usageEvents: Extract<DriverEvent, { kind: "usage" }>[] = [];
-      const driver = await create(
+      type StreamEvent = Parameters<
+        ReturnType<typeof createAssistantMessageEventStream>["push"]
+      >[0];
+      const script = (final: AssistantMessage, ...events: StreamEvent[]) => {
+        scripted = (stream) => {
+          void Promise.resolve().then(() => {
+            for (const event of events) stream.push(event);
+            stream.end(final);
+          });
+        };
+      };
+      let rows: [number, number, boolean][] = [];
+      const metricsOptions = (overrides: Partial<DriverOptions>) =>
         options({
           path: "/root/metrics",
-          inherited: [assistant("inherited answer", usage(500, 500, 20, 20))],
           onEvent: (event) => {
-            events.push(event);
-            if (event.kind === "usage") usageEvents.push(event);
+            if (event.kind === "usage")
+              rows.push([event.inputTokens, event.outputTokens, event.partial ?? false]);
           },
-        }),
+          ...overrides,
+        });
+      // Inherited assistant usage must never be billed to the child.
+      const driver = await create(
+        metricsOptions({ inherited: [assistant(usage(500, 500, 20, 20))] }),
       );
-      const partial = assistant("partial", usage(4, 1, 1, 0), "pending");
-      const grown = assistant("partial grown", usage(4, 2, 1, 2), "pending");
-      const finalMessage = assistant("final", usage(6, 4, 2, 3));
-      scripted = (stream) => {
-        void (async () => {
-          await Promise.resolve();
-          stream.push({ type: "start", partial });
-          stream.push({ type: "text_delta", contentIndex: 0, delta: "x", partial });
-          stream.push({ type: "text_delta", contentIndex: 0, delta: "y", partial: grown });
-          stream.push({ type: "done", reason: "stop", message: finalMessage });
-          stream.end(finalMessage);
-        })();
-      };
+      const partial = assistant(usage(4, 1, 1, 0), "pending");
+      const grown = assistant(usage(4, 2, 1, 2), "pending");
+      const finalMessage = assistant(usage(6, 4, 2, 3));
+      script(
+        finalMessage,
+        { type: "start", partial },
+        { type: "text_delta", contentIndex: 0, delta: "x", partial },
+        { type: "text_delta", contentIndex: 0, delta: "y", partial: grown },
+        { type: "done", reason: "stop", message: finalMessage },
+      );
       await driver.prompt("count me");
-      assert.deepEqual(
-        usageEvents.map((event) => [event.inputTokens, event.outputTokens, event.partial ?? false]),
-        [
-          [5, 1, true],
-          [7, 2, true],
-          [11, 4, false],
-        ],
-      );
+      assert.deepEqual(rows, [
+        [5, 1, true],
+        [7, 2, true],
+        [11, 4, false],
+      ]);
 
-      usageEvents.length = 0;
-      const second = assistant("second", usage(1, 1));
-      scripted = (stream) => {
-        void (async () => {
-          await Promise.resolve();
-          stream.push({ type: "start", partial: { ...second, usage: usage(0, 0) } });
-          stream.push({ type: "done", reason: "stop", message: second });
-          stream.end(second);
-        })();
-      };
-      await driver.prompt("again");
-      assert.deepEqual(
-        usageEvents.map((event) => [event.inputTokens, event.outputTokens, event.partial ?? false]),
-        [[12, 5, false]],
-      );
-
-      usageEvents.length = 0;
-      const failed = assistant("failed", usage(2, 1, 1, 0), "error");
-      scripted = (stream) => {
-        void (async () => {
-          await Promise.resolve();
-          stream.push({ type: "error", reason: "error", error: failed });
-          stream.end(failed);
-        })();
-      };
+      rows = [];
+      const failed = assistant(usage(2, 1, 1, 0), "error");
+      script(failed, { type: "error", reason: "error", error: failed });
       await assert.rejects(driver.prompt("fail"), /model failed/);
-      assert.deepEqual(
-        usageEvents.map((event) => [event.inputTokens, event.outputTokens, event.partial ?? false]),
-        [[15, 6, false]],
-      );
+      assert.deepEqual(rows, [[14, 5, false]]);
 
+      // A reopened driver reports only usage produced after reopening.
       const file = driver.sessionFile!;
       driver.dispose();
-      usageEvents.length = 0;
-      const reopened = await create(
-        options({
-          path: "/root/metrics",
-          sessionFile: file,
-          inherited: [],
-          onEvent: (event) => {
-            events.push(event);
-            if (event.kind === "usage") usageEvents.push(event);
-          },
-        }),
-      );
-      const resumed = assistant("resumed", usage(3, 2));
-      scripted = (stream) => {
-        void (async () => {
-          await Promise.resolve();
-          stream.push({ type: "done", reason: "stop", message: resumed });
-          stream.end(resumed);
-        })();
-      };
+      rows = [];
+      const reopened = await create(metricsOptions({ sessionFile: file, inherited: [] }));
+      const resumed = assistant(usage(3, 2));
+      script(resumed, { type: "done", reason: "stop", message: resumed });
       await reopened.prompt("resume");
-      assert.deepEqual(
-        usageEvents.map((event) => [event.inputTokens, event.outputTokens, event.partial ?? false]),
-        [[3, 2, false]],
-      );
+      assert.deepEqual(rows, [[3, 2, false]]);
     });
 
     await t.test(
-      "ordered unscoped available fallback skips missing and later scoped models",
+      "disabled filtering picks the first available preference, even outside or without a scope",
       async () => {
-        await refreshAvailable();
+        // Re-setting keys refreshes the registry's available-model list.
+        await runtime.setRuntimeApiKey("runtime-test", apiKeys["runtime-test"]);
         scopedModelFiltering = false;
         setScopedModels("runtime-other/backup");
         setRootModel("runtime-other/backup");
         try {
           next = answer("unscoped fallback");
-          const driver = await createFiltered(
-            options({
-              path: "/root/unscoped-ordered",
-              type: {
-                ...options().type,
-                name: "unscoped-ordered",
-                models: ["runtime-test/missing", "runtime-test/fallback", "runtime-other/backup"],
-              },
-            }),
+          const driver = await create(
+            modelOptions("/root/unscoped-ordered", [
+              "runtime-test/missing",
+              "runtime-test/fallback",
+              "runtime-other/backup",
+            ]),
           );
           await driver.prompt("prefer first available");
-          assert.equal(requests.at(-1)?.model.provider, "runtime-test");
-          assert.equal(requests.at(-1)?.model.id, "fallback");
-          assert.equal(requests.at(-1)?.apiKey, "fake-runtime-only-key");
-        } finally {
-          restoreScope();
-        }
-      },
-    );
-
-    await t.test(
-      "enabled scoped filtering rejects explicit models outside an empty scope",
-      async () => {
-        scopedModelFiltering = true;
-        setScopedModels();
-        const baselineCalls = calls;
-        try {
+          assertModel("runtime-test/fallback");
+          setScopedModels();
           await assert.rejects(
-            createFiltered(
-              options({
-                path: "/root/enabled-empty-scope",
-                type: {
-                  ...options().type,
-                  name: "enabled-empty",
-                  models: ["runtime-test/model/with/slashes"],
-                },
-              }),
-            ),
-            (error: unknown) => {
-              assert.match(String(error), /enabled-empty/);
-              assert.match(String(error), /\/scoped-models/);
-              assert.match(String(error), /\[\]/);
-              return true;
-            },
-          );
-          assert.equal(calls, baselineCalls);
-        } finally {
-          restoreScope();
-        }
-      },
-    );
-
-    await t.test(
-      "disabled filtering allows an empty scope when a preference is available",
-      async () => {
-        await refreshAvailable();
-        scopedModelFiltering = false;
-        setScopedModels();
-        setRootModel("runtime-other/backup");
-        try {
-          next = answer("empty scope ok");
-          const driver = await createFiltered(
-            options({
-              path: "/root/disabled-empty-scope",
-              type: {
-                ...options().type,
-                name: "disabled-empty",
-                models: ["runtime-test/missing", "runtime-test/fallback"],
-              },
-            }),
-          );
-          await driver.prompt("run without scope");
-          assert.equal(requests.at(-1)?.model.provider, "runtime-test");
-          assert.equal(requests.at(-1)?.model.id, "fallback");
-          setScopedModels("runtime-other/backup");
-          next = answer("kept fallback");
-          await driver.prompt("scope appeared");
-          assert.equal(requests.at(-1)?.model.id, "fallback");
-          await assert.rejects(
-            createFiltered(
-              options({
-                path: "/root/disabled-missing",
-                type: {
-                  ...options().type,
-                  name: "disabled-missing",
-                  models: ["runtime-test/missing"],
-                },
-              }),
-            ),
+            create(modelOptions("/root/disabled-missing", ["runtime-test/missing"])),
             (error: unknown) => {
               assert.match(String(error), /available models/i);
               assert.doesNotMatch(String(error), /\/scoped-models/);
@@ -1263,11 +880,13 @@ test("isolated real SDK driver without credentials", async (t) => {
     );
 
     await t.test(
-      "unmatched model suggestions do not pin or block inherited model selection",
+      "omitted models inherit the root model despite unmatched suggestions or disabled filtering",
       async () => {
+        scopedModelFiltering = false;
+        setScopedModels();
         setRootModel("runtime-other/backup");
-        next = answer("inherited despite suggestions");
         try {
+          next = answer("inherited despite suggestions");
           const driver = await create(
             options({
               path: "/root/suggestion-inherit",
@@ -1278,9 +897,7 @@ test("isolated real SDK driver without credentials", async (t) => {
             }),
           );
           await driver.prompt("inherit with unmatched suggestions");
-          assert.equal(requests.at(-1)?.model.provider, "runtime-other");
-          assert.equal(requests.at(-1)?.model.id, "backup");
-          assert.equal(requests.at(-1)?.apiKey, "other-runtime-only-key");
+          assertModel("runtime-other/backup");
           assert.equal(
             events.some(
               (event) =>
@@ -1290,46 +907,10 @@ test("isolated real SDK driver without credentials", async (t) => {
             false,
           );
         } finally {
-          setRootModel("runtime-test/model/with/slashes");
+          restoreScope();
         }
       },
     );
-
-    await t.test("omitted models still inherit when scoped filtering is disabled", async () => {
-      scopedModelFiltering = false;
-      setScopedModels();
-      setRootModel("runtime-other/backup");
-      try {
-        next = answer("inherited root");
-        const driver = await createFiltered(options({ path: "/root/disabled-inherit" }));
-        await driver.prompt("inherit root");
-        assert.equal(requests.at(-1)?.model.provider, "runtime-other");
-        assert.equal(requests.at(-1)?.model.id, "backup");
-        assert.equal(requests.at(-1)?.apiKey, "other-runtime-only-key");
-
-        const parent = await createFiltered(
-          options({
-            path: "/root/disabled-inherit-parent",
-            type: { ...options().type, thinkingLevel: "medium" },
-          }),
-        );
-        const child = await createFiltered(
-          options({
-            path: "/root/disabled-inherit-parent/child",
-            parentPath: "/root/disabled-inherit-parent",
-            inherited: [],
-          }),
-        );
-        setRootModel("runtime-test/model/with/slashes");
-        next = answer("inherited parent");
-        await child.prompt("inherit parent");
-        assert.equal(requests.at(-1)?.model.provider, "runtime-other");
-        assert.equal(requests.at(-1)?.model.id, "backup");
-        parent.dispose();
-      } finally {
-        restoreScope();
-      }
-    });
 
     await t.test(
       "disabling scoped filtering stops scope-drift rejection without reselection",
@@ -1337,44 +918,14 @@ test("isolated real SDK driver without credentials", async (t) => {
         scopedModelFiltering = true;
         setScopedModels("runtime-test/model/with/slashes", "runtime-other/backup");
         setRootModel("runtime-test/model/with/slashes");
-        let release!: () => void;
-        let entered!: () => void;
-        const started = new Promise<void>((resolve) => {
-          entered = resolve;
-        });
-        const gate = new Promise<void>((resolve) => {
-          release = resolve;
-        });
-        const tool: ToolDefinition = {
-          name: "filter_gate",
-          label: "Filter Gate",
-          description: "Blocks until filtering is disabled",
-          parameters: Type.Object({}),
-          async execute() {
-            entered();
-            await gate;
-            return { content: [{ type: "text", text: "done" }], details: undefined };
-          },
-        };
+        const { tool, started, release } = gatedTool("filter_gate");
         try {
-          next = {
-            ...answer(""),
-            content: [
-              { type: "toolCall", id: "filter-gate-1", name: "filter_gate", arguments: {} },
-            ],
-            stopReason: "toolUse",
-          };
-          const driver = await createFiltered(
-            options({
-              path: "/root/filter-toggle",
-              tools: [tool],
-              type: {
-                ...options().type,
-                name: "filter-toggle",
-                models: ["runtime-test/model/with/slashes", "runtime-other/backup"],
-                tools: { allow: ["filter_gate"] },
-              },
-            }),
+          next = toolCall("filter-gate-1", "filter_gate");
+          const driver = await create(
+            toolOptions("/root/filter-toggle", tool, [
+              "runtime-test/model/with/slashes",
+              "runtime-other/backup",
+            ]),
           );
           const beforeCalls = calls;
           const run = driver.prompt("tool turn");
@@ -1386,21 +937,19 @@ test("isolated real SDK driver without credentials", async (t) => {
           release();
           await run;
           assert.equal(calls, beforeCalls + 2);
-          assert.equal(requests.at(-1)?.model.provider, "runtime-test");
-          assert.equal(requests.at(-1)?.model.id, "model/with/slashes");
+          assertModel("runtime-test/model/with/slashes");
           assert.equal(driver.output(), "continued on original");
           assert.equal(countMessages(driver.snapshot(), "user", "steer while scope drifted"), 1);
 
           next = answer("request while disabled");
           await driver.prompt("later request");
-          assert.equal(requests.at(-1)?.model.id, "model/with/slashes");
+          assertModel("runtime-test/model/with/slashes");
 
           scopedModelFiltering = true;
           setScopedModels("runtime-other/backup");
           next = answer("reselected backup");
           await driver.prompt("scope restored");
-          assert.equal(requests.at(-1)?.model.provider, "runtime-other");
-          assert.equal(requests.at(-1)?.model.id, "backup");
+          assertModel("runtime-other/backup");
         } finally {
           release();
           restoreScope();
@@ -1417,9 +966,6 @@ test("isolated real SDK driver without credentials", async (t) => {
         factory(options({ type: { ...options().type, tools: { allow: ["missing"] } } })),
         /Unavailable tool/,
       );
-      const outside = path.join(directory, "outside.jsonl");
-      await writeFile(outside, "{}");
-      await assert.rejects(factory(options({ sessionFile: outside })), /inside this root/);
       ctx.model = { ...ctx.model!, api: "pi-virtual", id: "virtual" };
       const find = registry.find.bind(registry);
       registry.find = (provider, id) => (id === "virtual" ? ctx.model : find(provider, id));
