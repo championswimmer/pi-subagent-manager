@@ -133,7 +133,8 @@ async function configureAgentsDialog(
         {
           id: "save",
           label: "Save and apply",
-          labelPrefix: dirty ? { text: "(changes)", color: "warning" as const } : undefined,
+          value: dirty ? "(changes)" : undefined,
+          valueColor: dirty ? "warning" as const : undefined,
           help: "Save all values to the selected scope and reload settings now. Project overrides still take precedence. Running agents and retained sessions are kept.",
         },
         {

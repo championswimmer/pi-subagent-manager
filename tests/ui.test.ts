@@ -652,6 +652,47 @@ test("type field editor handles YAML fields without changing Markdown", async ()
   });
 });
 
+test("model picker uses current draft suggestions, including unsaved edits to them", async () => {
+  await withFixture(async ({ root, store, writeWorker }) => {
+    await writeWorker({ modelSuggestions: ["GPT"] });
+    const { ctx, driver } = editorContext(
+      root,
+      ["worker", "models", "modelSuggestions", "models", "Save", "Global", undefined],
+      ["snnt"],
+      {
+        availableModels: TWO_MODELS,
+        scopedModels: ["openai/gpt-4.1", "anthropic/claude-3.7-sonnet"],
+      },
+    );
+    const pickerOrders: string[][] = [];
+    driver.onChild = (component) => {
+      if (typeof component.getMode !== "function") return false;
+      pickerOrders.push(
+        component.getCurrentItems().map((item: { value: string }) => item.value),
+      );
+      if (pickerOrders.length === 1) {
+        // Suggestions order the picker but do not commit model preferences.
+        component.handleInput("\u001B");
+        component.handleInput("\u001B");
+      } else {
+        component.handleInput("\r");
+        const done = component
+          .getCurrentItems()
+          .find((item: { value: string }) => item.value === "action:done");
+        component.getSelectList().onSelect?.(done);
+      }
+      return true;
+    };
+    await editAgentTypes(ctx, store);
+    assert.deepEqual(pickerOrders, [
+      ["openai/gpt-4.1", "anthropic/claude-3.7-sonnet"],
+      ["anthropic/claude-3.7-sonnet", "openai/gpt-4.1"],
+    ]);
+    assert.deepEqual(store.get("worker").modelSuggestions, ["snnt"]);
+    assert.deepEqual(store.get("worker").models, ["anthropic/claude-3.7-sonnet"]);
+  });
+});
+
 test("legacy scalar model opens the ordered picker and cancel keeps the saved definition", async () => {
   await withFixture(async ({ root, store, body, file }) => {
     const legacy = `---\nname: worker\ndescription: Worker\nmodel: openai/gpt-4.1\n---\n${body}`;
@@ -1123,6 +1164,44 @@ test("field editor prefills current values and cancelled or invalid edits keep t
     assert.equal(store.get("worker").name, "worker");
     assert.deepEqual(store.get("worker").tools, { allow: ["read"], block: ["bash"] });
     assert.equal(store.get("worker").systemPrompt, body);
+  });
+});
+
+test("agent save shows warning-colored changes for edited and new drafts, clearing on revert", async () => {
+  await withFixture(async ({ root, store }) => {
+    const original = store.get("worker");
+    const { ctx, driver } = editorContext(
+      root,
+      [
+        "worker", "description", "description", "description", "Edit frontmatter YAML",
+        "Cancel", "Create new type", "Cancel", undefined,
+      ],
+      [undefined, "Changed description", original.description, undefined],
+    );
+    const saves: { value?: string; valueColor?: string }[] = [];
+    driver.onChild = (component) => {
+      if (component instanceof DialogMenu && component.title.startsWith("Edit ")) {
+        const save = component.rows.find((row) => row.id === "Save")!;
+        assert.equal(save.label, "Save");
+        saves.push({ value: save.value, valueColor: save.valueColor });
+        component.handleInput("\x1b[F");
+        const rendered = component.render(100).join("\n");
+        if (save.value) {
+          assert.match(stripTerminalSequences(rendered), /Save\s+│ \(changes\)/);
+          assert.ok(rendered.includes(darkTheme.fg("warning", "(changes)")));
+        }
+      }
+      return false;
+    };
+    await editAgentTypes(ctx, store);
+    assert.deepEqual(saves, [
+      { value: "", valueColor: undefined },
+      { value: "", valueColor: undefined },
+      { value: "(changes)", valueColor: "warning" },
+      { value: "", valueColor: undefined },
+      { value: "", valueColor: undefined },
+      { value: "(changes)", valueColor: "warning" },
+    ]);
   });
 });
 

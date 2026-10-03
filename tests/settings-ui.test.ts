@@ -164,16 +164,20 @@ test("filtering toggle and other edits are draft-only until save", async (t) => 
   assert.match(readFileSync(saved.userFile, "utf8"), /"scopedModelFiltering": false/);
 });
 
-test("save shows a warning-colored changes prefix only while the draft is dirty", async (t) => {
+test("save shows a warning-colored changes value only while the draft is dirty", async (t) => {
   const result = await run(t, [
     "scopedModelFiltering", "scopedModelFiltering", "maxLevels", "5", "defaults", "cancel",
   ]);
-  const prefix = (index: number) => result.menus[index]?.rows.find((row) => row.id === "save")?.labelPrefix;
-  assert.equal(prefix(0), undefined);
-  assert.deepEqual(prefix(1), { text: "(changes)", color: "warning" });
-  assert.equal(prefix(2), undefined, "reverting a toggle clears the indicator");
-  assert.deepEqual(prefix(3), { text: "(changes)", color: "warning" });
-  assert.equal(prefix(4), undefined, "restoring the original defaults clears the indicator");
+  const save = (index: number) => result.menus[index]!.rows.find((row) => row.id === "save")!;
+  for (const index of [0, 2, 4]) {
+    assert.equal(save(index).value, undefined, "unchanged or reverted drafts clear the indicator");
+    assert.equal(save(index).valueColor, undefined);
+  }
+  for (const index of [1, 3]) {
+    assert.equal(save(index).label, "Save and apply");
+    assert.equal(save(index).value, "(changes)");
+    assert.equal(save(index).valueColor, "warning");
+  }
 });
 
 test("scope help explains the destination and precedence without changing the draft", async (t) => {

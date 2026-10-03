@@ -1,3 +1,4 @@
+import fuzzysort, { type SnapshotKeys } from "fuzzysort";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import {
   getSelectListTheme,
@@ -7,7 +8,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   Container,
-  fuzzyFilter,
   getKeybindings,
   Input,
   SelectList,
@@ -31,6 +31,10 @@ export const MODEL_EDITOR_CANCEL = Symbol("model-editor-cancel");
 
 type AvailableModel = Pick<Model<Api>, "provider" | "id" | "name">;
 
+interface ModelSelectItem extends SelectItem {
+  group?: string;
+}
+
 type ModelEditorMode =
   | { kind: "menu" }
   | { kind: "actions"; index: number }
@@ -46,6 +50,7 @@ interface OrderedModelEditorComponentOptions {
   availableModels: readonly AvailableModel[];
   scopedModels: readonly ScopedModel[];
   initialModels?: readonly string[];
+  modelSuggestions?: readonly string[];
   onDone(models: string[]): void;
   onCancel(): void;
 }
@@ -56,6 +61,13 @@ function sanitizeModelText(text: string): string {
 
 function renderModelIdentity(identity: string): string {
   return sanitizeModelText(identity);
+}
+
+function modelSearchText(text: string): string {
+  // Providers spell the same version differently (sonnet-5.5 vs sonnet-5-5).
+  // Strip separators rather than splitting them into repeated numeric terms;
+  // raw identities and labels remain untouched.
+  return sanitizeModelText(text).replace(/[._:/-]+/g, "");
 }
 
 function sortModels(models: readonly AvailableModel[]): AvailableModel[] {
@@ -80,19 +92,6 @@ function describeModel(
   return [name, annotation].filter(Boolean).join(" · ");
 }
 
-function buildSearchText(
-  model: AvailableModel,
-  scopedIdentities: ReadonlySet<string>,
-): string {
-  return [
-    renderModelIdentity(modelIdentity(model)),
-    sanitizeModelText(model.name),
-    describeModel(model, scopedIdentities),
-  ]
-    .filter(Boolean)
-    .join(" ");
-}
-
 export class OrderedModelEditorComponent extends Container {
   private readonly tui: {
     requestRender(force?: boolean): void;
@@ -100,6 +99,8 @@ export class OrderedModelEditorComponent extends Container {
   };
   private readonly theme: Theme;
   private readonly allModels: readonly AvailableModel[];
+  private readonly modelSearch: SnapshotKeys<AvailableModel>;
+  private readonly suggestedScores: ReadonlyMap<string, number>;
   private readonly modelsByIdentity = new Map<string, AvailableModel>();
   private readonly scopedIdentities: ReadonlySet<string>;
   private readonly onDone: (models: string[]) => void;
@@ -112,7 +113,7 @@ export class OrderedModelEditorComponent extends Container {
   private mode: ModelEditorMode;
   private pickerQuery = "";
   private pickerSelectedValue: string | undefined;
-  private currentItems: SelectItem[] = [];
+  private currentItems: ModelSelectItem[] = [];
   private selectList = new SelectList(
     [],
     1,
@@ -130,6 +131,15 @@ export class OrderedModelEditorComponent extends Container {
     this.tui = options.tui;
     this.theme = options.theme;
     this.allModels = sortModels(options.availableModels);
+    // The registry is fixed for this dialog; prepare searchable fields once.
+    // Scope annotations deliberately aren't searchable model metadata.
+    this.modelSearch = fuzzysort.snapshot(this.allModels, {
+      keys: [
+        (model) => modelSearchText(modelIdentity(model)),
+        (model) => modelSearchText(model.name),
+      ],
+    });
+    this.suggestedScores = this.searchScores(options.modelSuggestions ?? []);
     this.onDone = options.onDone;
     this.onCancel = options.onCancel;
     for (const model of this.allModels)
@@ -192,17 +202,31 @@ export class OrderedModelEditorComponent extends Container {
     if (this.searchInput) header.push(...this.searchInput.render(inner));
     const budget = Math.max(1, height - 4 - header.length);
     const selected = this.selectList.getSelectedItem()?.value;
+    // Headings are visual rows only: keyboard navigation selects models, not groups.
+    const displayRows: (ModelSelectItem | string)[] = [];
+    let previousGroup: string | undefined;
+    for (const item of this.currentItems) {
+      if (item.group && item.group !== previousGroup) {
+        displayRows.push(item.group);
+      }
+      previousGroup = item.group;
+      displayRows.push(item);
+    }
     const index = Math.max(
       0,
-      this.currentItems.findIndex((item) => item.value === selected),
+      displayRows.findIndex(
+        (row) => typeof row !== "string" && row.value === selected,
+      ),
     );
     const start = Math.max(
       0,
-      Math.min(index - budget + 1, this.currentItems.length - budget),
+      Math.min(index - budget + 1, displayRows.length - budget),
     );
-    const rows = this.currentItems.slice(start, start + budget).map((item) => {
-      const text = `${item.value === selected ? "›" : " "} ${item.label}  ${this.theme.fg("muted", item.description ?? "")}`;
-      return item.value === selected ? this.theme.fg("accent", text) : text;
+    // Only format visible rows; a registry can contain thousands of models.
+    const rows = displayRows.slice(start, start + budget).map((row) => {
+      if (typeof row === "string") return this.theme.fg("muted", row);
+      const text = `${row.value === selected ? "›" : " "} ${row.label}  ${this.theme.fg("muted", row.description ?? "")}`;
+      return row.value === selected ? this.theme.fg("accent", text) : text;
     });
     if (!rows.length) rows.push(this.theme.fg("muted", "No matching models"));
     return frameDialog(
@@ -440,7 +464,9 @@ export class OrderedModelEditorComponent extends Container {
       this.theme.fg(
         "muted",
         this.withScopeWarning(
-          "Search by provider/id or model name. Already-selected duplicates are hidden.",
+          this.suggestedScores.size
+            ? "Suggested matches: scoped first, then other models; the rest A–Z. Type to search."
+            : "Search by provider/id or model name. Models A–Z; selected duplicates are hidden.",
         ),
       ),
     );
@@ -544,23 +570,71 @@ export class OrderedModelEditorComponent extends Container {
     return list;
   }
 
-  private getPickerItems(replaceIndex: number | undefined): SelectItem[] {
+  private searchScores(queries: readonly string[]): Map<string, number> {
+    const scores = new Map<string, number>();
+    const uniqueQueries = new Set(
+      queries.map((query) => modelSearchText(query).trim()).filter(Boolean),
+    );
+    for (const query of uniqueQueries) {
+      // Both defaults are restrictive (10 results, score >= .5); collect every
+      // fuzzy match so suggestions aren't silently capped or omitted.
+      for (const result of fuzzysort.go(query, this.modelSearch, {
+        limit: 0,
+        threshold: 0,
+      })) {
+        const identity = modelIdentity(result.obj);
+        scores.set(identity, Math.max(scores.get(identity) ?? 0, result.score));
+      }
+    }
+    return scores;
+  }
+
+  private getPickerItems(replaceIndex: number | undefined): ModelSelectItem[] {
     const excluded = new Set(
       this.draft.filter((_, index) => index !== replaceIndex),
     );
-    const available = this.allModels.filter(
-      (model) => !excluded.has(modelIdentity(model)),
-    );
-    const filtered = this.pickerQuery
-      ? fuzzyFilter(available, this.pickerQuery, (model) =>
-          buildSearchText(model, this.scopedIdentities),
-        )
-      : available;
-    return filtered.map((model) => ({
-      value: modelIdentity(model),
-      label: renderModelIdentity(modelIdentity(model)),
-      description: describeModel(model, this.scopedIdentities),
-    }));
+    const query = this.pickerQuery.trim();
+    const queryScores = query ? this.searchScores([query]) : undefined;
+    const scoped: AvailableModel[] = [];
+    const other: AvailableModel[] = [];
+    const remaining: AvailableModel[] = [];
+    for (const model of this.allModels) {
+      const identity = modelIdentity(model);
+      if (excluded.has(identity) || (queryScores && !queryScores.has(identity)))
+        continue;
+      if (this.suggestedScores.has(identity)) {
+        (this.scopedIdentities.has(identity) ? scoped : other).push(model);
+      } else {
+        remaining.push(model);
+      }
+    }
+    const bySuggestionScore = (a: AvailableModel, b: AvailableModel) =>
+      this.suggestedScores.get(modelIdentity(b))! -
+      this.suggestedScores.get(modelIdentity(a))!;
+    // Stable score sorting preserves alphabetical order for ties. The last
+    // tier retains the registry's alphabetical order, irrespective of scope.
+    scoped.sort(bySuggestionScore);
+    other.sort(bySuggestionScore);
+    const items = (
+      models: AvailableModel[],
+      group: string,
+    ): ModelSelectItem[] =>
+      models.map((model) => ({
+        value: modelIdentity(model),
+        label: renderModelIdentity(modelIdentity(model)),
+        description: describeModel(model, this.scopedIdentities),
+        group,
+      }));
+    return [
+      ...items(scoped, "Suggested matches · scoped models"),
+      ...items(other, "Suggested matches · other models"),
+      ...items(
+        remaining,
+        scoped.length || other.length
+          ? "All other models · A–Z"
+          : "All models · A–Z",
+      ),
+    ];
   }
 
   private describeDraftIdentity(identity: string): string {
@@ -580,6 +654,7 @@ export class OrderedModelEditorComponent extends Container {
 export async function editModelPreferences(
   ctx: ExtensionCommandContext,
   currentModels?: readonly string[],
+  modelSuggestions?: readonly string[],
 ): Promise<readonly string[] | typeof MODEL_EDITOR_CANCEL> {
   if (ctx.mode !== "tui") {
     if (ctx.hasUI) {
@@ -603,6 +678,7 @@ export async function editModelPreferences(
         availableModels,
         scopedModels: ctx.scopedModels,
         initialModels: currentModels,
+        modelSuggestions,
         onDone: (models) => done(models),
         onCancel: () => done(MODEL_EDITOR_CANCEL),
       }),

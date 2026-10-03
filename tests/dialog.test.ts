@@ -113,7 +113,7 @@ test("menu restores selection, navigates, selects, saves, and cancels within bou
   for (const width of [1, 10, 40, 100]) bounded(menu.render(width), width, 12);
 });
 
-test("menu prefixes keep their warning color even on the selected row", () => {
+test("menu values keep their warning color and column even on the selected row", () => {
   const coloredTheme = {
     fg: (color: string, text: string) => {
       if (color === "warning") return `\x1b[33m${text}\x1b[0m`;
@@ -122,14 +122,20 @@ test("menu prefixes keep their warning color even on the selected row", () => {
     },
   } as Theme;
   const menu = new DialogMenu(host(), coloredTheme, "Settings", [
-    { id: "other", label: "Other" },
-    { id: "save", label: "Save and apply", labelPrefix: { text: "(changes)", color: "warning" } },
+    { id: "other", label: "Other", value: "42" },
+    { id: "save", label: "Save and apply", value: "(changes)", valueColor: "warning" },
   ], () => {});
   for (const selected of [false, true]) {
     if (selected) menu.handleInput(DOWN);
     const rendered = menu.render(80).join("\n");
-    assert.match(rendered, /\x1b\[33m\(changes\) \x1b\[0m/);
-    assert.match(stripTerminalSequences(rendered), /\(changes\) Save and apply/);
+    assert.match(rendered, /\x1b\[33m\(changes\)\x1b\[0m/);
+    const plain = stripTerminalSequences(rendered);
+    assert.match(plain, /Save and apply\s+│ \(changes\)/);
+    const lines = plain.split("\n");
+    assert.equal(
+      lines.find((line) => line.includes("(changes)"))!.indexOf("(changes)"),
+      lines.find((line) => line.includes("42"))!.indexOf("42"),
+    );
     for (const width of [1, 10, 40, 100]) bounded(menu.render(width), width, 24);
   }
 });

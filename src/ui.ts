@@ -1062,12 +1062,14 @@ async function editAgentTypesDialog(
     let draft: AgentType = original
       ? structuredClone(original)
       : { name: "new-agent", description: "New agent", systemPrompt: "" };
+    const originalContent = serializeAgentType(draft);
     let selectedId: string | undefined;
     let saveScope: "user" | "project" =
       original?.source === "project" && store.canSaveProject()
         ? "project"
         : "user";
     while (true) {
+      const dirty = !original || serializeAgentType(draft) !== originalContent;
       const field = await dialogMenu(
         ctx,
         `Edit ${sanitizeText(draft.name)} (unsaved)`,
@@ -1077,16 +1079,19 @@ async function editAgentTypesDialog(
           return {
             id: action,
             label: EDIT_FIELD_LABELS[action],
+            valueColor: action === "Save" && dirty ? "warning" as const : undefined,
             value:
-              action === "Source"
-                ? (original?.source ?? "New draft")
-                : action === "Save scope"
-                  ? saveScope === "user"
-                    ? "Global"
-                    : "Trusted project"
-                  : separator >= 0
-                    ? decorated.slice(separator + 2)
-                    : "",
+              action === "Save" && dirty
+                ? "(changes)"
+                : action === "Source"
+                  ? (original?.source ?? "New draft")
+                  : action === "Save scope"
+                    ? saveScope === "user"
+                      ? "Global"
+                      : "Trusted project"
+                    : separator >= 0
+                      ? decorated.slice(separator + 2)
+                      : "",
             help:
               action === "Source"
                 ? (original?.filePath ??
@@ -1165,6 +1170,7 @@ async function editAgentTypesDialog(
           const value = await editModelPreferences(
             ctx,
             getModelPreferences(candidate),
+            candidate.modelSuggestions,
           );
           if (value === MODEL_EDITOR_CANCEL) continue;
           if (value.length === 0) {

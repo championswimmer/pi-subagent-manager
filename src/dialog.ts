@@ -29,10 +29,10 @@ export interface DialogEditorHost extends DialogHost {
 export interface DialogRow {
   id: string;
   label: string;
-  labelPrefix?: { text: string; color: Parameters<Theme["fg"]>[0] };
   /** Trusted formatter receives sanitized text; generated ANSI styling is kept when clipping. */
   renderLabel?: (label: string, theme: Theme) => string;
   value?: string;
+  valueColor?: Parameters<Theme["fg"]>[0];
   help?: string;
 }
 export const DIALOG_OPTIONS = {
@@ -245,21 +245,19 @@ export class DialogMenu {
       ...this.rows.slice(start, start + this.viewport).map((row, i) => {
         const selected = start + i === this.selected;
         const color = (text: string) => selected ? this.theme.fg("accent", text) : text;
-        const prefix = row.labelPrefix
-          ? truncateToWidth(`${dialogText(row.labelPrefix.text)} `, labelWidth, "")
-          : "";
         const plainLabel = dialogText(row.label);
         const label = truncateToWidth(
           row.renderLabel ? row.renderLabel(plainLabel, this.theme) : plainLabel,
-          labelWidth - visibleWidth(prefix),
+          labelWidth,
           "",
           true,
         );
-        const padding = " ".repeat(Math.max(0, labelWidth - visibleWidth(prefix) - visibleWidth(label)));
+        const padding = " ".repeat(Math.max(0, labelWidth - visibleWidth(label)));
+        const value = dialogText(row.value ?? "");
         return color(`${selected ? "›" : " "} `)
-          + (row.labelPrefix ? this.theme.fg(row.labelPrefix.color, prefix) : "")
           + (row.renderLabel ? label : color(label))
-          + color(`${padding} │ ${dialogText(row.value ?? "")}`);
+          + color(`${padding} │ `)
+          + (row.valueColor ? this.theme.fg(row.valueColor, value) : color(value));
       }),
       "",
       ...help.map((line) => this.theme.fg("muted", ` ${line}`)),

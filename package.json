@@ -45,6 +45,7 @@
     "format:check": "prettier --check --print-width 100 src tests agents .github docs/default-agents.md README.md"
   },
   "dependencies": {
+    "fuzzysort": "^4.0.2",
     "shell-quote": "^1.8.3",
     "yaml": "^2.8.1"
   },

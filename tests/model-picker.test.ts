@@ -16,6 +16,7 @@ function availableModel(provider: string, id: string, name = id) {
 
 function createComponent(options?: {
   initialModels?: readonly string[];
+  modelSuggestions?: readonly string[];
   availableModels?: readonly ReturnType<typeof availableModel>[];
   scopedModels?: readonly string[];
   terminalRows?: number;
@@ -41,6 +42,7 @@ function createComponent(options?: {
       return { model } as unknown as ScopedModel;
     }),
     initialModels: options?.initialModels,
+    modelSuggestions: options?.modelSuggestions,
     onDone: (value) => done.push([...value]),
     onCancel: () => {
       cancelled += 1;
@@ -107,6 +109,164 @@ test("ordered model editor searches, annotates scope, and excludes duplicates wh
   activateValue(component, "action:done");
 
   assert.deepEqual(done, [["anthropic/claude-3.7-sonnet", "local/llama3.3"]]);
+});
+
+test("suggested fuzzy matches are ranked scoped first, then unscoped, with an alphabetical remainder", () => {
+  const { component } = createComponent({
+    availableModels: [
+      availableModel("z", "other"),
+      availableModel("b", "sonnet-4", "Sonnet 4"),
+      availableModel("a", "gpt-mini", "GPT Mini"),
+      availableModel("a", "aardvark"),
+      availableModel("c", "snnt", "Snnt"),
+      availableModel("a", "sonnet-4", "Sonnet 4"),
+      availableModel("a", "sonnet-4", "Sonnet 4"),
+    ],
+    scopedModels: ["a/sonnet-4", "c/snnt", "z/other"],
+    // Abbreviation matching is deliberately not a substring search. Overlapping
+    // suggestions and registry duplicates must not create duplicate rows.
+    modelSuggestions: ["snnt", "GPT", "snnt", " ", "GPT Mini"],
+  });
+  assert.deepEqual(
+    component.getCurrentItems().map((item) => item.value),
+    ["c/snnt", "a/sonnet-4", "a/gpt-mini", "b/sonnet-4", "a/aardvark", "z/other"],
+  );
+  const rendered = component.render(200).join("\n");
+  assert.match(rendered, /Suggested matches · scoped models/);
+  assert.match(rendered, /Suggested matches · other models/);
+  assert.match(rendered, /All other models · A–Z/);
+  // Headers aren't selectable; the second down arrow crosses a group boundary.
+  press(component, DOWN, DOWN);
+  assert.equal(component.getSelectList().getSelectedItem()?.value, "a/gpt-mini");
+});
+
+test("bundled suggestions match version separator variants without changing raw identities", () => {
+  const { component } = createComponent({
+    availableModels: [
+      availableModel("openrouter", "anthropic/claude-sonnet-5.5", "Claude Sonnet 5.5"),
+      availableModel("anthropic", "claude-sonnet-5-5", "Claude Sonnet 5.5"),
+      availableModel("amazon-bedrock", "us.anthropic.claude-sonnet-5-5-v1:0", "Claude Sonnet 5.5"),
+      availableModel("anthropic", "claude-sonnet-5-4", "Claude Sonnet 5.4"),
+      availableModel("a", "aardvark"),
+    ],
+    scopedModels: ["anthropic/claude-sonnet-5-5"],
+    modelSuggestions: ["sonnet-5.5"],
+  });
+  assert.deepEqual(
+    component.getCurrentItems().map((item) => item.value),
+    [
+      "anthropic/claude-sonnet-5-5",
+      "amazon-bedrock/us.anthropic.claude-sonnet-5-5-v1:0",
+      "openrouter/anthropic/claude-sonnet-5.5",
+      "a/aardvark",
+      "anthropic/claude-sonnet-5-4",
+    ],
+  );
+  press(component, ..."sonnet-5.5");
+  assert.equal(component.getCurrentItems().length, 3);
+  press(component, ENTER);
+  assert.deepEqual(component.getDraftModels(), ["anthropic/claude-sonnet-5-5"]);
+});
+
+test("suggestions search display names and provider/id, retaining every match beyond ten", () => {
+  const models = Array.from({ length: 25 }, (_, index) =>
+    availableModel("provider", `opaque-${String(index).padStart(2, "0")}`, "Claude Sonnet"),
+  );
+  const { component } = createComponent({
+    availableModels: [...models, availableModel("z", "other")],
+    scopedModels: ["provider/opaque-24"],
+    modelSuggestions: ["cld snt", "PROVIDER/OPAQUE"],
+  });
+  const values = component.getCurrentItems().map((item) => item.value);
+  assert.equal(values.length, 26);
+  assert.equal(values[0], "provider/opaque-24");
+  assert.deepEqual(
+    values.slice(1, 25),
+    models.slice(0, 24).map((model) => `provider/${model.id}`),
+  );
+  assert.equal(values.at(-1), "z/other");
+});
+
+test("typing fuzzy-filters the suggestion tiers; clearing restores them and annotations aren't searched", () => {
+  const { component } = createComponent({
+    modelSuggestions: ["Gemini", "GPT"],
+    scopedModels: ["openai/gpt-4.1"],
+  });
+  const initial = component.getCurrentItems().map((item) => item.value);
+  assert.equal(initial[0], "openai/gpt-4.1");
+  assert.equal(initial[1], "google/gemini-2.5-pro");
+  press(component, ..."gmnp");
+  assert.deepEqual(
+    component.getCurrentItems().map((item) => item.value),
+    ["google/gemini-2.5-pro"],
+  );
+  press(component, ...Array(4).fill("\u007f"));
+  assert.deepEqual(
+    component.getCurrentItems().map((item) => item.value),
+    initial,
+  );
+  press(component, ..."portable preference");
+  assert.equal(component.getCurrentItems().length, 0);
+  assert.match(component.render(100).join("\n"), /No matching models/);
+});
+
+test("missing or unmatched suggestions preserve alphabetical browsing, even with scoped models", () => {
+  for (const modelSuggestions of [undefined, [], [" ", "zzzzzz"]]) {
+    const { component } = createComponent({
+      modelSuggestions,
+      scopedModels: ["openai/gpt-4.1"],
+    });
+    assert.deepEqual(
+      component.getCurrentItems().map((item) => item.value),
+      ["anthropic/claude-3.7-sonnet", "google/gemini-2.5-pro", "local/llama3.3", "openai/gpt-4.1"],
+    );
+    assert.doesNotMatch(component.render(200).join("\n"), /Suggested matches ·/);
+  }
+});
+
+test("suggestion tiers hide already-selected models on add but allow the replaced model", () => {
+  const { component } = createComponent({
+    initialModels: ["openai/gpt-4.1", "anthropic/claude-3.7-sonnet"],
+    modelSuggestions: ["GPT", "Claude"],
+    scopedModels: ["openai/gpt-4.1", "anthropic/claude-3.7-sonnet"],
+  });
+  activateValue(component, "action:add");
+  assert.deepEqual(
+    component.getCurrentItems().map((item) => item.value),
+    ["google/gemini-2.5-pro", "local/llama3.3"],
+  );
+  press(component, ESC);
+  activateValue(component, "entry:0");
+  activateValue(component, "action:replace");
+  assert.deepEqual(
+    component.getCurrentItems().map((item) => item.value),
+    ["openai/gpt-4.1", "google/gemini-2.5-pro", "local/llama3.3"],
+  );
+});
+
+test("group headings keep selected models and footer visible on short terminals", () => {
+  const models = Array.from({ length: 30 }, (_, index) =>
+    availableModel("local", `model-${String(index).padStart(2, "0")}`),
+  );
+  const { component } = createComponent({
+    terminalRows: 12,
+    availableModels: models,
+    modelSuggestions: ["model-0"],
+    scopedModels: ["local/model-09"],
+  });
+  for (const value of ["local/model-09", "local/model-00", "local/model-29"]) {
+    moveSelectionToValue(component, value);
+    for (const width of [3, 18, 40, 80]) {
+      const lines = component.render(width);
+      assert.ok(lines.length <= 10);
+      assert.ok(lines.every((line) => visibleWidth(line) <= width));
+      if (width >= 80) {
+        assert.match(lines.join("\n"), new RegExp(`› ${value}`));
+        assert.match(lines.join("\n"), /Type filter.*Esc back/);
+        assert.match(stripTerminalSequences(lines.at(-1)!), /^╰.*╯$/);
+      }
+    }
+  }
 });
 
 test("ordered model editor warns and annotates portable preferences when scope is empty", () => {
