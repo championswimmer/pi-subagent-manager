@@ -8,6 +8,14 @@ Generated from version tags and merged GitHub pull requests. Do not edit this fi
 
 **Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v0.2.0...v0.3.0
 
+#### [v0.3.2](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.3.2) — Patch release (2026-10-03)
+
+<!-- Release notes generated using configuration in .github/release.yml at v0.3.2 -->
+
+
+
+**Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v0.3.1...v0.3.2
+
 #### [v0.3.1](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.3.1) — Patch release (2026-10-03)
 
 ##### What's Changed
