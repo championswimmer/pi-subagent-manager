@@ -7,7 +7,8 @@ import { IMPORT_REQUEST_PREFIX, markImportOffered, offerAgentImport } from "./pr
 import { ThreadManager } from "./orch/manager.ts";
 import { loadManagerSettings } from "./prefs/settings.ts";
 import { configureAgents } from "./ui/settings-ui.ts";
-import { showAgentStatus, showAgentTree } from "./ui/status-ui.ts";
+import { AgentNavigationController, showAgentStatus } from "./ui/status-ui.ts";
+import { AgentNavigationEditor } from "./ui/agent-navigation-editor.ts";
 import { createDriverFactory } from "./orch/runtime.ts";
 import { createInheritedToolSource } from "./orch/inherited-tools.ts";
 import { subagentPrompt } from "./orch/prompt.ts";
@@ -47,6 +48,49 @@ export default function piSubagent(pi: ExtensionAPI): void {
     return loaded.diagnostics;
   };
   let generation = 0;
+  let navigation = new AgentNavigationController();
+  let navigationEditor: AgentNavigationEditor | undefined;
+  let navigationEditorFactory: Parameters<ExtensionContext["ui"]["setEditorComponent"]>[0];
+  let navigationGeneration = 0;
+  const closeNavigation = (disposeEditor = false) => {
+    navigationGeneration++;
+    navigation.close();
+    if (disposeEditor) {
+      navigationEditor?.dispose();
+      navigationEditor = undefined;
+    }
+  };
+  const installNavigationEditor = (ctx: ExtensionContext, seedHistory: boolean) => {
+    // Pi has one custom-editor slot: integrations owning it can opt out explicitly.
+    if (!ctx.hasUI || ctx.mode !== "tui" || !ctx.ui.setEditorComponent ||
+      process.env.PI_SUBAGENT_NAVIGATION_EDITOR !== "1") return;
+    const existingFactory = ctx.ui.getEditorComponent?.();
+    if (existingFactory && existingFactory !== navigationEditorFactory) return;
+    // The host only transfers raw text, not cursor/undo/expanded-paste state.
+    if (ctx.ui.getEditorText?.()) return;
+    const history = buildSessionContext(ctx.sessionManager.getBranch()).messages.flatMap((message) => {
+      if (message.role !== "user") return [];
+      const content = message.content;
+      return [typeof content === "string" ? content : content
+        .filter((block) => block.type === "text").map((block) => block.text).join("")];
+    });
+    navigationEditorFactory = (tui, theme, keys) => {
+      const editor = new AgentNavigationEditor(tui, theme, keys, {
+        // Initial startup hydrates after session_start; replacement editors do not.
+        initialHistory: seedHistory ? history : undefined,
+        generation: () => navigationGeneration,
+        canOpen: () => manager !== undefined && context?.mode === "tui" &&
+          limits.subagentMode !== "off" && !navigation.isOpen,
+        openTree: () => manager && context
+          ? navigation.open(context, manager.scope("/root")) : undefined,
+        onError: (error) => context?.ui.notify(
+          error instanceof Error ? error.message : String(error), "error"),
+      });
+      navigationEditor = editor;
+      return editor;
+    };
+    ctx.ui.setEditorComponent(navigationEditorFactory);
+  };
   let persistenceSignature = "";
   let migrationRequested = false;
   let importInProgress = false;
@@ -213,8 +257,10 @@ export default function piSubagent(pi: ExtensionAPI): void {
     };
   });
 
-  const attachSession = async (ctx: ExtensionContext) => {
+  const attachSession = async (ctx: ExtensionContext, installEditor = false, seedHistory = true) => {
     const token = ++generation;
+    closeNavigation(installEditor);
+    navigation = new AgentNavigationController();
     // session_start already belongs to the replacement session: never append the old registry here.
     if (manager) await manager.shutdown();
     inheritedTools.reset();
@@ -246,6 +292,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
       },
     });
     manager = instance;
+    if (installEditor) installNavigationEditor(ctx, seedHistory);
     const entries = ctx.sessionManager.getBranch();
     const entry = [...entries]
       .reverse()
@@ -274,12 +321,13 @@ export default function piSubagent(pi: ExtensionAPI): void {
     if (limits.subagentMode !== "off" && diagnostics.length)
       ctx.ui.notify(diagnostics.join("\n"), "warning");
   };
-  pi.on("session_start", async (_event, ctx) => {
-    await attachSession(ctx);
+  pi.on("session_start", async (event, ctx) => {
+    await attachSession(ctx, true, event.reason !== "startup");
     if (limits.subagentMode !== "off") await importAgents(ctx, true);
   });
   pi.on("session_tree", async (_event, ctx) => attachSession(ctx));
   const stopWorkingThreads = async () => {
+    closeNavigation();
     if (!manager) return;
     for (const thread of manager.list()) {
       const state = manager.get(thread.path).state;
@@ -292,6 +340,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
   pi.on("session_before_fork", stopWorkingThreads);
   pi.on("session_shutdown", async () => {
     generation++;
+    closeNavigation(true);
     await manager?.shutdown();
     persist();
     if (context?.hasUI) context.ui.setWidget("pi-subagent", undefined);
@@ -357,7 +406,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
       } else if (command === "status") {
         await showAgentStatus(ctx, requireManager().scope("/root"));
       } else if (command === "tree") {
-        await showAgentTree(ctx, requireManager().scope("/root"), rest.join(" ") || undefined);
+        await navigation.open(ctx, requireManager().scope("/root"), rest.join(" ") || undefined);
       } else
         ctx.ui.notify(
           "Usage: /agents [tree [path] | status | settings | types | import | reload]",

@@ -1,0 +1,176 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { SessionManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
+import { setKeybindings, TuiMainScreen, type Terminal } from "@earendil-works/pi-tui";
+import piSubagent from "../src/index.ts";
+import { markImportOffered } from "../src/prefs/agent-import.ts";
+import { AgentNavigationEditor } from "../src/ui/agent-navigation-editor.ts";
+import { StatusDialog } from "../src/ui/status-ui.ts";
+import { createDialogDriver } from "./helpers/dialogDriver.ts";
+
+class FakeTerminal implements Terminal {
+  columns = 80;
+  rows = 24;
+  kittyProtocolActive = false;
+  start() {}
+  stop() {}
+  async drainInput() {}
+  write() {}
+  moveBy() {}
+  hideCursor() {}
+  showCursor() {}
+  clearLine() {}
+  clearFromCursor() {}
+  clearScreen() {}
+  setTitle() {}
+  setProgress() {}
+}
+const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+async function fixture(
+  run: (state: {
+    editor(): AgentNavigationEditor | undefined;
+    installations(): number;
+    command: any;
+    ctx: ExtensionContext;
+    hooks: Map<string, Function>;
+    driver: ReturnType<typeof createDialogDriver>;
+  }) => Promise<void>,
+  options: {
+    mode?: "tui" | "rpc"; editorFlag?: string; hasUI?: boolean; draft?: string;
+    competingEditor?: boolean; reason?: "startup" | "resume";
+  } = {},
+) {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-agent-navigation-"));
+  const oldDir = process.env.PI_CODING_AGENT_DIR;
+  const oldFlag = process.env.PI_SUBAGENT_NAVIGATION_EDITOR;
+  process.env.PI_CODING_AGENT_DIR = cwd;
+  process.env.PI_SUBAGENT_NAVIGATION_EDITOR = options.editorFlag ?? "1";
+  markImportOffered(cwd);
+  const hooks = new Map<string, Function>();
+  const sessionManager = SessionManager.inMemory(cwd);
+  sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
+  const keys = new KeybindingsManager();
+  setKeybindings(keys);
+  const host = new TuiMainScreen(new FakeTerminal());
+  const theme = { fg: (_color: string, text: string) => text };
+  const driver = createDialogDriver({ theme: theme as any, rows: 24 });
+  driver.onChild = (component) => {
+    assert.ok(component instanceof StatusDialog);
+    component.handleInput("\x1b");
+    return true;
+  };
+  let editor: AgentNavigationEditor | undefined;
+  let installations = 0;
+  let command: any;
+  const pi = {
+    on: (event: string, handler: Function) => hooks.set(event, handler),
+    registerTool() {},
+    registerCommand: (_name: string, definition: any) => { command = definition; },
+    appendEntry: (type: string, data: unknown) => sessionManager.appendCustomEntry(type, data),
+    sendMessage() {},
+  } as unknown as ExtensionAPI;
+  const ctx = {
+    cwd, sessionManager,
+    hasUI: options.hasUI ?? true,
+    mode: options.mode ?? "tui",
+    isProjectTrusted: () => false,
+    ui: {
+      setWidget() {}, notify() {}, custom: driver.custom,
+      getEditorText: () => options.draft ?? "",
+      getEditorComponent: () => options.competingEditor ? (() => ({})) : undefined,
+      setEditorComponent(factory: Function) {
+        installations++;
+        editor = factory(host, {
+          borderColor: (text: string) => text,
+          selectList: {
+            selectedPrefix: (text: string) => text,
+            selectedText: (text: string) => text,
+            description: (text: string) => text,
+            scrollInfo: (text: string) => text,
+            noMatch: (text: string) => text,
+          },
+        }, keys);
+        editor!.focused = true;
+        editor!.render(80);
+      },
+    },
+  } as unknown as ExtensionContext;
+  try {
+    piSubagent(pi);
+    await hooks.get("session_start")!({ reason: options.reason ?? "resume" }, ctx);
+    await run({ editor: () => editor, installations: () => installations, command, ctx, hooks, driver });
+  } finally {
+    await hooks.get("session_shutdown")?.({}, ctx);
+    host.stop();
+    if (oldDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = oldDir;
+    if (oldFlag === undefined) delete process.env.PI_SUBAGENT_NAVIGATION_EDITOR;
+    else process.env.PI_SUBAGENT_NAVIGATION_EDITOR = oldFlag;
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}
+
+test("root installs the public editor and command/gesture use the same tree without changing draft", async () => {
+  await fixture(async ({ editor, command, ctx, driver }) => {
+    const main = editor()!;
+    main.setText("unfinished\ndraft");
+    const cursor = main.getCursor();
+    main.handleInput("\x1b[B");
+    await settle();
+    assert.equal(driver.stats.outerOpens, 1);
+    assert.equal(driver.stats.outerCompletions, 1);
+    assert.equal(main.getText(), "unfinished\ndraft");
+    assert.deepEqual(main.getCursor(), cursor);
+    await command.handler("tree", ctx);
+    assert.equal(driver.stats.outerOpens, 2);
+    main.setText("");
+    main.handleInput("\x1b[A");
+    assert.equal(main.getText(), "old prompt", "resumed session history is hydrated");
+  });
+});
+
+test("startup lets the host hydrate prompt history exactly once", async () => {
+  await fixture(async ({ editor }) => {
+    const main = editor()!;
+    main.handleInput("\x1b[A");
+    assert.equal(main.getText(), "");
+    main.addToHistory("old prompt"); // renderInitialMessages runs after session_start.
+    main.handleInput("\x1b[A");
+    assert.equal(main.getText(), "old prompt");
+  }, { reason: "startup" });
+});
+
+test("session tree does not reinstall the editor and root shutdown cancels queued navigation", async () => {
+  await fixture(async ({ editor, installations, hooks, ctx, driver }) => {
+    const main = editor()!;
+    main.setText("preserved draft");
+    await hooks.get("session_tree")!({}, ctx);
+    assert.equal(installations(), 1);
+    assert.equal(editor(), main);
+    assert.equal(main.getText(), "preserved draft");
+    main.handleInput("\x1b[B");
+    await hooks.get("session_shutdown")!({}, ctx);
+    await settle();
+    assert.equal(driver.stats.outerOpens, 0);
+  });
+});
+
+test("editor opt-out and non-TUI contexts leave the custom-editor slot untouched", async () => {
+  for (const options of [
+    { editorFlag: "0" }, { editorFlag: "" }, { mode: "rpc" as const }, { hasUI: false },
+    { draft: "existing draft" }, { competingEditor: true },
+  ]) {
+    await fixture(async ({ installations, command, ctx, driver }) => {
+      assert.equal(installations(), 0);
+      if (options.mode === undefined && options.hasUI !== false) {
+        await command.handler("tree", ctx);
+        assert.equal(driver.stats.outerOpens, 1, "opt-out retains command navigation");
+      }
+    }, options);
+  }
+});
