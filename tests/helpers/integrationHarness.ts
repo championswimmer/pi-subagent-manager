@@ -21,7 +21,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import piSubagent from "../../src/index.ts";
 import type { SavedThread } from "../../src/types.ts";
-import type { ManagerSettings } from "../../src/settings.ts";
+import type { ManagerSettings } from "../../src/prefs/settings.ts";
 
 export const REGISTRY_ENTRY = "pi-subagent:registry:v1";
 

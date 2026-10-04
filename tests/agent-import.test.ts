@@ -17,8 +17,8 @@ import {
   importWasOffered,
   markImportOffered,
   offerAgentImport,
-} from "../src/agent-import.ts";
-import { ConfigStore } from "../src/config.ts";
+} from "../src/prefs/agent-import.ts";
+import { ConfigStore } from "../src/prefs/config.ts";
 
 function fixture(t: TestContext) {
   const root = mkdtempSync(join(tmpdir(), "pi-agent-import-"));

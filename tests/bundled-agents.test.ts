@@ -14,9 +14,9 @@ import {
   createReadToolDefinition,
   createWriteToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { ConfigStore, parseAgentType, selectTools } from "../src/config.ts";
-import { selectPreferredModel } from "../src/models.ts";
-import { agentTools } from "../src/tools.ts";
+import { ConfigStore, parseAgentType, selectTools } from "../src/prefs/config.ts";
+import { selectPreferredModel } from "../src/prefs/models.ts";
+import { agentTools } from "../src/orch/tools.ts";
 
 const BUNDLED_DIR = fileURLToPath(new URL("../agents/", import.meta.url));
 const NAMES = ["architect", "coder", "researcher", "reviewer", "tasker", "writer"];

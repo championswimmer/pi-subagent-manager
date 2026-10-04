@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { Theme, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { AGENT_COLORS } from "../src/config.ts";
-import { buildStatusTree, type StatusRow } from "../src/status-ui.ts";
-import { renderAgentTree, updateWidget } from "../src/ui.ts";
+import { AGENT_COLORS } from "../src/prefs/config.ts";
+import { buildStatusTree, type StatusRow } from "../src/ui/status-ui.ts";
+import { renderAgentTree, updateWidget } from "../src/ui/ui.ts";
 import type { ThreadView } from "../src/types.ts";
 
 function thread(path: string, patch: Partial<ThreadView> = {}): ThreadView {

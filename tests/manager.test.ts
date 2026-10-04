@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { ThreadManager } from "../src/manager.ts";
+import { ThreadManager } from "../src/orch/manager.ts";
 import type {
   AgentDriver,
   AgentType,

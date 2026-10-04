@@ -14,7 +14,7 @@ import {
   type OverlayHandle,
   type Terminal,
 } from "@earendil-works/pi-tui";
-import { AGENT_COLORS, ConfigStore } from "../src/config.ts";
+import { AGENT_COLORS, ConfigStore } from "../src/prefs/config.ts";
 import {
   DIALOG_OPTIONS,
   DialogEditor,
@@ -24,9 +24,9 @@ import {
   dialogInput,
   frameDialog,
   withDialogSession,
-} from "../src/dialog.ts";
-import { configureAgents } from "../src/settings-ui.ts";
-import { DEFAULT_MANAGER_SETTINGS, loadManagerSettings } from "../src/settings.ts";
+} from "../src/ui/dialog.ts";
+import { configureAgents } from "../src/ui/settings-ui.ts";
+import { DEFAULT_MANAGER_SETTINGS, loadManagerSettings } from "../src/prefs/settings.ts";
 import { createDialogDriver } from "./helpers/dialogDriver.ts";
 
 const theme = {

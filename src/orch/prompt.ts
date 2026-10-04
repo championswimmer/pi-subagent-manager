@@ -1,4 +1,4 @@
-import type { ManagerSettings } from "./settings.ts";
+import type { ManagerSettings } from "../prefs/settings.ts";
 
 /** Root-only guidance: child SDK sessions use their own worker prompt. */
 export function subagentPrompt(settings: ManagerSettings): string | undefined {

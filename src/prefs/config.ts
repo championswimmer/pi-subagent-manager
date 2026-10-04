@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { isMap, isScalar, parseDocument, stringify } from "yaml";
 import { getModelPreferences } from "./models.js";
-import { THINKING_LEVELS, type AgentType } from "./types.js";
+import { THINKING_LEVELS, type AgentType } from "../types.js";
 
 // Pi semantic color tokens, resolved as concrete colors for agent name backgrounds.
 export const AGENT_COLORS = [
@@ -292,7 +292,7 @@ export class ConfigStore {
     const layers: [string, NonNullable<AgentType["source"]>][] = [
       [
         this.options.bundledDir ??
-          fileURLToPath(new URL("../agents/", import.meta.url)),
+          fileURLToPath(new URL("../../agents/", import.meta.url)),
         "bundled",
       ],
       ...this.scopeDirectories("user").map(

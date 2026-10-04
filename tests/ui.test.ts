@@ -20,11 +20,11 @@ import {
   type ThemeColor,
 } from "@earendil-works/pi-coding-agent";
 import type { ThreadView } from "../src/types.ts";
-import { DialogEditor, DialogMenu, dialogHeight } from "../src/dialog.ts";
-import { configureAgents } from "../src/settings-ui.ts";
-import { DEFAULT_MANAGER_SETTINGS } from "../src/settings.ts";
+import { DialogEditor, DialogMenu, dialogHeight } from "../src/ui/dialog.ts";
+import { configureAgents } from "../src/ui/settings-ui.ts";
+import { DEFAULT_MANAGER_SETTINGS } from "../src/prefs/settings.ts";
 import { bindDialogDriver, createDialogDriver, dialogDriverFor } from "./helpers/dialogDriver.ts";
-import { AGENT_COLORS, ConfigStore, parseAgentType, serializeAgentType } from "../src/config.ts";
+import { AGENT_COLORS, ConfigStore, parseAgentType, serializeAgentType } from "../src/prefs/config.ts";
 import {
   editAgentTypes,
   editorArguments,
@@ -33,7 +33,7 @@ import {
   showThreads,
   updateWidget,
   type ThreadController,
-} from "../src/ui.ts";
+} from "../src/ui/ui.ts";
 
 const CONTROL = /[\x00-\x1f\x7f-\x9f]/;
 

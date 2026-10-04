@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { getModelPreferences, selectPreferredModel } from "../src/models.ts";
-import { agentTools } from "../src/tools.ts";
+import { getModelPreferences, selectPreferredModel } from "../src/prefs/models.ts";
+import { agentTools } from "../src/orch/tools.ts";
 import type { AgentType } from "../src/types.ts";
 
 const eligible = (...ids: string[]) =>
