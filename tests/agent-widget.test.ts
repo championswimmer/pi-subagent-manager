@@ -321,10 +321,7 @@ test("sanitizes controls and clips unicode without dropping right counters", () 
 test("always shows navigation and interrupt help below the agents", () => {
   for (const state of ["running", "completed"] as const) {
     const lines = plain(renderAgentTree([thread("/root/job", { state })], 80, theme));
-    assert.deepEqual(lines.slice(-2), [
-      "/agents tree → i → Stop · Esc: abort main, not subagents",
-      "Ctrl+C: clear input · twice: exit Pi + stop all agents",
-    ]);
+    assert.deepEqual(lines.slice(-1), ["Esc: abort main, not subagents"]);
     assert.doesNotMatch(lines.join("\n"), /more agents/);
   }
 });
@@ -338,18 +335,22 @@ test("bounds the widget to twelve lines and counts every omitted real agent", ()
       status: `status ${index}`,
     }),
   );
+  // Each agent takes two lines; five fit exactly, otherwise one slot becomes the omitted count.
   const five = renderAgentTree(many.slice(0, 5), 80, theme);
   assert.equal(five.length, 12);
-  assert.match(plain(five).at(-3)!, /^\+1 more agents$/);
   assert.equal(
-    plain(five).some((line) => line.includes("Job 4")),
+    plain(five).some((line) => line.includes("more agents")),
     false,
   );
   const six = renderAgentTree(many, 80, theme);
-  assert.equal(six.length, 12);
-  assert.match(plain(six).at(-3)!, /^\+2 more agents$/);
+  assert.equal(six.length, 11);
+  assert.match(plain(six).at(-2)!, /^\+2 more agents$/);
+  assert.equal(
+    plain(six).some((line) => line.includes("Job 4")),
+    false,
+  );
   const four = renderAgentTree(many.slice(0, 4), 80, theme);
-  assert.equal(four.length, 11);
+  assert.equal(four.length, 10);
   assert.equal(
     plain(four).some((line) => line.includes("more agents")),
     false,
@@ -366,9 +367,9 @@ test("bounds the widget to twelve lines and counts every omitted real agent", ()
     ),
   ];
   const packed = renderAgentTree(nested, 90, theme);
-  assert.equal(packed.length, 12);
+  assert.equal(packed.length, 11);
   assert.match(plain(packed)[0]!, /7 live · 0 paused$/);
-  assert.match(plain(packed).at(-3)!, /^\+3 more agents$/);
+  assert.match(plain(packed).at(-2)!, /^\+3 more agents$/);
   assert.ok(indexOf(packed, "Parent") < indexOf(packed, "Child 0"));
   assert.match(plain(packed).join("\n"), /Child 2/);
   assert.equal(
@@ -392,11 +393,11 @@ test("live branches cannot be hidden by settled descendants", () => {
     100,
     theme,
   );
-  assert.equal(lines.length, 12);
+  assert.equal(lines.length, 11);
   assert.match(plain(lines)[0]!, /2 live · 0 paused$/);
   assert.ok(indexOf(lines, "Active parent") < indexOf(lines, "Settled child 0"));
   assert.ok(indexOf(lines, "Other active branch") >= 0);
-  assert.match(plain(lines).at(-3)!, /^\+2 more agents/);
+  assert.match(plain(lines).at(-2)!, /^\+2 more agents/);
 });
 
 test("cycle rendering stays finite and keeps both agents with their parent row", () => {

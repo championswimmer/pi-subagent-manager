@@ -34,7 +34,8 @@ const ROOT = "/root";
 const INACTIVE_STATES = new Set(["paused", "stopped", "failed", "completed"]);
 const TITLE = "Agents status";
 const TREE_TITLE = "Agents tree";
-const FOOTER = "Esc close · ↑↓ select · ←→ fold · PgUp/PgDn · Enter inspect · r refresh";
+const FOOTER =
+  "Esc close · ↑↓ select · ←→ fold · PgUp/PgDn · Enter inspect · r refresh · Ctrl+C stop all";
 
 function agentCount(threads: readonly { path?: string }[]): number {
   const paths = new Set<string>();
@@ -127,6 +128,22 @@ export class StatusDialog {
     this.timer = undefined;
   }
 
+  /** Stop every live agent. Stopping a subtree covers its descendants, so only top-most live paths are sent. */
+  private stopAll(): void {
+    const live = this.service
+      .list()
+      .filter((thread) => thread.path !== ROOT && (thread.state === "starting" || thread.state === "running"))
+      .map((thread) => thread.path);
+    const tops = live.filter((path) => !live.some((other) => path.startsWith(`${other}/`)));
+    for (const path of tops) {
+      void this.service
+        .stop(path)
+        .catch(() => {})
+        .finally(() => this.host.requestRender());
+    }
+    this.host.requestRender();
+  }
+
   private rows(): StatusRow[] {
     return buildStatusTree(this.service.list(), this.collapsed);
   }
@@ -146,6 +163,10 @@ export class StatusDialog {
 
   handleInput(data: string): void {
     const keys = getKeybindings();
+    if (matchesKey(data, Key.ctrl("c"))) {
+      this.stopAll();
+      return;
+    }
     if (keys.matches(data, "tui.select.cancel")) {
       this.done(undefined);
       return;
@@ -267,7 +288,7 @@ export class StatusDialog {
       this.heading(rows, start, treeCount),
       body,
       this.navigation
-        ? "Esc main · ↑↓ select · ←→ fold · Enter watch/main · i Actions · Ctrl+Q main"
+        ? "Esc main · ↑↓ select · ←→ fold · i Actions · Ctrl+C stop all"
         : FOOTER,
     );
   }

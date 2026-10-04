@@ -421,10 +421,7 @@ export function renderAgentTree(
     theme.fg("muted", `${live} live · ${paused} paused`),
     columns,
   );
-  const help = [
-    "/agents tree → i → Stop · Esc: abort main, not subagents",
-    "Ctrl+C: clear input · twice: exit Pi + stop all agents",
-  ];
+  const help = ["Esc: abort main, not subagents"];
   // Reserve help even when every agent fits; overflow must not push it out.
   const rowBudget = MAX_WIDGET_LINES - 1 - help.length;
   let visible = takeWidgetRows(rows, rowBudget);

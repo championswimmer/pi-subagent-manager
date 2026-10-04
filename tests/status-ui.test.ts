@@ -929,3 +929,24 @@ test("agent tree shows the type badge and mutes inactive agents with the pi mute
   assert.match(out, /<muted>[^\n]*reviewer[^\n]*\/root\/b[^\n]*<\/muted>/);
   assert.equal(out.includes("[reviewer]"), false);
 });
+
+test("Ctrl+C in the tree stops every live agent once via its top-most live ancestor and is hinted", async () => {
+  const threads = [
+    thread("/root/a", { parent: "/root", state: "running" }),
+    thread("/root/a/b", { parent: "/root/a", state: "running" }),
+    thread("/root/c", { parent: "/root", state: "completed" }),
+    thread("/root/d", { parent: "/root", state: "starting" }),
+  ];
+  const stopped: string[] = [];
+  const base = service(() => threads);
+  const dialog = new StatusDialog(
+    host(24),
+    theme,
+    { ...base, stop: async (path: string) => (stopped.push(path), threads[0]!) } as ThreadService,
+    () => assert.fail("Ctrl+C must not close the tree"),
+  );
+  assert.match(plain(dialog.render(160)), /Ctrl\+C stop all/);
+  dialog.handleInput("\x03");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(stopped.sort(), ["/root/a", "/root/d"]);
+});
