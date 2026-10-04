@@ -3,6 +3,7 @@ import test from "node:test";
 import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
   getKeybindings,
+  rgbColor,
   setKeybindings,
   KeybindingsManager,
   TUI_KEYBINDINGS,
@@ -13,6 +14,7 @@ import {
   type Component,
   type OverlayOptions,
 } from "@earendil-works/pi-tui";
+import { AGENT_COLORS } from "../src/prefs/config.ts";
 import { DialogMenu, dialogHeight, type DialogHost } from "../src/ui/dialog.ts";
 import {
   buildStatusTree,
@@ -25,7 +27,11 @@ import { LiveAgentView } from "../src/ui/live-agent-view.ts";
 import { createDialogDriver } from "./helpers/dialogDriver.ts";
 import type { ThreadService, ThreadView } from "../src/types.ts";
 
-const theme = { fg: (_token: string, text: string) => text } as Theme;
+const theme = {
+  fg: (_token: string, text: string) => text,
+  colors: Object.fromEntries(AGENT_COLORS.map((color) => [color, rgbColor(238, 238, 238)])),
+  style: (text: string) => text,
+} as unknown as Theme;
 const DOWN = "\x1b[B";
 const RIGHT = "\x1b[C";
 const LEFT = "\x1b[D";
@@ -905,4 +911,21 @@ test("host mount rejection restores scoped keybindings even without component di
   );
   assert.equal(getKeybindings(), previous);
   assert.equal(controller.isOpen, false);
+});
+
+test("agent tree shows the type badge and mutes inactive agents with the pi muted token", () => {
+  const tagged = {
+    fg: (token: string, text: string) => `<${token}>${text}</${token}>`,
+    colors: theme.colors,
+    style: (text: string) => `[${text.trim()}]`,
+  } as unknown as Theme;
+  const threads = [
+    thread("/root/a", { parent: "/root", type: "coder", state: "running" }),
+    thread("/root/b", { parent: "/root", type: "reviewer", state: "stopped" }),
+  ];
+  const dialog = new StatusDialog(host(24, () => {}), tagged, service(() => threads), () => {});
+  const out = dialog.render(100).join("\n");
+  assert.match(out, /\[coder\] \/root\/a/);
+  assert.match(out, /<muted>[^\n]*reviewer[^\n]*\/root\/b[^\n]*<\/muted>/);
+  assert.equal(out.includes("[reviewer]"), false);
 });

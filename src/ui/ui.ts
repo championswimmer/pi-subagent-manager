@@ -88,7 +88,7 @@ function contrastPill(
   });
 }
 
-function agentTypeBadge(
+export function agentTypeBadge(
   type: string,
   color: string | undefined,
   theme: AgentBadgeTheme,

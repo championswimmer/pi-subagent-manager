@@ -25,12 +25,13 @@ import {
 } from "./dialog.ts";
 import type { ThreadService } from "../types.ts";
 import { buildStatusTree, type StatusRow } from "./thread-tree.ts";
-import { showThreads, threadMetrics } from "./ui.ts";
+import { agentTypeBadge, showThreads, threadMetrics } from "./ui.ts";
 import { LiveAgentView, fillViewport, type AgentViewportState } from "./live-agent-view.ts";
 
 export { buildStatusTree, type StatusRow };
 
 const ROOT = "/root";
+const INACTIVE_STATES = new Set(["paused", "stopped", "failed", "completed"]);
 const TITLE = "Agents status";
 const TREE_TITLE = "Agents tree";
 const FOOTER = "Esc close · ↑↓ select · ←→ fold · PgUp/PgDn · Enter inspect · r refresh";
@@ -199,11 +200,34 @@ export class StatusDialog {
 
   private line(row: StatusRow, selected: boolean): string {
     const marker = row.hasChildren ? (this.collapsed.has(row.path) ? "▸ " : "▾ ") : "";
-    const text = ` ${row.prefix}${selected ? "›" : " "} ${marker}${label(row)}`;
-    if (selected) return this.theme.fg("accent", text);
-    if (row.thread?.state === "failed") return this.theme.fg("error", text);
-    if (row.thread?.state === "paused") return this.theme.fg("warning", text);
-    return text;
+    const head = ` ${row.prefix}${selected ? "›" : " "} ${marker}`;
+    const thread = row.thread;
+    if (!thread) {
+      const text = `${head}${label(row)}`;
+      return selected ? this.theme.fg("accent", text) : text;
+    }
+    const inactive = INACTIVE_STATES.has(thread.state);
+    if (inactive) {
+      // Completed fades furthest (dim); the state word keeps a theme hint for done/failed.
+      const base = thread.state === "completed" ? "dim" : "muted";
+      const hint =
+        thread.state === "completed" ? "success" : thread.state === "failed" ? "error" : base;
+      const state = dialogText(thread.state);
+      const path = dialogText(thread.path);
+      const status = dialogText(thread.status);
+      return [
+        this.theme.fg(selected ? "accent" : base, head),
+        this.theme.fg(base, `${dialogText(thread.type)}  ${path}  `),
+        this.theme.fg(hint, state),
+        this.theme.fg(base, `  ${status}`),
+      ].join("");
+    }
+    const rest = [thread.path, thread.state, thread.status]
+      .map((part) => dialogText(part))
+      .join("  ");
+    if (selected)
+      return `${this.theme.fg("accent", head)}${agentTypeBadge(thread.type, thread.color, this.theme)} ${this.theme.fg("accent", rest)}`;
+    return `${head}${agentTypeBadge(thread.type, thread.color, this.theme)} ${rest}`;
   }
 
   private detail(row: StatusRow | undefined): string[] {

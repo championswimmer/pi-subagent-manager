@@ -9,7 +9,8 @@ import {
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { CombinedAutocompleteProvider } from "@earendil-works/pi-tui";
+import { CombinedAutocompleteProvider, rgbColor } from "@earendil-works/pi-tui";
+import { AGENT_COLORS } from "../src/prefs/config.ts";
 import piSubagent from "../src/index.ts";
 import { loadManagerSettings } from "../src/prefs/settings.ts";
 import { IMPORT_REQUEST_PREFIX, importWasOffered, markImportOffered } from "../src/prefs/agent-import.ts";
@@ -43,7 +44,11 @@ async function withCommands(
   const notifications: string[] = [];
   const widgets: unknown[] = [];
   const driver = createDialogDriver({
-    theme: { fg: (_token: string, text: string) => text } as Theme,
+    theme: {
+      fg: (_token: string, text: string) => text,
+      colors: Object.fromEntries(AGENT_COLORS.map((color) => [color, rgbColor(238, 238, 238)])),
+      style: (text: string) => text,
+    } as unknown as Theme,
     width: 100,
     choices: replies,
     unified: true,
