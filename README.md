@@ -68,11 +68,11 @@ They inherit your current model until you set preferences. Details: [docs/defaul
 | ---------------- | ------------------------------------------------------ |
 | `/agents`        | Settings (mode, limits, model picking, tool filtering) |
 | `/agents types`  | Agent-type browser and editor                          |
-| `/agents tree`   | Live tree of all agents (`/agents status` is an alias) |
+| `/agents tree`   | Fullscreen tree and read-only live watcher (`/agents status` is an alias) |
 | `/agents import` | Import agents from other subagent extensions           |
 | `/agents reload` | Reload definitions and settings                        |
 
-A compact live **Agents** tree also sits above the input box.
+A compact live **Agents** tree also sits above the input box. In the fullscreen tree, **Enter** watches an agent, **Escape** returns, and **i** opens existing thread actions. Optional exhausted-Down editor entry is experimental: set `PI_SUBAGENT_NAVIGATION_EDITOR=1`. See [live navigation](docs/tools-and-ui.md#live-agent-navigation-read-only) for controls and compatibility.
 
 ## Docs
 
