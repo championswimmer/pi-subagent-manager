@@ -3,5 +3,8 @@ node_modules/
 .DS_Store
 coverage/
 
+# Local investigation and implementation plans
+/.agents/plans/
+
 # Local subagent harness settings (not agent type definitions)
 .pi/subagents.json

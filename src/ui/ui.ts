@@ -217,7 +217,7 @@ export function renderThreads(
 }
 
 const WIDGET_ROOT = "/root";
-const MAX_WIDGET_LINES = 10;
+const MAX_WIDGET_LINES = 12;
 const AGENT_WIDGET_PLACEMENT = { placement: "aboveEditor" as const };
 
 function statePriority(state: ThreadView["state"] | undefined): number {
@@ -421,10 +421,16 @@ export function renderAgentTree(
     theme.fg("muted", `${live} live · ${paused} paused`),
     columns,
   );
-  let visible = takeWidgetRows(rows, MAX_WIDGET_LINES - 1);
+  const help = [
+    "/agents tree → i → Stop · Esc: abort main, not subagents",
+    "Ctrl+C: clear input · twice: exit Pi + stop all agents",
+  ];
+  // Reserve help even when every agent fits; overflow must not push it out.
+  const rowBudget = MAX_WIDGET_LINES - 1 - help.length;
+  let visible = takeWidgetRows(rows, rowBudget);
   let omitted = agents.length - visible.filter((row) => row.thread).length;
   if (omitted > 0) {
-    visible = takeWidgetRows(rows, MAX_WIDGET_LINES - 2);
+    visible = takeWidgetRows(rows, rowBudget - 1);
     omitted = agents.length - visible.filter((row) => row.thread).length;
   }
   const lines = [heading];
@@ -439,12 +445,15 @@ export function renderAgentTree(
   if (omitted > 0) {
     lines.push(
       truncateToWidth(
-        theme.fg("muted", `+${omitted} more agents · /agents tree`),
+        theme.fg("muted", `+${omitted} more agents`),
         columns,
         "",
       ),
     );
   }
+  lines.push(
+    ...help.map((line) => truncateToWidth(theme.fg("muted", line), columns, "")),
+  );
   return lines;
 }
 

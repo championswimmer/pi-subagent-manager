@@ -77,9 +77,20 @@ Run `python3 scripts/live-agent-navigation-smoke.py` after `npm install` for cre
 
 ## Agents widget
 
-A compact tree above the input editor, at most ten lines.
+A compact tree above the input editor, at most twelve lines including two help lines.
 
 - Each row: colored type pill, path, state, task, active time, input `↑` / output `↓` tokens.
 - A second, indented line shows latest activity.
 - Active branches are shown first; overflow is counted, not listed.
 - Time freezes while paused and resumes on continue.
+- The footer always shows tree navigation and the default interrupt keys, including when agents overflow.
+
+### Interrupts and stopping agents
+
+With the main input focused (default keybindings):
+
+- **Esc** aborts the main turn (including a pending `agent_wait` or foreground spawn wait), **not the subagents**. Already-started subagents keep running.
+- **Ctrl+C** clears the input; it does not stop the main turn or subagents.
+- **Ctrl+C twice quickly** (within 500 ms) exits Pi. Session shutdown cooperatively stops all agents, retaining their sessions.
+
+Inside the tree/watcher, **Esc** returns to the previous view without stopping an agent. To stop one subtree without exiting Pi, open **`/agents tree`**, select an agent, press **i**, and choose **Stop**. This stops that agent and its working descendants; other branches continue. Cancellation is cooperative, not a guarantee of killing external processes.
