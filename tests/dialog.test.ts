@@ -21,6 +21,7 @@ import {
   DialogMenu,
   DialogSession,
   dialogHeight,
+  dialogInput,
   frameDialog,
   withDialogSession,
 } from "../src/dialog.ts";
@@ -154,6 +155,36 @@ test("menu wraps long help text and reserves space for it", () => {
     const shortMenu = new DialogMenu(host(height), theme, "Settings", rows, () => {}, "19");
     for (const width of [1, 10, 40, 100]) bounded(shortMenu.render(width), width, height);
   }
+});
+
+test("menu and input help preserve explicit newlines while sanitizing and wrapping", async () => {
+  const help = "First option\nSecond option\r\nThird\x00 option\n" + "Long explanation ".repeat(8);
+  const menu = new DialogMenu(
+    host(),
+    theme,
+    "Settings",
+    [{ id: "field", label: "Field", help }],
+    () => {},
+  );
+  const check = (lines: string[]) => {
+    bounded(lines, 60, 24);
+    const plain = lines.map(stripTerminalSequences).map((line) => line.slice(1, -1).trim());
+    for (const text of ["First option", "Second option", "Third  option"])
+      assert.ok(plain.includes(text), `${text} has its own line`);
+    assert.ok(lines.every((line) => !/[\n\r\x00]/.test(line)));
+    assert.ok(plain.filter((line) => line.includes("Long explanation")).length > 1);
+  };
+  check(menu.render(60));
+  const ctx = {
+    ui: {
+      custom: (factory: Function) => {
+        const input = factory(host(), theme, {}, () => {});
+        check(input.render(60));
+        return Promise.resolve(undefined);
+      },
+    },
+  } as unknown as ExtensionCommandContext;
+  await dialogInput(ctx, "Field", "1", help);
 });
 
 test("multiline editor forwards focus, keeps cursor visible, applies with Ctrl+S, and cancels", () => {

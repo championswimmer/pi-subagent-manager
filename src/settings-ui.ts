@@ -18,17 +18,17 @@ const FIELDS = [
   {
     id: "maxLevels",
     label: "Maximum levels",
-    help: "How deep agents can delegate. Your main conversation is level 1; 3 allows an agent and its child. Positive integer, at most 32.",
+    help: "How deep agents can delegate.\nYour main conversation is level 1; 3 allows an agent and its child.\nPositive integer, at most 32.",
   },
   {
     id: "maxConcurrent",
     label: "Concurrent agents",
-    help: "How many agents can be active at once across all levels. Parents waiting for children also count. Positive safe integer.",
+    help: "How many agents can be active at once across all levels.\nParents waiting for children also count.\nPositive safe integer.",
   },
   {
     id: "maxThreads",
     label: "Retained threads",
-    help: "How many agent sessions can be kept for follow-up work, including completed and paused agents. At the limit, new agents cannot start. Positive safe integer.",
+    help: "How many agent sessions can be kept for follow-up work, including completed and paused agents.\nAt the limit, new agents cannot start.\nPositive safe integer.",
   },
 ] as const;
 
@@ -37,29 +37,29 @@ const MODE_OPTIONS = [
     id: "off",
     label: "Off",
     value: "No subagent tools or prompt guidance",
-    help: "Off: hide subagent tools and inject no subagent guidance into the system prompt. Existing work and retained sessions are kept.",
+    help: "Off: hide subagent tools and inject no subagent guidance into the system prompt.\nExisting work and retained sessions are kept.",
   },
   {
     id: "opportunistic",
     label: "Opportunistic",
     value: "Parallelizable or very large tasks only",
-    help: "Opportunistic: make subagent tools available. Delegate only when tasks can be parallelized or a task is very large; otherwise work directly.",
+    help: "Opportunistic: make subagent tools available.\nDelegate only when tasks can be parallelized or a task is very large; otherwise work directly.",
   },
   {
     id: "orchestration",
     label: "Orchestration",
     value: "/root coordinates; subagents execute",
-    help: "Orchestration: tell /root to delegate all task execution to subagents and only coordinate and synthesize results. This rule is not inherited by workers.",
+    help: "Orchestration: tell /root to delegate all task execution to subagents and only coordinate and synthesize results.\nThis rule is not inherited by workers.",
   },
 ] as const;
 
 const MODE_HELP =
-  "Off: no subagent tools or prompt guidance. Opportunistic: delegate only parallelizable or very large tasks. Orchestration: /root delegates all execution and only coordinates and synthesizes results.";
+  "Off: no subagent tools or prompt guidance.\nOpportunistic: delegate only parallelizable or very large tasks.\nOrchestration: /root delegates all execution and only coordinates and synthesizes results.";
 
 const SCOPED_MODEL_FILTERING = {
   id: "scopedModelFiltering",
   label: "Scoped model filtering",
-  help: "On: agents can use only models selected in /scoped-models. Off: agents can use any available model. Save and apply to activate changes.",
+  help: "On: agents can use only models selected in /scoped-models.\nOff: agents can use any available model.\nSave and apply to activate changes.",
 } as const;
 
 export async function configureAgents(
@@ -114,28 +114,26 @@ async function configureAgentsDialog(
         {
           id: "scope",
           label: "Save scope",
-          value: scope === "user" ? "Global" : "Trusted project",
-          help: scope === "user"
-            ? "Global: save all values shown as your defaults for every project. Existing trusted-project settings still override them, including here. Switching scope only changes where you save, not the values shown."
-            : "Trusted project: save all values shown for this project only, overriding your global defaults here. Other projects are unchanged. Switching scope only changes where you save, not the values shown.",
+          value: scope === "user" ? "Global" : "Current Project",
+          help: "Global: save all values shown as your defaults for every project. Existing project settings still override them, including here.\nCurrent Project: save all values shown for this project only, overriding your global defaults here. Other projects are unchanged. Requires a trusted project.\nSwitching scope only changes where you save, not the values shown.",
         },
         {
           id: "types",
           label: "Agent definitions",
           value: `${options.store.list().length} types`,
-          help: "Create or edit agent definitions, model preferences and tool policy.",
+          help: "Create or edit agent definitions.\nConfigure model preferences and tool policy for each agent type.",
         },
         {
           id: "defaults",
           label: "Restore defaults",
-          help: "Replace all values shown with built-in defaults. Nothing is saved until you choose Save and apply.",
+          help: "Replace all values shown with built-in defaults.\nNothing is saved until you choose Save and apply.",
         },
         {
           id: "save",
           label: "Save and apply",
           value: dirty ? "(changes)" : undefined,
           valueColor: dirty ? "warning" as const : undefined,
-          help: "Save all values to the selected scope and reload settings now. Project overrides still take precedence. Running agents and retained sessions are kept.",
+          help: "Save all values to the selected scope and reload settings now.\nProject overrides still take precedence.\nRunning agents and retained sessions are kept.",
         },
         {
           id: "cancel",

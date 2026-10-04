@@ -224,10 +224,10 @@ export class DialogMenu {
   render(width: number): string[] {
     const height = dialogHeight(this.host);
     const inner = Math.max(0, width - 4);
-    const help = wrapTextWithAnsi(
-      dialogText(this.rows[this.selected]?.help ?? ""),
-      Math.max(1, inner - 1),
-    ).slice(0, Math.max(1, height - 7));
+    const help = (this.rows[this.selected]?.help ?? "")
+      .split(/\r\n?|\n/)
+      .flatMap((line) => wrapTextWithAnsi(dialogText(line), Math.max(1, inner - 1)))
+      .slice(0, Math.max(1, height - 7));
     this.viewport = Math.max(1, height - 6 - help.length);
     const start = Math.max(
       0,
@@ -337,7 +337,9 @@ export async function dialogInput(
             "",
             ...input.render(Math.max(1, width - 4)).map((line) => ` ${line}`),
             "",
-            ...wrapTextWithAnsi(dialogText(help), Math.max(1, width - 5))
+            ...help
+              .split(/\r\n?|\n/)
+              .flatMap((line) => wrapTextWithAnsi(dialogText(line), Math.max(1, width - 5)))
               .map((line) => theme.fg("muted", ` ${line}`)),
           ],
           "Enter apply · Esc cancel",
