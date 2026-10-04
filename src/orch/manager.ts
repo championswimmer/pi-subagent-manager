@@ -8,7 +8,11 @@ import type {
   SavedThreadView,
   ThreadService,
   ThreadView,
+  TranscriptListener,
+  TranscriptObservation,
+  TranscriptSnapshot,
 } from "../types.ts";
+import { immutableTranscriptValue } from "./transcript.ts";
 import { canonicalPath, inheritContext, isDescendant, parentPath } from "./paths.ts";
 import { DEFAULT_MANAGER_SETTINGS, type ManagerSettings } from "../prefs/settings.ts";
 
@@ -31,6 +35,12 @@ interface Record {
   liveOutputTokens?: number;
   pauseRequested: boolean;
   stopRequested: boolean;
+  observationRevision?: number;
+  driverGeneration?: number;
+  transcriptSource?: TranscriptSnapshot;
+  transcriptListeners?: Set<TranscriptListener>;
+  detachTranscript?: () => void;
+  observationError?: string;
 }
 const active = (view: Pick<ThreadView, "state">) =>
   view.state === "starting" || view.state === "running";
@@ -85,6 +95,7 @@ export class ThreadManager {
       get: (path) => this.get(path, caller),
       output: (path) => this.output(path, caller),
       transcript: (path) => this.transcript(caller, path),
+      observeTranscript: (path, listener) => this.observeTranscript(caller, path, listener),
       spawn: (args, signal) => this.spawn(caller, args, signal),
       steer: (path, message) => this.steer(caller, path, message),
       wait: (path, timeoutMs, signal) => this.wait(caller, path, timeoutMs, signal),
@@ -389,6 +400,43 @@ export class ThreadManager {
     const driver = await this.ensureDriver(this.record(path), true);
     return JSON.stringify(driver.snapshot(), null, 2);
   }
+  async observeTranscript(
+    caller: string,
+    path: string,
+    listener: TranscriptListener,
+  ): Promise<TranscriptObservation> {
+    this.assertLive();
+    path = canonicalPath(path, caller);
+    this.assertAccess(caller, path, true);
+    if (path === "/root") throw new Error("Main is not a child transcript observation target");
+    const record = this.record(path);
+    // Idle/restored history may be lazily loaded, but attachment never prompts/resumes a turn.
+    if (!active(record.view)) await this.ensureDriver(record, true);
+    this.assertLive();
+    const listeners = (record.transcriptListeners ??= new Set());
+    const registered: TranscriptListener = (snapshot) => listener(snapshot);
+    listeners.add(registered);
+    if (record.driver) this.attachTranscript(record, record.driver);
+    else {
+      // A starting child gets a placeholder immediately; existing startup supplies the live source.
+      void this.ensureDriver(record, true).catch((error) => {
+        if (this.disposed || !listeners.has(registered)) return;
+        record.observationError = errorText(error);
+        this.publishTranscript(record);
+      });
+    }
+    return {
+      snapshot: this.transcriptSnapshot(record),
+      unsubscribe: () => {
+        listeners.delete(registered);
+        if (!listeners.size) {
+          record.detachTranscript?.();
+          record.detachTranscript = undefined;
+          record.transcriptSource = undefined;
+        }
+      },
+    };
+  }
   async deliver(path: string, content: string): Promise<void> {
     // Restored parents may be idle and unopened; reports still belong in their retained transcript.
     const driver = await this.ensureDriver(this.record(path), true);
@@ -399,6 +447,10 @@ export class ThreadManager {
     this.epoch++;
     const records = [...this.records.values()];
     for (const record of records) {
+      record.detachTranscript?.();
+      record.detachTranscript = undefined;
+      record.transcriptSource = undefined;
+      record.transcriptListeners?.clear();
       record.stopRequested = true;
       record.startup.abort();
     }
@@ -524,6 +576,9 @@ export class ThreadManager {
             throw new Error("Driver startup cancelled");
           }
           record.driver = driver;
+          record.driverGeneration = (record.driverGeneration ?? 0) + 1;
+          record.observationError = undefined;
+          if (record.transcriptListeners?.size) this.attachTranscript(record, driver);
           record.usageCursor = { input: 0, output: 0 };
           record.liveInputTokens = 0;
           record.liveOutputTokens = 0;
@@ -541,8 +596,49 @@ export class ThreadManager {
     }
     return record.initializing;
   }
+  private attachTranscript(record: Record, driver: AgentDriver): void {
+    if (record.detachTranscript || !record.transcriptListeners?.size) return;
+    const observation = driver.observeTranscript?.((snapshot) => {
+      if (this.disposed || record.driver !== driver || !record.transcriptListeners?.size) return;
+      record.transcriptSource = snapshot;
+      this.publishTranscript(record);
+    });
+    if (observation) {
+      record.transcriptSource = observation.snapshot;
+      record.detachTranscript = observation.unsubscribe;
+    }
+  }
+  private transcriptSnapshot(record: Record): TranscriptSnapshot {
+    const source = record.transcriptSource;
+    return Object.freeze({
+      revision: record.observationRevision ?? 0,
+      generation: record.driverGeneration ?? 0,
+      messages:
+        source?.messages ?? immutableTranscriptValue(record.driver?.snapshot() ?? record.inherited),
+      assistant: source?.assistant ?? null,
+      tools: source?.tools ?? Object.freeze([]),
+      inheritedCount: source?.inheritedCount ?? record.inherited.length,
+      thread: immutableTranscriptValue(this.view(record)),
+      ...(record.observationError || source?.error
+        ? { error: record.observationError ?? source?.error }
+        : {}),
+    });
+  }
+  private publishTranscript(record: Record): void {
+    if (this.disposed || !record.transcriptListeners?.size) return;
+    record.observationRevision = (record.observationRevision ?? 0) + 1;
+    const snapshot = this.transcriptSnapshot(record);
+    for (const listener of record.transcriptListeners) {
+      try {
+        listener(snapshot);
+      } catch {
+        /* UI failure must not affect execution. */
+      }
+    }
+  }
   private touch(record: Record): void {
     record.view.updatedAt = Date.now();
+    this.publishTranscript(record);
     if (!this.disposed) this.options.onEvent?.({ kind: "change", thread: this.view(record) });
   }
   /** Fold driver-cumulative usage into persisted totals. Partials only refresh the live view. */

@@ -59,10 +59,38 @@ export type DriverEvent =
       /** Streaming message_update snapshot. Omit for authoritative message_end. */
       partial?: boolean;
     };
+/** Ephemeral read-only transcript state; never part of registry/delivery events. */
+export interface TranscriptToolState {
+  toolCallId: string;
+  toolName: string;
+  parentToolCallId?: string;
+  args: unknown;
+  result?: unknown;
+  isError?: boolean;
+  state: "running" | "completed";
+}
+export interface TranscriptSnapshot {
+  revision: number;
+  /** Changes when a driver is replaced; revisions remain monotonic within the manager. */
+  generation: number;
+  messages: readonly AgentMessage[];
+  assistant: AgentMessage | null;
+  tools: readonly TranscriptToolState[];
+  inheritedCount: number;
+  thread?: ThreadView;
+  error?: string;
+}
+export interface TranscriptObservation {
+  snapshot: TranscriptSnapshot;
+  unsubscribe(): void;
+}
+export type TranscriptListener = (snapshot: TranscriptSnapshot) => void;
+
 export interface AgentDriver {
   prompt(message: string): Promise<void>;
   steer(message: string): Promise<void>;
   snapshot(): AgentMessage[];
+  observeTranscript?(listener: TranscriptListener): TranscriptObservation;
   output(): string;
   abort(): Promise<void>;
   dispose(): void;
@@ -114,6 +142,8 @@ export interface ThreadService {
   get(path: string): ThreadView;
   output(path: string): string;
   transcript(path: string): Promise<string>;
+  /** Optional for portable adapters; the runtime manager always implements this. */
+  observeTranscript?(path: string, listener: TranscriptListener): Promise<TranscriptObservation>;
   spawn(
     args: { path: string; type: string; task: string; wait?: boolean },
     signal?: AbortSignal,
