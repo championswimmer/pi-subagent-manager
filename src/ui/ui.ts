@@ -48,7 +48,7 @@ import {
 
 export type ThreadController = Pick<
   ThreadService,
-  "list" | "get" | "output" | "transcript" | "steer" | "stop"
+  "list" | "get" | "output" | "transcript" | "observeTranscript" | "steer" | "stop"
 >;
 
 /** Plain terminal-safe text: never pass agent-supplied terminal commands through. */
@@ -489,7 +489,7 @@ export function updateWidget(
 }
 
 export async function showThreads(
-  ctx: ExtensionCommandContext,
+  ctx: ExtensionContext,
   controller: ThreadController,
   path?: string,
 ): Promise<void> {

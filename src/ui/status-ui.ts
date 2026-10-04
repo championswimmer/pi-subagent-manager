@@ -1,28 +1,39 @@
 import type {
   ExtensionCommandContext,
+  ExtensionContext,
+  ExtensionUIContext,
   Theme,
 } from "@earendil-works/pi-coding-agent";
-import { getKeybindings, Key, matchesKey } from "@earendil-works/pi-tui";
+import {
+  getKeybindings,
+  setKeybindings,
+  Key,
+  matchesKey,
+  type Keybinding,
+} from "@earendil-works/pi-tui";
 import {
   canOpenDialog,
   DIALOG_OPTIONS,
   type DialogHost,
+  DialogSession,
+  scopeDialogContext,
+  dialogMenu,
+  dialogEditor,
   dialogHeight,
   dialogText,
   frameDialog,
-  withDialogSession,
 } from "./dialog.ts";
 import type { ThreadService } from "../types.ts";
 import { buildStatusTree, type StatusRow } from "./thread-tree.ts";
 import { showThreads, threadMetrics } from "./ui.ts";
+import { LiveAgentView, fillViewport, type AgentViewportState } from "./live-agent-view.ts";
 
 export { buildStatusTree, type StatusRow };
 
 const ROOT = "/root";
 const TITLE = "Agents status";
 const TREE_TITLE = "Agents tree";
-const FOOTER =
-  "Esc close · ↑↓ select · ←→ fold · PgUp/PgDn · Enter inspect · r refresh";
+const FOOTER = "Esc close · ↑↓ select · ←→ fold · PgUp/PgDn · Enter inspect · r refresh";
 
 function agentCount(threads: readonly { path?: string }[]): number {
   const paths = new Set<string>();
@@ -47,9 +58,7 @@ function treeParent(rows: StatusRow[], index: number): StatusRow | undefined {
 
 function firstChild(rows: StatusRow[], index: number): StatusRow | undefined {
   const next = rows[index + 1];
-  return next && next.prefix.length > (rows[index]?.prefix.length ?? 0)
-    ? next
-    : undefined;
+  return next && next.prefix.length > (rows[index]?.prefix.length ?? 0) ? next : undefined;
 }
 
 function label(row: StatusRow): string {
@@ -62,9 +71,22 @@ function label(row: StatusRow): string {
     .join("  ");
 }
 
+export interface AgentTreeState {
+  selectedPath: string;
+  collapsed: Set<string>;
+}
+
 export class StatusDialog {
-  private selectedPath: string;
-  private collapsed = new Set<string>();
+  private state: AgentTreeState;
+  private get selectedPath(): string {
+    return this.state.selectedPath;
+  }
+  private set selectedPath(value: string) {
+    this.state.selectedPath = value;
+  }
+  private get collapsed(): Set<string> {
+    return this.state.collapsed;
+  }
   private viewport = 1;
   private timer: ReturnType<typeof setInterval> | undefined;
 
@@ -75,8 +97,13 @@ export class StatusDialog {
     private done: (path: string | undefined) => void,
     selected?: string,
     private title = TITLE,
+    private navigation?: {
+      state: AgentTreeState;
+      actions(path: string): void;
+      fullscreen?: boolean;
+    },
   ) {
-    this.selectedPath = selected || ROOT;
+    this.state = navigation?.state ?? { selectedPath: selected || ROOT, collapsed: new Set() };
   }
 
   invalidate(): void {}
@@ -127,7 +154,16 @@ export class StatusDialog {
     const row = rows[index];
     if (row) this.selectedPath = row.path;
     if (keys.matches(data, "tui.select.confirm")) {
-      if (row?.thread && row.path !== ROOT) this.done(row.path);
+      if (this.navigation && row?.path === ROOT) this.done(undefined);
+      else if (row?.thread && row.path !== ROOT) this.done(row.path);
+      return;
+    }
+    if (data === "i" && this.navigation) {
+      if (row?.thread && row.path !== ROOT) this.navigation.actions(row.path);
+      return;
+    }
+    if (matchesKey(data, Key.ctrl("q")) && this.navigation) {
+      this.done(undefined);
       return;
     }
     if (data === "r") {
@@ -135,15 +171,13 @@ export class StatusDialog {
       return;
     }
     if (matchesKey(data, Key.left)) {
-      if (row?.hasChildren && !this.collapsed.has(row.path))
-        this.collapsed.add(row.path);
+      if (row?.hasChildren && !this.collapsed.has(row.path)) this.collapsed.add(row.path);
       else if (row) {
         const parent = treeParent(rows, index);
         if (parent) this.selectedPath = parent.path;
       }
     } else if (matchesKey(data, Key.right)) {
-      if (row?.hasChildren && this.collapsed.has(row.path))
-        this.collapsed.delete(row.path);
+      if (row?.hasChildren && this.collapsed.has(row.path)) this.collapsed.delete(row.path);
       else {
         const child = row?.hasChildren ? firstChild(rows, index) : undefined;
         if (child) this.selectedPath = child.path;
@@ -158,18 +192,13 @@ export class StatusDialog {
       else if (matchesKey(data, Key.end)) next = Math.max(0, rows.length - 1);
       else return;
       this.selectedPath =
-        rows[Math.max(0, Math.min(rows.length - 1, next))]?.path ??
-        this.selectedPath;
+        rows[Math.max(0, Math.min(rows.length - 1, next))]?.path ?? this.selectedPath;
     }
     this.host.requestRender();
   }
 
   private line(row: StatusRow, selected: boolean): string {
-    const marker = row.hasChildren
-      ? this.collapsed.has(row.path)
-        ? "▸ "
-        : "▾ "
-      : "";
+    const marker = row.hasChildren ? (this.collapsed.has(row.path) ? "▸ " : "▾ ") : "";
     const text = ` ${row.prefix}${selected ? "›" : " "} ${marker}${label(row)}`;
     if (selected) return this.theme.fg("accent", text);
     if (row.thread?.state === "failed") return this.theme.fg("error", text);
@@ -180,19 +209,18 @@ export class StatusDialog {
   private detail(row: StatusRow | undefined): string[] {
     if (!row?.thread) {
       return [
-        ` ${row?.path === ROOT ? "Main Pi session" : "Missing parent"}`,
+        ` ${row?.path === ROOT ? (agentCount(this.service.list()) ? "Main Pi session" : "Main Pi session — No agents yet") : "Missing parent"}`,
         "",
       ];
     }
-    return [
-      ` task ${dialogText(row.thread.task)}`,
-      ` ${threadMetrics(row.thread)}`,
-    ];
+    return [` task ${dialogText(row.thread.task)}`, ` ${threadMetrics(row.thread)}`];
   }
 
   render(width: number): string[] {
     const rows = this.rows();
-    const height = dialogHeight(this.host);
+    const height = this.navigation?.fullscreen
+      ? Math.max(1, this.host.terminal?.rows ?? 24)
+      : dialogHeight(this.host);
     const index = this.locate(rows);
     if (rows[index]) this.selectedPath = rows[index].path;
     const budget = Math.max(0, height - 4);
@@ -200,10 +228,7 @@ export class StatusDialog {
     const treeCount = Math.max(0, budget - detail.length);
     this.viewport = Math.max(1, treeCount);
     const start = treeCount
-      ? Math.max(
-          0,
-          Math.min(index - treeCount + 1, Math.max(0, rows.length - treeCount)),
-        )
+      ? Math.max(0, Math.min(index - treeCount + 1, Math.max(0, rows.length - treeCount)))
       : 0;
     const body = [
       ...rows
@@ -217,7 +242,9 @@ export class StatusDialog {
       height,
       this.heading(rows, start, treeCount),
       body,
-      FOOTER,
+      this.navigation
+        ? "Esc main · ↑↓ select · ←→ fold · Enter watch/main · i Actions · Ctrl+Q main"
+        : FOOTER,
     );
   }
 
@@ -273,16 +300,177 @@ export async function showAgentStatus(
   await showAgentDialog(ctx, service, { inspect });
 }
 
+/** Root-owned navigation state. Opening and closing never changes the executing session. */
+export class AgentNavigationController {
+  private tree: AgentTreeState = { selectedPath: ROOT, collapsed: new Set() };
+  private viewports = new Map<string, AgentViewportState>();
+  private session: DialogSession | undefined;
+  private opening: Promise<void> | undefined;
+  private generation = 0;
+
+  get isOpen(): boolean {
+    return this.opening !== undefined;
+  }
+
+  close(): void {
+    ++this.generation;
+    this.session?.close();
+    this.session = undefined;
+  }
+
+  open(ctx: ExtensionContext, service: ThreadService, selectedPath?: string): Promise<void> {
+    if (this.opening) return this.opening;
+    if (!canOpenDialog(ctx)) return Promise.resolve();
+    if (selectedPath) this.tree.selectedPath = selectedPath;
+    const generation = ++this.generation;
+    let failure: unknown;
+    let failed = false;
+    let ownedSession: DialogSession | undefined;
+    const task = ctx.ui.custom<void>(
+      (host, theme, keys, done) => {
+        const session = new DialogSession(host, theme, keys, done);
+        ownedSession = session;
+        if (generation !== this.generation) {
+          void Promise.resolve().then(() => session.close());
+          return session;
+        }
+        this.session = session;
+        // The alt-screen renderer's listener runs before extension listeners. Temporarily
+        // remove only its search action from the public keybinding lookup, before dispatch.
+        const previousKeybindings = getKeybindings();
+        const watchingKeybindings = new Proxy(previousKeybindings, {
+          get(target, property) {
+            if (property === "matches")
+              return (data: string, action: Keybinding) =>
+                action === "tui.altScreen.search" ? false : target.matches(data, action);
+            // Preserve all other public manager methods and their original receiver.
+            const value = Reflect.get(target, property, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+        setKeybindings(watchingKeybindings);
+        const dispose = session.dispose.bind(session);
+        session.dispose = () => {
+          // Do not overwrite a newer keybinding owner installed by another extension.
+          if (getKeybindings() === watchingKeybindings) setKeybindings(previousKeybindings);
+          dispose();
+        };
+        // One fullscreen surface also covers shorter Actions dialogs without exposing main.
+        const render = session.render.bind(session);
+        session.render = (width) => fillViewport(render(width), width, host.terminal.rows);
+        const scoped = scopeDialogContext(ctx, session);
+        // Built-in UI dialogs otherwise stack independently. Mount these actions in our child slot.
+        const ui = scoped.ui as ExtensionUIContext;
+        ui.select = (title, options) =>
+          dialogMenu(
+            scoped,
+            title,
+            options.map((label) => ({ id: label, label })),
+          );
+        ui.confirm = async (title, message) =>
+          (await dialogMenu(
+            scoped,
+            title,
+            [
+              { id: "Yes", label: "Yes", help: message },
+              { id: "No", label: "No", help: message },
+            ],
+            { selectedId: "No" },
+          )) === "Yes";
+        ui.editor = (title, prefill) => dialogEditor(scoped, title, prefill ?? "");
+        // Defer until Pi has installed/focused the overlay; suppress opening-key repeats briefly.
+        const handoffUntil = Date.now() + 100;
+        const handle = session.handleInput.bind(session);
+        session.handleInput = (data) => {
+          if (Date.now() < handoffUntil && matchesKey(data, Key.down)) return;
+          handle(data);
+        };
+        void Promise.resolve()
+          .then(async () => {
+            while (generation === this.generation) {
+              let treeDialog: StatusDialog | undefined;
+              const chosen = await session.mount<
+                { kind: "watch" | "actions"; path: string } | undefined
+              >((tui, activeTheme, _keys, finish) => {
+                treeDialog = new StatusDialog(
+                  tui,
+                  activeTheme,
+                  service,
+                  (path) => finish(path ? { kind: "watch", path } : undefined),
+                  undefined,
+                  TREE_TITLE,
+                  {
+                    state: this.tree,
+                    fullscreen: true,
+                    actions: (path) => finish({ kind: "actions", path }),
+                  },
+                );
+                treeDialog.startRefresh();
+                return treeDialog;
+              });
+              treeDialog?.dispose();
+              if (!chosen || generation !== this.generation) break;
+              if (chosen.kind === "actions") {
+                await showThreads(scoped, service, chosen.path);
+                continue;
+              }
+              let viewport = this.viewports.get(chosen.path);
+              if (!viewport) {
+                viewport = { scrollTop: 0, follow: true };
+                this.viewports.set(chosen.path, viewport);
+              }
+              const result = await session.mount<"back" | "main">(
+                (tui, activeTheme, _keys, finish) =>
+                  new LiveAgentView(tui, activeTheme, service, chosen.path, viewport!, finish),
+              );
+              if (result !== "back") break;
+            }
+          })
+          .then(
+            () => session.close(),
+            (error: unknown) => {
+              failed = true;
+              failure = error;
+              ctx.ui.notify(
+                dialogText(error instanceof Error ? error.message : String(error)),
+                "error",
+              );
+              session.close();
+            },
+          );
+        return session;
+      },
+      {
+        overlay: true,
+        overlayOptions: { width: "100%", maxHeight: "100%", row: 0, col: 0, margin: 0 },
+      },
+    );
+    this.opening = task
+      .then(() => {
+        if (failed) throw failure;
+      })
+      .finally(() => {
+        // Also clean up if the host rejects mounting after our factory returned.
+        ownedSession?.dispose();
+        if (this.opening === result) this.opening = undefined;
+        if (generation === this.generation) this.session = undefined;
+      });
+    const result = this.opening;
+    return result;
+  }
+}
+
+const navigationByService = new WeakMap<ThreadService, AgentNavigationController>();
+
 export async function showAgentTree(
-  ctx: ExtensionCommandContext,
+  ctx: ExtensionContext,
   service: ThreadService,
   selectedPath?: string,
 ): Promise<void> {
-  if (!canOpenDialog(ctx)) return;
-  await withDialogSession(ctx, (scoped) =>
-    showAgentDialog(scoped, service, {
-      title: TREE_TITLE,
-      selected: selectedPath,
-    }),
-  );
+  let navigation = navigationByService.get(service);
+  if (!navigation) {
+    navigation = new AgentNavigationController();
+    navigationByService.set(service, navigation);
+  }
+  await navigation.open(ctx, service, selectedPath);
 }
