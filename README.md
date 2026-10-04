@@ -63,23 +63,24 @@ A forked **main** session gets a fresh registry, so separate parents never write
 
 ### Shipped task-specialized defaults
 
-Five bundled roles cover the requested capabilities. Evidence research goes to `architect`. Frontend implementation goes to `coder`. Targeted repository lookup goes to `tasker`. Independent review stays with `reviewer`. Creative and editorial prose stays with `writer`. There is no sixth bundled role, and no bundled `explorer`, `designer`, or `researcher`.
+Six bundled roles cover the requested capabilities. Evidence-backed codebase and internet research goes to `researcher`; architecture and authorized coordination go to `architect`. Frontend implementation goes to `coder`. Targeted repository lookup goes to `tasker`. Independent review stays with `reviewer`. Creative and editorial prose stays with `writer`.
 
 | Type        | Thinking | Intended work                                                            |
 | ----------- | -------- | ------------------------------------------------------------------------ |
-| `architect` | `high`   | Plans, tradeoffs, evidence research, and authorized coordination         |
+| `architect` | `high`   | Plans, tradeoffs, and authorized coordination                            |
 | `coder`     | `high`   | Implementation, debugging, refactoring, and frontend UI                  |
+| `researcher` | `high` | Source-backed codebase and internet research; no implementation edits    |
 | `reviewer`  | `high`   | Evidence-led defects and the smallest local repair; no unsolicited fixes |
 | `tasker`    | `low`    | Bounded jobs and targeted repository lookup                              |
 | `writer`    | `medium` | Creative and editorial prose without invented facts                      |
 
 All defaults **inherit the parent/default model**. They do not set `models` or `model`. Optional `modelSuggestions` are advisory display names only. They never select a runtime model, never count as a `/scoped-models` match, and never bypass scoped runtime preferences. Set real preferences with `/agents types` or a same-name user/project definition. Thinking levels are explicit workload defaults, mapped by the SDK to model support. Each role has an explicit tool allowlist; only architect can delegate, and a planning or research request does not authorize implementation.
 
-Children do **not** inherit the parent's extensions, web/browser/MCP tools, or skills. Exa provider discovery and full-page fetch can be available to a session that has those provider tools; named Exa MCP tools are not callable by the child. Architect uses supplied or local evidence, or a genuinely available authorized shell retrieval workflow, and pauses otherwise. Coder must not claim rendered, accessibility, or browser QA without tooling that actually ran. Shell access is not enforced read-only: tool policies are **not an OS sandbox**.
+Children do **not** inherit the parent's extensions, web/browser/MCP tools, or skills. Researcher uses local evidence and genuinely available authorized shell CLI/API routes such as `gh`, Context7, Exa, Parallel, and Perplexity; it reports access gaps rather than assuming inherited tools. Architect can use supplied/local evidence or request a researcher when delegation is authorized. Coder must not claim rendered, accessibility, or browser QA without tooling that actually ran. Shell access is not enforced read-only: tool policies are **not an OS sandbox**.
 
-Migration: bundled `worker`, `explorer`, `designer`, and `researcher` are not shipped. Use tasker for bounded jobs and repository lookup, coder for sustained implementation and frontend UI, and architect for planning and evidence research. Custom same-name definitions, including a user or project `researcher`, `designer`, or `explorer`, still load. Project overrides user, and user overrides bundled. Retained threads keep their saved definitions. Nothing is renamed automatically.
+Migration: bundled `worker`, `explorer`, and `designer` are not shipped. Use tasker for bounded jobs and repository lookup, coder for sustained implementation and frontend UI, architect for planning, and researcher for evidence research. Existing user/project `researcher` definitions still override the new bundled default; custom `designer` or `explorer` definitions still load. Project overrides user, and user overrides bundled. Retained threads keep their saved definitions. Nothing is renamed automatically.
 
-See [five-default capability routing, tool boundaries, and provisional suggestions](docs/default-agents.md).
+See [default-agent routing, tool boundaries, and model suggestions](docs/default-agents.md), the [October 2026 model audit](docs/research-model-audit-2026-10.md), and [researcher workflow evidence](docs/research-researcher-workflow.md).
 
 Definitions are Markdown files with YAML frontmatter:
 

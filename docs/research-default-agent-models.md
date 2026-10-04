@@ -1,5 +1,7 @@
 # Default-agent model shortlist
 
+> Historical five-role shortlist (2026-10-03). Superseded by the [October model audit](research-model-audit-2026-10.md) and [current six-role guide](default-agents.md), including researcher and cheap-first tasker recommendations.
+
 Research date: **2026-10-03**. This note compares only the 13 candidates requested for the five bundled roles. Suggestions are advisory display aliases, not runtime model IDs, pins, or availability guarantees. Model/role suitability is an inference from public evidence, not a local agent benchmark.
 
 ## How the evidence is used

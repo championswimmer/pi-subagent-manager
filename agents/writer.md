@@ -5,8 +5,10 @@ thinkingLevel: medium
 color: mdQuote
 modelSuggestions:
   - opus-5.5
+  - gemini-4-argon
   - gemini-3.8-flash
   - fable-5.1
+  - muse-spark-1.3
 tools:
   allow:
     - read

@@ -5,7 +5,7 @@ thinkingLevel: high
 color: warning
 modelSuggestions:
   - gpt-6.1-sol
-  - gpt-6-astra
+  - sonnet-5.5
   - opus-5.5
   - glm-5.3
 tools:

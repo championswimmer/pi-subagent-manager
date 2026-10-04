@@ -19,8 +19,8 @@ import { selectPreferredModel } from "../src/models.ts";
 import { agentTools } from "../src/tools.ts";
 
 const BUNDLED_DIR = fileURLToPath(new URL("../agents/", import.meta.url));
-const NAMES = ["architect", "coder", "reviewer", "tasker", "writer"];
-const REMOVED = ["designer", "explorer", "researcher", "worker"];
+const NAMES = ["architect", "coder", "researcher", "reviewer", "tasker", "writer"];
+const REMOVED = ["designer", "explorer", "worker"];
 const DELEGATION = [
   "agent_types",
   "agent_spawn",
@@ -102,11 +102,38 @@ test("bundled agents load cleanly, resolve their tools, and carry only advisory 
       suggestions.every((alias) => !alias.includes("/")),
       type.name,
     );
+    assert.ok(suggestions.every((alias) => /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(alias)), type.name);
     assert.equal(type.models, undefined);
     const eligible = suggestions.map((id) => ({ model: { provider: "advisory", id } }));
     assert.equal(selectPreferredModel(type, eligible), undefined);
   }
   assert.equal(new Set(store.list().map((type) => type.systemPrompt)).size, NAMES.length);
+});
+
+test("researcher is non-delegating and evidence-focused; tasker stays cheap-first", (t) => {
+  const store = new ConfigStore(fixture(t));
+  const researcher = store.get("researcher");
+  assert.deepEqual(researcher.tools?.allow, [
+    "read", "bash", "grep", "find", "ls", "agent_update", "agent_pause",
+  ]);
+  assert.equal(researcher.thinkingLevel, "high");
+  assert.deepEqual(store.get("architect").modelSuggestions, [
+    "opus-5.5", "gpt-6-astra", "fable-5.1", "kimi-k3",
+  ]);
+  assert.deepEqual(researcher.modelSuggestions, [
+    "gemini-4-argon", "gpt-5.6-sol", "muse-spark-1.3", "sonnet-5.5",
+  ]);
+  assert.ok(researcher.systemPrompt.includes("Abstain when evidence is missing"));
+  assert.ok(researcher.systemPrompt.includes("a real URL alone is not evidence"));
+  assert.ok(store.get("writer").modelSuggestions?.includes("gemini-4-argon"));
+  for (const instruction of [
+    "Context7", "gh CLI", "Exa", "Parallel", "Perplexity",
+    "not automatically inherited", "untrusted evidence",
+    "commit-pinned", "read-only research role", "caller-authorized path",
+  ]) assert.ok(researcher.systemPrompt.includes(instruction), instruction);
+  assert.equal(store.get("tasker").thinkingLevel, "low");
+  assert.equal(store.get("tasker").modelSuggestions?.[0], "gpt-6-luna");
+  assert.ok(!store.get("tasker").modelSuggestions?.includes("sonnet-5.5"));
 });
 
 test("a missing bundled directory disables packaged defaults without dropping user agents", (t) => {
