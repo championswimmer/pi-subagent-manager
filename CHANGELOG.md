@@ -4,6 +4,18 @@ Generated from version tags and merged GitHub pull requests. Do not edit this fi
 
 ## 0.x — Pre-1.0 releases
 
+### [v0.8.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.8.0) — Minor release (2026-10-04)
+
+<!-- Release notes generated using configuration in .github/release.yml at v0.8.0 -->
+
+#### What's Changed
+##### Merged pull requests
+* Reorganize documentation into focused guides by @championswimmer in https://github.com/championswimmer/pi-subagent-manager/pull/8
+* fix: inherit main-session extension and MCP tools in subagents by @championswimmer in https://github.com/championswimmer/pi-subagent-manager/pull/9
+
+
+**Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v0.7.0...v0.8.0
+
 ### [v0.7.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.7.0) — Minor release (2026-10-04)
 
 <!-- Release notes generated using configuration in .github/release.yml at v0.7.0 -->
