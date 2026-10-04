@@ -134,12 +134,49 @@ test("modelSuggestions are trimmed, keep an explicit empty list, and are omitted
 
 test("selectTools has exact names, empty allow, block wins and stable available order", () => {
   const available = ["read", "bash", "agent_update"];
-  assert.deepEqual(selectTools(undefined, available), available);
+  assert.deepEqual(selectTools(undefined, available), []);
   assert.deepEqual(selectTools({ allow: [] }, available), []);
   assert.deepEqual(selectTools({ allow: ["bash", "read"], block: ["bash"] }, available), ["read"]);
-  assert.deepEqual(selectTools({ block: ["bash"] }, available), ["read", "agent_update"]);
+  assert.deepEqual(selectTools({ block: ["bash"] }, available), []);
   for (const policy of [{ allow: ["Read"] }, { block: ["missing"] }, { allow: ["*"] }])
     assert.throws(() => selectTools(policy, available));
+});
+
+test("selectTools modes ignore irrelevant lists and deduplicate available names in order", () => {
+  const available = ["read", "bash", "read", "agent_update"];
+  const policy = { allow: ["bash", "read"], block: ["bash"] };
+  assert.deepEqual(selectTools(policy, available, "allowed"), ["read"]);
+  assert.deepEqual(selectTools(policy, available, "all-except-blocked"), ["read", "agent_update"]);
+  assert.deepEqual(selectTools(policy, available, "all"), ["read", "bash", "agent_update"]);
+  for (const mode of ["all-except-blocked", "all"] as const) {
+    assert.deepEqual(selectTools(undefined, available, mode), ["read", "bash", "agent_update"]);
+    assert.deepEqual(selectTools({ allow: [] }, available, mode), ["read", "bash", "agent_update"]);
+    assert.deepEqual(selectTools({ allow: ["missing"] }, available, mode), [
+      "read",
+      "bash",
+      "agent_update",
+    ]);
+  }
+  assert.deepEqual(selectTools({}, available), []);
+  assert.deepEqual(selectTools({ allow: [] }, available, "allowed"), []);
+  assert.deepEqual(selectTools({ allow: ["missing"], block: ["missing"] }, available, "all"), [
+    "read",
+    "bash",
+    "agent_update",
+  ]);
+  assert.deepEqual(
+    selectTools({ allow: ["missing"], block: ["bash"] }, available, "all-except-blocked"),
+    ["read", "agent_update"],
+  );
+  for (const mode of ["allowed", "all-except-blocked"] as const)
+    assert.throws(
+      () => selectTools({ block: ["missing"] }, available, mode),
+      /Unavailable tool name: missing/,
+    );
+  assert.throws(
+    () => selectTools({ allow: ["missing"] }, available, "allowed"),
+    /Unavailable tool name: missing/,
+  );
 });
 
 test("precedence, source, filePath, trust switch and defensive copies", (t) => {

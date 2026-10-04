@@ -111,7 +111,7 @@ The Markdown body is the agent's system prompt. `name` and `description` are req
 - **modelSuggestions:** optional YAML list of advisory display names, such as `sonnet-5.5` or `gpt-6.1-sol`. These are not `provider/model-id` pins, not ordered runtime preferences, and not scoped-model matches. They never select a model and never bypass scoped runtime preferences, including when a definition also sets `models`. Omitting them leaves inheritance unchanged. A same-name user or project definition can replace the list; replacement still does not select a model unless that definition sets `models` or `model`.
 - **thinkingLevel:** `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. The SDK applies the selected model's supported levels.
 - **color:** a pi semantic color, such as `accent`, `success`, `warning`, `error`, `muted` or `dim`, used as the background of the agent's type pill (e.g. `[architect]`) and the foreground of its task-based path. Pill text is bold and automatically contrasts with the background. The color picker previews both; colors follow theme changes. Unset uses `accent`.
-- **tools:** exact-name `allow` and/or `block` lists. Block wins. An empty allow list means **no tools**; omission allows supported tools. Unavailable names fail clearly, rather than widening access.
+- **tools:** exact-name `allow` and/or `block` lists, applied according to the manager's **Tool Filtering** setting. By default, only listed `allow` tools are available and `block` wins; an empty or omitted allow list means **no tools**. Unavailable names in active lists fail clearly, rather than widening access; ignored lists do not affect tool selection.
 
 If `models`/`model` is omitted, the agent inherits the effective parent/default model. Matching is strict: with scoped model filtering enabled, preferences are matched verbatim against `/scoped-models`, and if none match — including when `/scoped-models` is empty — spawn fails with an actionable error instead of falling back to the registry. Turn filtering off in `/agents` to allow unscoped, available models; spawn still fails if no preference is available.
 
@@ -179,7 +179,7 @@ Choose concise kebab-case paths describing the task, independently of the type. 
 
 Launch **all independent siblings with `wait: false` before waiting**. For example, `/root` can launch `team-a` and `team-b`, then each team can launch `worker-a` and `worker-b` the same way. This works even if tool calls are delivered sequentially: detached children run in separate SDK sessions. Same-turn foreground calls also overlap when pi executes their tool batch in parallel, but spawning one foreground child and awaiting it before launching the next is sequential.
 
-Use the bundled `architect` for explicitly authorized team coordination. Other bundled roles intentionally do not delegate. A custom coordinating type's allow list must include `agent_spawn` and `agent_wait`. Children never bypass their tool policy or the shared limits; delegation does not provide unavailable web/browser capabilities.
+Use the bundled `architect` for explicitly authorized team coordination. With the default Tool Filtering mode, other bundled roles intentionally do not delegate, and a custom coordinating type's allow list must include `agent_spawn` and `agent_wait`. Less restrictive filtering modes can also expose delegation tools. Children follow the selected filtering mode and shared limits; delegation does not provide unavailable web/browser capabilities.
 
 ### Manager settings
 
@@ -194,7 +194,8 @@ Settings belong to **this extension**, not another subagent package:
   "maxConcurrent": 16,
   "maxThreads": 64,
   "scopedModelFiltering": true,
-  "subagentMode": "opportunistic"
+  "subagentMode": "opportunistic",
+  "toolFiltering": "allowed"
 }
 ```
 
@@ -211,6 +212,14 @@ Mode changes apply immediately without canceling running work or discarding reta
 `maxConcurrent` counts starting/running threads **across the entire tree**, including parents waiting for children; `maxThreads` counts all retained threads. Both require positive safe integers. Capacity exhaustion fails clearly rather than queuing. Omitted settings use the defaults above. Unknown keys, malformed values and symlinked settings paths produce warnings; an invalid file is ignored atomically, preserving the preceding valid layer/defaults.
 
 `scopedModelFiltering` is a boolean, defaulting to `true` to preserve scoped-only selection. When enabled, explicitly configured agents must match a scoped model, in definition preference order, or fail. When disabled, the same ordered selection uses all available models, regardless of scope. Agents without model preferences still inherit. Changes apply to new agents and future requests by retained agents; toggling does not cancel an in-flight request. Re-enabling filtering restores scoped checks on subsequent requests.
+
+**Tool Filtering** in `/agents settings` controls which tools each agent receives when its SDK session starts:
+
+- **Allowed (except blocked)** (`toolFiltering: "allowed"`, default): only tools in the type's YAML `tools.allow` list, minus `tools.block`. A missing or empty allow list grants no tools.
+- **All except blocked** (`"all-except-blocked"`): ignore `tools.allow`; expose all supported tools except those in `tools.block`.
+- **All** (`"all"`): ignore both YAML lists and expose all supported tools.
+
+“All” means the built-in and manager tools supported by child sessions, not third-party tools loaded in the main conversation. Filtering changes apply to newly initialized sessions, including retained sessions reopened after reload; already-open sessions keep their selected tool set. The main conversation's tools are unchanged.
 
 Use `/agents reload` to reload definitions and settings. New limits do not cancel existing threads or discard retained sessions; they govern new spawns and future concurrency reservations. Lowering the level limit still permits resuming previously retained deeper sessions, but no new agents can be spawned beyond the limit. `/reload` or reopening the parent also reloads settings. Normal operation does **not** load `.pi/subagents.json` or other packages' settings as manager settings. Only explicit import discovery/model migration reads applicable source configuration. Avoid loading multiple subagent extensions because they can register the same `/agents` command.
 
@@ -238,7 +247,7 @@ The code is deliberately layered:
 
 - `config.ts`: frontmatter validation, precedence and atomic saves.
 - `agent-import.ts`, `import-discovery.ts`, `import-picker.ts`, `import-instructions.ts`: first-run consent, read-only source discovery, checkbox selection, and current-model migration guidance.
-- `settings.ts`: validated global/project manager limits, model-filtering policy and safe configuration paths.
+- `settings.ts`: validated global/project manager limits, model/tool-filtering policies and safe configuration paths.
 - `paths.ts`: canonical ancestry and safe context snapshots.
 - `manager.ts`: runtime-independent ownership, lifecycle and retained registry. `scope(caller)` exposes the same caller-bound `ThreadService` to tools and UI.
 - `runtime.ts`: isolated pi SDK sessions, providers and safe turn boundaries.

@@ -16,8 +16,12 @@ import { dirname, join, resolve } from "node:path";
 export const SUBAGENT_MODES = ["off", "opportunistic", "orchestration"] as const;
 export type SubagentMode = (typeof SUBAGENT_MODES)[number];
 
+export const TOOL_FILTERING_MODES = ["allowed", "all-except-blocked", "all"] as const;
+export type ToolFilteringMode = (typeof TOOL_FILTERING_MODES)[number];
+
 export interface ManagerSettings {
   subagentMode: SubagentMode;
+  toolFiltering: ToolFilteringMode;
   maxLevels: number;
   maxConcurrent: number;
   maxThreads: number;
@@ -30,10 +34,11 @@ export const DEFAULT_MANAGER_SETTINGS: ManagerSettings = {
   maxThreads: 64,
   scopedModelFiltering: true,
   subagentMode: "opportunistic",
+  toolFiltering: "allowed",
 };
 
 const KEYS = [
-  "maxLevels", "maxConcurrent", "maxThreads", "scopedModelFiltering", "subagentMode",
+  "maxLevels", "maxConcurrent", "maxThreads", "scopedModelFiltering", "subagentMode", "toolFiltering",
 ] as const;
 const MAX_LEVELS = 32;
 
@@ -72,6 +77,7 @@ function positiveSafeInteger(value: unknown): value is number {
 
 function requirement(key: (typeof KEYS)[number]): string {
   if (key === "subagentMode") return "subagentMode must be off, opportunistic or orchestration";
+  if (key === "toolFiltering") return "toolFiltering must be allowed, all-except-blocked or all";
   return key === "scopedModelFiltering"
     ? "scopedModelFiltering must be a boolean"
     : `${key} must be a positive safe integer`;
@@ -99,6 +105,12 @@ function parseSettings(content: string): Partial<ManagerSettings> {
     if (key === "subagentMode") {
       if (!SUBAGENT_MODES.includes(value as SubagentMode)) throw new Error(requirement(key));
       layer.subagentMode = value as SubagentMode;
+      continue;
+    }
+    if (key === "toolFiltering") {
+      if (!TOOL_FILTERING_MODES.includes(value as ToolFilteringMode))
+        throw new Error(requirement(key));
+      layer.toolFiltering = value as ToolFilteringMode;
       continue;
     }
     if (key === "scopedModelFiltering") {

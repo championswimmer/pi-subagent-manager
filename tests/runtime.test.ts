@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   Type,
   createAssistantMessageEventStream,
+  getCurrentTools,
   type AssistantMessage,
   type Model,
 } from "@earendil-works/pi-ai";
@@ -24,6 +25,7 @@ import {
 } from "../src/orch/mailbox.ts";
 import { createDriverFactory } from "../src/orch/runtime.ts";
 import type { AgentDriver, DriverEvent, DriverOptions } from "../src/types.ts";
+import type { ToolFilteringMode } from "../src/prefs/settings.ts";
 
 const answer = (text: string): AssistantMessage => ({
   role: "assistant",
@@ -93,8 +95,13 @@ test("isolated real SDK driver without credentials", async (t) => {
     let beforeDone: Promise<void> | undefined;
     let scripted:
       ((stream: ReturnType<typeof createAssistantMessageEventStream>) => void) | undefined;
-    const requests: { system: string; model: Model<any>; messages: unknown[]; apiKey?: string }[] =
-      [];
+    const requests: {
+      system: string;
+      model: Model<any>;
+      messages: unknown[];
+      toolNames: string[];
+      apiKey?: string;
+    }[] = [];
     const registerProvider = (provider: string, ids: string[]) =>
       registry.registerProvider(provider, {
         api: "openai-completions",
@@ -114,6 +121,7 @@ test("isolated real SDK driver without credentials", async (t) => {
             system: JSON.stringify(context.messages.filter((msg) => msg.role === "system")),
             model,
             messages: context.messages,
+            toolNames: getCurrentTools(context.messages).map((tool) => tool.name),
             apiKey: streamOptions?.apiKey,
           });
           const stream = createAssistantMessageEventStream();
@@ -211,9 +219,11 @@ test("isolated real SDK driver without credentials", async (t) => {
       return { tool, started, release };
     };
     let scopedModelFiltering = true;
+    let toolFiltering: ToolFilteringMode = "allowed";
     const factory = createDriverFactory(
       () => ctx,
       () => scopedModelFiltering,
+      () => toolFiltering,
     );
     const events: DriverEvent[] = [];
     let pause = false;
@@ -251,6 +261,181 @@ test("isolated real SDK driver without credentials", async (t) => {
       setScopedModels("runtime-test/model/with/slashes", "runtime-other/backup");
       setRootModel("runtime-test/model/with/slashes");
     };
+
+    await t.test(
+      "tool filtering selects actual builtin/custom declarations and delegation guidance",
+      async () => {
+        let executions = 0;
+        const makeTool = (name: string): ToolDefinition => ({
+          name,
+          label: name,
+          description: name,
+          parameters: Type.Object({}),
+          async execute() {
+            executions++;
+            next = answer("tool completed");
+            return { content: [{ type: "text", text: "done" }], details: undefined };
+          },
+        });
+        const custom = [makeTool("probe"), makeTool("agent_spawn"), makeTool("agent_wait")];
+        const allNames = [
+          "read",
+          "bash",
+          "powershell",
+          "edit",
+          "write",
+          "grep",
+          "find",
+          "ls",
+          ...custom.map((tool) => tool.name),
+        ];
+        try {
+          for (const mode of ["allowed", "all-except-blocked", "all"] as const) {
+            toolFiltering = mode;
+            next = answer("declarations");
+            const driver = await create(
+              options({
+                path: `/root/filter-${mode}`,
+                tools: custom,
+                type: {
+                  ...options().type,
+                  tools: { allow: ["read", "probe", "agent_spawn"], block: ["read", "probe"] },
+                },
+              }),
+            );
+            await driver.prompt("Inspect selected tools");
+            const expected =
+              mode === "allowed"
+                ? ["agent_spawn"]
+                : mode === "all"
+                  ? allNames
+                  : allNames.filter((name) => name !== "read" && name !== "probe");
+            assert.deepEqual([...requests.at(-1)!.toolNames].sort(), [...expected].sort());
+            assert.equal(
+              requests.at(-1)!.system.includes("For independent parallel work"),
+              mode !== "allowed",
+            );
+            if (mode === "all") {
+              next = toolCall("allowed-probe", "probe");
+              await driver.prompt("Call formerly blocked custom tool");
+              assert.equal(executions, 1);
+              assert.ok(
+                driver
+                  .snapshot()
+                  .some(
+                    (msg) =>
+                      msg.role === "toolResult" &&
+                      msg.toolCallId === "allowed-probe" &&
+                      !msg.isError,
+                  ),
+              );
+            }
+          }
+          // Broader modes ignore unavailable names in the lists they bypass.
+          for (const mode of ["all-except-blocked", "all"] as const) {
+            toolFiltering = mode;
+            const driver = await create(
+              options({
+                path: `/root/filter-ignored-${mode}`,
+                type: {
+                  ...options().type,
+                  tools: { allow: ["missing"], block: mode === "all" ? ["missing"] : [] },
+                },
+              }),
+            );
+            next = answer("ignored lists");
+            await driver.prompt("Use builtins");
+            assert.deepEqual(
+              [...requests.at(-1)!.toolNames].sort(),
+              allNames.filter((name) => !custom.some((tool) => tool.name === name)).sort(),
+            );
+          }
+        } finally {
+          toolFiltering = "allowed";
+          next = answer("child answer");
+        }
+      },
+    );
+
+    await t.test(
+      "blocked builtin/custom calls fail without executing in both restricting modes",
+      async () => {
+        let executions = 0;
+        const probe: ToolDefinition = {
+          name: "probe",
+          label: "Probe",
+          description: "Probe",
+          parameters: Type.Object({}),
+          async execute() {
+            executions++;
+            return { content: [{ type: "text", text: "must not execute" }], details: undefined };
+          },
+        };
+        try {
+          for (const mode of ["allowed", "all-except-blocked"] as const) {
+            toolFiltering = mode;
+            const driver = await create(
+              options({
+                path: `/root/filter-denied-${mode}`,
+                tools: [probe],
+                type: {
+                  ...options().type,
+                  tools: { allow: ["read", "probe"], block: ["read", "probe"] },
+                },
+              }),
+            );
+            for (const name of ["read", "probe"]) {
+              const id = `blocked-${mode}-${name}`;
+              const reply = toolCall(id, name);
+              scripted = (stream) => {
+                stream.push({ type: "start", partial: reply });
+                stream.push({ type: "done", reason: "toolUse", message: reply });
+                stream.end(reply);
+              };
+              next = answer("after rejected call");
+              await driver.prompt(`Try blocked ${name}`);
+              assert.ok(!requests.at(-1)!.toolNames.includes(name));
+              assert.ok(
+                driver
+                  .snapshot()
+                  .some((msg) => msg.role === "toolResult" && msg.toolCallId === id && msg.isError),
+              );
+              assert.equal(executions, 0);
+            }
+          }
+        } finally {
+          scripted = undefined;
+          toolFiltering = "allowed";
+          next = answer("child answer");
+        }
+      },
+    );
+
+    await t.test(
+      "tool filtering getter applies at driver creation, not future requests of live sessions",
+      async () => {
+        try {
+          next = answer("filter snapshot");
+          toolFiltering = "allowed";
+          const strict = await create(options({ path: "/root/filter-old-strict" }));
+          toolFiltering = "all";
+          await strict.prompt("Keep startup tools");
+          assert.deepEqual(requests.at(-1)!.toolNames, []);
+          const wide = await create(options({ path: "/root/filter-new-wide" }));
+          await wide.prompt("Widen empty allow list");
+          assert.ok(requests.at(-1)!.toolNames.includes("read"));
+          toolFiltering = "allowed";
+          await wide.prompt("Keep wider startup tools");
+          assert.ok(requests.at(-1)!.toolNames.includes("read"));
+          const newStrict = await create(options({ path: "/root/filter-new-strict" }));
+          await newStrict.prompt("New startup snapshot");
+          assert.deepEqual(requests.at(-1)!.toolNames, []);
+        } finally {
+          toolFiltering = "allowed";
+          next = answer("child answer");
+        }
+      },
+    );
 
     await t.test(
       "system/history isolation, first-slash model parsing, output baseline and mailbox",

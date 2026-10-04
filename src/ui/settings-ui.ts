@@ -11,6 +11,7 @@ import {
   saveManagerSettings,
   type ManagerSettings,
   type SubagentMode,
+  type ToolFilteringMode,
 } from "../prefs/settings.ts";
 import { editAgentTypes } from "./ui.ts";
 
@@ -56,6 +57,30 @@ const MODE_OPTIONS = [
 const MODE_HELP =
   "Off: no subagent tools or prompt guidance.\nOpportunistic: delegate only parallelizable or very large tasks.\nOrchestration: /root delegates all execution and only coordinates and synthesizes results.";
 
+const TOOL_FILTERING_OPTIONS = [
+  {
+    id: "allowed",
+    label: "Allowed (except blocked)",
+    value: "Allow list minus block list",
+    help: "Only tools in the agent YAML allow list are available, minus its block list.\nBlocked tools take precedence. A missing or empty allow list means no tools.",
+  },
+  {
+    id: "all-except-blocked",
+    label: "All except blocked",
+    value: "Ignore allow list",
+    help: "All available tools except those in the agent YAML block list.\nThe allow list is completely ignored.",
+  },
+  {
+    id: "all",
+    label: "All",
+    value: "Ignore both lists",
+    help: "All available tools.\nThe agent YAML allow and block lists are completely ignored.",
+  },
+] as const;
+
+const TOOL_FILTERING_HELP =
+  "Allowed (except blocked): only allow-listed tools, minus blocked tools; a missing or empty allow list means no tools.\nAll except blocked: ignore the allow list; block-listed tools remain blocked.\nAll: ignore both lists.\nSave and apply to affect agents when their sessions start.";
+
 const SCOPED_MODEL_FILTERING = {
   id: "scopedModelFiltering",
   label: "Scoped model filtering",
@@ -100,6 +125,12 @@ async function configureAgentsDialog(
           label: "Subagent Mode",
           value: MODE_OPTIONS.find((mode) => mode.id === draft.subagentMode)!.label,
           help: MODE_HELP,
+        },
+        {
+          id: "toolFiltering",
+          label: "Tool Filtering",
+          value: TOOL_FILTERING_OPTIONS.find((mode) => mode.id === draft.toolFiltering)!.label,
+          help: TOOL_FILTERING_HELP,
         },
         ...FIELDS.map((field) => ({
           ...field,
@@ -174,6 +205,12 @@ async function configureAgentsDialog(
         });
         if (MODE_OPTIONS.some((option) => option.id === mode))
           draft.subagentMode = mode as SubagentMode;
+      } else if (action === "toolFiltering") {
+        const mode = await dialogMenu(ctx, "Tool Filtering", [...TOOL_FILTERING_OPTIONS], {
+          selectedId: draft.toolFiltering,
+        });
+        if (TOOL_FILTERING_OPTIONS.some((option) => option.id === mode))
+          draft.toolFiltering = mode as ToolFilteringMode;
       } else if (action === "scopedModelFiltering") {
         draft.scopedModelFiltering = !draft.scopedModelFiltering;
       } else if (action === "scope") {

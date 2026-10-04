@@ -48,7 +48,7 @@ These are choices, not an automatic fallback/escalation chain or a universal qua
 
 ## Researcher retrieval contract
 
-The child has `read`, `grep`, `find`, `ls`, `bash`, `agent_update`, and `agent_pause`. It does **not** inherit the parent's extensions, MCP tools, web tools, or skills. Named Context7/Exa/Parallel/Perplexity MCP tools cannot be enabled merely by putting names into this allowlist.
+With the default **Allowed (except blocked)** Tool Filtering mode, the researcher child has `read`, `grep`, `find`, `ls`, `bash`, `agent_update`, and `agent_pause`. It does **not** inherit the parent's extensions, MCP tools, web tools, or skills. Named Context7/Exa/Parallel/Perplexity MCP tools cannot be enabled merely by putting names into this allowlist.
 
 Use only actually installed/configured shell routes:
 
@@ -64,7 +64,9 @@ The handback gives the answer first, inline evidence, code paths/commit-pinned c
 
 ## Tool and authorization boundaries
 
-Only architect has descendant delegation controls, and even architect coordinates or executes only when the assignment authorizes it. Other roles can report progress or pause without starting children. Researcher/reviewer have no `edit`/`write` tools; researcher may write only a caller-authorized evidence artifact via shell. Writer has no bash retrieval route.
+With the default **Allowed (except blocked)** Tool Filtering mode, only architect has descendant delegation controls, and even architect coordinates or executes only when the assignment authorizes it. Other roles can report progress or pause without starting children. Researcher/reviewer have no `edit`/`write` tools; researcher may write only a caller-authorized evidence artifact via shell. Writer has no bash retrieval route.
+
+The manager's **Tool Filtering** setting can override these YAML tool boundaries: **All except blocked** ignores allow lists, while **All** ignores both allow and block lists. Tool sets are selected when sessions initialize; already-open sessions retain their tools. These modes do not change the role prompts or authorization requirements.
 
 Tool policy is **not an OS sandbox**: bash can mutate files, contact services, or run scripts despite a read-only research/review prompt. Research does not authorize worktree changes, remote writes, setup, installations, or untrusted code execution. Tests/builds can write files and need explicit authorization. Coder must not claim browser/rendering/accessibility checks without tooling that actually ran.
 

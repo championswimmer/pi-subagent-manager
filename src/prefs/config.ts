@@ -13,6 +13,7 @@ import { randomUUID } from "node:crypto";
 import { isMap, isScalar, parseDocument, stringify } from "yaml";
 import { getModelPreferences } from "./models.js";
 import { THINKING_LEVELS, type AgentType } from "../types.js";
+import type { ToolFilteringMode } from "./settings.ts";
 
 // Pi semantic color tokens, resolved as concrete colors for agent name backgrounds.
 export const AGENT_COLORS = [
@@ -257,14 +258,22 @@ export function serializeAgentType(type: AgentType): string {
 export function selectTools(
   policy: AgentType["tools"],
   available: string[],
+  mode: ToolFilteringMode = "allowed",
 ): string[] {
-  const validated = policy === undefined ? {} : toolPolicy(policy);
   const names = new Set(available);
+  if (mode === "all") return [...names];
+  // Ignored lists do not participate in validation or tool selection.
+  const relevantPolicy =
+    mode === "all-except-blocked"
+      ? policy?.block === undefined
+        ? {}
+        : { block: policy.block }
+      : policy;
+  const validated = relevantPolicy === undefined ? {} : toolPolicy(relevantPolicy);
   for (const name of [...(validated.allow ?? []), ...(validated.block ?? [])]) {
     if (!names.has(name)) throw new Error(`Unavailable tool name: ${name}`);
   }
-  const allow =
-    validated.allow === undefined ? names : new Set(validated.allow);
+  const allow = mode === "all-except-blocked" ? names : new Set(validated.allow ?? []);
   const block = new Set(validated.block ?? []);
   return [...names].filter((name) => allow.has(name) && !block.has(name));
 }
