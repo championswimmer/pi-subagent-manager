@@ -9,6 +9,7 @@ import { loadManagerSettings } from "./prefs/settings.ts";
 import { configureAgents } from "./ui/settings-ui.ts";
 import { showAgentStatus, showAgentTree } from "./ui/status-ui.ts";
 import { createDriverFactory } from "./orch/runtime.ts";
+import { createInheritedToolSource } from "./orch/inherited-tools.ts";
 import { subagentPrompt } from "./orch/prompt.ts";
 import { agentTools } from "./orch/tools.ts";
 import { editAgentTypes, updateWidget } from "./ui/ui.ts";
@@ -24,6 +25,7 @@ type RootNotification = {
 
 export default function piSubagent(pi: ExtensionAPI): void {
   let context: ExtensionContext | undefined;
+  const inheritedTools = createInheritedToolSource(pi);
   let store = new ConfigStore({
     cwd: process.cwd(),
     agentDir: getAgentDir(),
@@ -181,8 +183,10 @@ export default function piSubagent(pi: ExtensionAPI): void {
         ...tool,
         // Hidden tools are neither model-visible nor discoverable/callable via codemode.
         exposure: enabled ? "direct" : "hidden",
+        prepareLoadout: inheritedTools.captureLoadout,
         execute: (...args) => {
           if (limits.subagentMode === "off") throw new Error("Subagent Mode is off");
+          inheritedTools.captureContext(args[4]);
           return tool.execute(...args);
         },
       });
@@ -213,6 +217,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
     const token = ++generation;
     // session_start already belongs to the replacement session: never append the old registry here.
     if (manager) await manager.shutdown();
+    inheritedTools.reset();
     context = ctx;
     store = new ConfigStore({
       cwd: ctx.cwd,
@@ -228,6 +233,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
         requireContext,
         () => limits.modelSelection,
         () => limits.toolFiltering,
+        () => inheritedTools.snapshot(),
       ),
       rootSnapshot: () => buildSessionContext(requireContext().sessionManager.getBranch()).messages,
       getType: (name) => store.get(name),

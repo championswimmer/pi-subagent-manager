@@ -4,6 +4,8 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, realpath } from "node:fs/promises";
 import {
   createAgentSession,
+  createCodemodeExtension,
+  createToolSearchExtension,
   DefaultResourceLoader,
   getAgentDir,
   ModelRuntime,
@@ -19,6 +21,7 @@ import {
   DurableMailbox,
 } from "./mailbox.ts";
 import { selectTools } from "../prefs/config.ts";
+import type { InheritedToolSource } from "./inherited-tools.ts";
 import type { ModelSelectionMode, ToolFilteringMode } from "../prefs/settings.ts";
 import { modelIdentity, getModelPreferences, selectPreferredModel } from "../prefs/models.ts";
 import {
@@ -131,11 +134,12 @@ async function assertAcceptedSessionFile(
   }
 }
 
-/** Isolated SDK sessions; neither external extensions nor the CLI's MCP factories are loaded. */
+/** Isolated SDK sessions with filtered root tool bridges, not reloaded root extensions. */
 export function createDriverFactory(
   getRootContext: () => ExtensionContext,
   getModelSelection: () => ModelSelectionMode = () => "pick-first-scoped",
   getToolFiltering: () => ToolFilteringMode = () => "allowed",
+  getInheritedTools: () => InheritedToolSource = () => ({ tools: [], activeNames: [] }),
 ): DriverFactory {
   // Keep resolved settings even after disposal: descendants inherit settings, not the caller's history.
   const resolved = new Map<string, { provider: string; id: string; thinking: ThinkingLevel }>();
@@ -316,12 +320,23 @@ export function createDriverFactory(
         : undefined;
     const thinkingLevel =
       savedThinking ?? options.type.thinkingLevel ?? parent?.thinking ?? ctx.thinkingLevel ?? "off";
+    const inherited = getInheritedTools();
+    const localNames = new Set([...BUILTINS, ...options.tools.map((tool) => tool.name)]);
+    const externalTools = inherited.tools.filter((tool) => !localNames.has(tool.name));
     const toolNames = selectTools(
       options.type.tools,
-      [...BUILTINS, ...options.tools.map((tool) => tool.name)],
+      [...localNames, ...externalTools.map((tool) => tool.name)],
       toolFiltering,
     );
     const allowed = new Set(toolNames);
+    const rootActive = new Set(inherited.activeNames);
+    // Preserve deferred/codemode exposure rather than flooding model declarations with MCP tools.
+    const activeToolNames = toolNames.filter(
+      (name) => localNames.has(name) || rootActive.has(name) || options.type.tools?.allow?.includes(name) && toolFiltering === "allowed",
+    );
+    const customTools = [...options.tools, ...externalTools].filter(
+      (tool) => allowed.has(tool.name) && tool.name !== "codemode" && tool.name !== "tool_search",
+    );
     const settingsManager = SettingsManager.inMemory({ cacheWarming: "off" });
     let parkQueue = () => {};
     const pauseBoundary = () => {
@@ -354,6 +369,10 @@ export function createDriverFactory(
       ].join("\n\n"),
       appendSystemPromptOverride: () => [],
       extensionFactories: [
+        // These orchestrators must see the CHILD loadout. Forwarding root codemode would
+        // let scripts discover/call tools outside the child's allow/block policy.
+        ...(allowed.has("codemode") ? [createCodemodeExtension()] : []),
+        ...(allowed.has("tool_search") ? [createToolSearchExtension()] : []),
         (pi) => {
           pi.on("turn_end", pauseBoundary);
           pi.on("agent_before_settle", pauseBoundary);
@@ -378,8 +397,10 @@ export function createDriverFactory(
       settingsManager,
       resourceLoader: loader,
       sessionManager,
+      // SDK `tools` is both a registry allowlist and an initial active list.
+      // Register every permitted deferred tool, then narrow declarations after bind.
       tools: toolNames,
-      customTools: options.tools.filter((tool) => allowed.has(tool.name)),
+      customTools,
     });
     let lastScopedModelsKey = "";
     const updateResolved = () => {
@@ -448,6 +469,7 @@ export function createDriverFactory(
       await enforceScopedModelPolicy();
       options.signal.throwIfAborted();
       await session.bindExtensions({ mode: "print" });
+      session.setActiveToolsByName(activeToolNames);
       options.signal.throwIfAborted();
     } catch (error) {
       session.dispose();

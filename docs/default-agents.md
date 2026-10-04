@@ -48,9 +48,9 @@ These are choices, not an automatic fallback/escalation chain or a universal qua
 
 ## Researcher retrieval contract
 
-With the default **Allowed (except blocked)** Tool Filtering mode, the researcher child has `read`, `grep`, `find`, `ls`, `bash`, `agent_update`, and `agent_pause`. It does **not** inherit the parent's extensions, MCP tools, web tools, or skills. Named Context7/Exa/Parallel/Perplexity MCP tools cannot be enabled merely by putting names into this allowlist.
+With the default **Allowed (except blocked)** Tool Filtering mode, the researcher child has `read`, `grep`, `find`, `ls`, `bash`, `agent_update`, and `agent_pause`. A custom allowlist can select exact names of registered non-hidden parent MCP/web tools; broader filtering modes can also make them available. Deferred/codemode tools are discoverable through child-local codemode when permitted. Skills are not automatically loaded. External tools reuse the main session's resources/context, and bridged callable tools remain subject to its tool policy; they are not fresh, isolated extension instances.
 
-Use only actually installed/configured shell routes:
+Use only actually available authorized retrieval routes. For shell routes:
 
 - Local source: narrow discovery, implementation/callers/tests/config inspection, version and working-tree provenance, and path/line citations.
 - GitHub: `gh` read endpoints; search discovers candidates, then inspect the actual commit/ref. Legacy code search indexes the default branch and is not an exhaustive branch audit. Explicit `--method GET` avoids `gh api` field flags changing a read request into POST.

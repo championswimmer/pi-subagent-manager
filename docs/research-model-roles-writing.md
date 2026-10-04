@@ -4,7 +4,7 @@
 
 Requested cutoff: **2026-10-03**; freshest dated Arena snapshot discovered: **2026-10-02**. The confirmed five defaults are **architect (absorbs research), reviewer (GPT-only), coder, tasker, writer**. Recommend keeping writing separate from evidence gathering. All names below are advisory `modelSuggestions`, not runtime pins or configuration edits.
 
-**Tool disclosure:** the parent confirms Exa MCP search/fetch tools are accessible through its codemode. This child session does **not** expose codemode or those MCP tools and does not inherit parent tools. This research used `web_search` with `provider: "exa"` for Exa-based discovery and `fetch_content` for selected pages, not Exa MCP fetch. Context7 and code-search tools are unavailable here. Read the requested web-research skill. Only this document was written; no source/config edits or git operations were performed.
+**Historical tool disclosure (research session, before parent-tool bridging):** the parent confirmed Exa MCP search/fetch tools were accessible through its codemode. That child session did **not** expose codemode or those MCP tools and did not inherit parent tools. This research used `web_search` with `provider: "exa"` for Exa-based discovery and `fetch_content` for selected pages, not Exa MCP fetch. Context7 and code-search tools are unavailable here. Read the requested web-research skill. Only this document was written; no source/config edits or git operations were performed.
 
 ## Advisory modelSuggestions: confirmed five roles
 
@@ -22,7 +22,7 @@ This table records exploratory candidates from the writing/research sweep, not t
 
 ### Research-tool contract for architect
 
-The current child runtime does not inherit MCP/parent tools. Architect must consume a **supplied research packet** or use **authorized shell retrieval**, including an Exa CLI/API only if it is actually installed/configured and authorized. Do not hardcode unavailable Exa MCP tool names into child instructions, promise nonexistent tool access, or embed credentials. If retrieval is unavailable, explicitly state that limitation and ask for parent-supplied sources. Parent-side codemode Exa access can produce the packet: URLs, dates, fetched passages, contradictions, and unresolved questions. Model ability and retrieval availability are separate decisions.
+The default architect allowlist does not grant MCP retrieval tools. With parent-tool bridging, a custom allowlist or broader Tool Filtering mode can expose registered non-hidden parent tools, with deferred/codemode discovery through child-local codemode. External tools reuse main-session resources/context, not isolated extension instances. When authorized retrieval is unavailable, architect must consume a **supplied research packet** or use **authorized shell retrieval**, including an Exa CLI/API only if it is actually installed/configured and authorized. Do not hardcode unavailable Exa MCP tool names into child instructions, promise nonexistent tool access, or embed credentials. If retrieval is unavailable, explicitly state that limitation and ask for parent-supplied sources. Parent-side codemode Exa access can produce the packet: URLs, dates, fetched passages, contradictions, and unresolved questions. Model ability and retrieval availability are separate decisions.
 
 ### Five versus six responsibilities
 
