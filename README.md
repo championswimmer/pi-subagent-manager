@@ -87,7 +87,7 @@ A compact live **Agents** tree also sits above the input box.
 ## Good to know
 
 - Tool policies are **not a sandbox**. Agents share your working directory and OS permissions.
-- Children do **not** inherit your extensions, MCP servers, skills or web tools.
+- Children can use your registered extension, MCP and web tools when [Tool Filtering](docs/settings.md#tool-filtering-toolfiltering) permits them. Skills are not automatically loaded; external tools share main-session resources/context.
 - Don't run multiple subagent extensions together — they clash on `/agents`.
 
 ## License

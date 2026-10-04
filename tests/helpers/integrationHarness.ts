@@ -18,6 +18,7 @@ import {
   SettingsManager,
   type AgentSession,
   type ExtensionError,
+  type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
 import piSubagent from "../../src/index.ts";
 import type { SavedThread } from "../../src/types.ts";
@@ -61,6 +62,7 @@ export async function withOfflineHarness(
     scopedModels?: string[];
     managerSettings?: Partial<ManagerSettings>;
     builtinTools?: boolean;
+    extensionFactories?: ExtensionFactory[];
   },
   body: (harness: OfflineHarness) => Promise<void>,
 ): Promise<void> {
@@ -203,7 +205,7 @@ export async function withOfflineHarness(
         noContextFiles: true,
         systemPrompt: "OFFLINE PARENT",
         appendSystemPrompt: [],
-        extensionFactories: [piSubagent],
+        extensionFactories: [piSubagent, ...(options.extensionFactories ?? [])],
       });
       await resourceLoader.reload();
       const { session, extensionsResult } = await createAgentSession({

@@ -12,14 +12,16 @@ Use a reasoning-capable, tool-reliable model with good code reading, multi-hop r
 
 ## Runtime capability gate — implementation evidence
 
-At inspected revision `af8424dc621fa38f61058e2e0afa19ab449d084b`:
+Historical evidence at inspected revision `af8424dc621fa38f61058e2e0afa19ab449d084b` (before parent-tool bridging):
 
 - [`src/runtime.ts:299-303`](../src/runtime.ts) selects from built-ins and `options.tools`; [`src/index.ts:230`](../src/index.ts) supplies only subagent-manager tools through `toolsFor`.
 - [`src/runtime.ts:311-319`](../src/runtime.ts) sets `noExtensions`, `noSkills`, `noPromptTemplates`, `noContextFiles`, and `noThemes` to true. The parent’s Context7/Exa/Parallel/Perplexity MCP or web extensions are **not inherited**.
 - [`src/runtime.ts:339-343`](../src/runtime.ts) blocks unallowed tool calls; [`src/runtime.ts:350-362`](../src/runtime.ts) passes only selected tools to the SDK session.
 - [`src/config.ts:257-269`](../src/config.ts) validates exact tool names and throws for unavailable names. Adding imagined MCP names to the frontmatter will not enable them and can break spawning.
 
-Therefore the shipped prompt must not instruct the child to call MCP tools, `web_enable`, or provider-discovery extension tools as if available. Use configured shell routes, or a parent-supplied packet containing URLs, dates, versions and fetched passages. If neither can answer the assignment, pause with the missing capability instead of pretending model memory is live evidence. A future runtime integration would require explicit tool plumbing and tests, not just a larger allowlist.
+Current parent-tool bridging includes registered non-hidden main-session tools in the child inventory, subject to exact-name Tool Filtering policies. Permitted MCP/web tools can therefore be selected by a custom allowlist or broader mode; deferred/codemode tools use child-local codemode discovery. External execution reuses main-session resources/context rather than loading fresh extensions or MCP connections, and the parent's policy still applies to bridged callable tools. Skills and project context files are not automatically loaded.
+
+The shipped prompt must still not assume MCP tools, `web_enable`, or provider-discovery tools are available under its default local-tool allowlist. Use actually available authorized retrieval, configured shell routes, or a parent-supplied packet containing URLs, dates, versions and fetched passages. If none can answer the assignment, pause with the missing capability instead of pretending model memory is live evidence.
 
 The local `web-research` skill recommends complementary search angles, discovery followed by full-page reading, Context7 for library questions, and explicit dates and uncertainty. The local `github` skill prefers `gh` and warns that API writes bypass the local checkout. Those are useful workflow ideas, but their statements that servers/credentials are installed are session-specific and must **not** be copied as assumptions into a portable bundled definition. Neither skill is automatically loaded into this child.
 

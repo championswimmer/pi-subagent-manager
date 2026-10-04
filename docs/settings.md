@@ -69,8 +69,12 @@ How the type's `tools.allow` / `tools.block` lists are applied.
 | `all-except-blocked` — **All except blocked**      | Ignores `allow`; everything except `block`.                          | Your definitions only list what to forbid. |
 | `all` — **All**                                    | Ignores both lists.                                                  | Trusted local experiments.                 |
 
-- "All" means built-in pi tools plus this extension's tools — not third-party tools from the main session.
-- Applies to newly started sessions (including retained ones reopened after reload).
+- "All" includes child-local built-in and manager tools plus the main session's registered non-hidden tools. Exact-name allow/block lists apply to this inventory.
+- Inherited tools retain exposure and active status. Deferred/codemode tools are discoverable through child-local codemode when permitted; direct tools remain model-facing when active.
+- Built-in tools, manager controls, codemode and tool search remain child-local. External calls reuse main-session resources/context rather than loading fresh extensions or MCP connections. Bridged callable tools remain subject to the main session's tool policy; session-mutating external tools are not necessarily isolated to the child. Skills and project context files are not automatically loaded.
+- Other custom **model-only** tools fail closed: the SDK cannot bridge them while preserving root permission/result hooks. Run those in the main session.
+- UI/command-driven resumes after reopening the main session need a main-session `agent_*` tool call to establish the execution bridge; use `agent_steer` rather than the thread dialog.
+- Applies to newly started sessions (including retained ones reopened after reload). Already-open sessions keep their selected tools, and the main session's tool set is unchanged.
 - Non-default modes can expose `agent_spawn` to types that weren't meant to delegate.
 
 ## Max Levels (`maxLevels`)

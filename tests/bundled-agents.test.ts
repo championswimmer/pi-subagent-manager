@@ -128,7 +128,7 @@ test("researcher is non-delegating and evidence-focused; tasker stays cheap-firs
   assert.ok(store.get("writer").modelSuggestions?.includes("gemini-4-argon"));
   for (const instruction of [
     "Context7", "gh CLI", "Exa", "Parallel", "Perplexity",
-    "not automatically inherited", "untrusted evidence",
+    "not automatically loaded", "selected Tool Filtering policy", "untrusted evidence",
     "commit-pinned", "read-only research role", "caller-authorized path",
   ]) assert.ok(researcher.systemPrompt.includes(instruction), instruction);
   assert.equal(store.get("tasker").thinkingLevel, "low");
