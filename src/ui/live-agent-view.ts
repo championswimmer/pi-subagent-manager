@@ -175,14 +175,35 @@ export class LiveAgentView {
   }
 
   private wrap(value: string, width: number): string[] {
-    const safe = text(value);
-    // A single huge tool result must not monopolize an interactive render.
-    const bounded =
-      safe.length > 32768
-        ? safe.slice(0, 32768) +
-          "\n[Viewer truncated at 32 KiB; use Actions → Transcript for retained output]"
-        : safe;
-    return bounded.split("\n").flatMap((line) => wrapTextWithAnsi(line, Math.max(1, width)));
+    return text(value)
+      .split("\n")
+      .flatMap((line) => wrapTextWithAnsi(line, Math.max(1, width)));
+  }
+
+  /** Tool/metadata previews are bounded by rendered rows, not just source newlines. */
+  private preview(content: unknown, width: number): string[] {
+    const values = Array.isArray(content) ? content : [content];
+    const lines: string[] = [];
+    for (const value of values) {
+      const block = object(value);
+      const valueText =
+        typeof value === "string"
+          ? value
+          : block?.type === "text"
+            ? String(block.text ?? "")
+            : block?.type === "image"
+              ? "[Image — text-only observer]"
+              : json(value);
+      // Avoid wrapping megabytes of tool output just to display its first three rows.
+      const safe = text(valueText);
+      const bounded = safe.slice(0, 32768);
+      for (const line of bounded.split("\n")) {
+        lines.push(...wrapTextWithAnsi(line, Math.max(1, width)));
+        if (lines.length > 3) return [...lines.slice(0, 3), this.theme.fg("dim", "...")];
+      }
+      if (safe.length > bounded.length) return [...lines.slice(0, 3), this.theme.fg("dim", "...")];
+    }
+    return lines;
   }
 
   private blocks(content: unknown, width: number): string[] {
@@ -205,9 +226,9 @@ export class LiveAgentView {
             "accent",
             dialogText(`Tool call: ${String(block.name)} (${String(block.id)})`),
           ),
-          ...this.wrap(json(block.arguments), width),
+          ...this.preview(json(block.arguments), width),
         ];
-      return this.wrap(json(block), width);
+      return this.preview(json(block), width);
     });
   }
 
@@ -220,11 +241,16 @@ export class LiveAgentView {
       message.role === "toolResult"
         ? `Tool result: ${String(data.toolName)}${data.isError ? " — error" : ""}`
         : message.role;
+    const collapsed = !["user", "assistant", "custom"].includes(message.role);
+    const content = data.content ?? data.summary ?? data.output ?? data;
     const lines = [
       this.theme.fg(data.isError ? "error" : "accent", dialogText(label)),
-      ...this.blocks(data.content ?? data.summary ?? data.output ?? data, width),
+      ...(collapsed ? this.preview(content, width) : this.blocks(content, width)),
       ...(data.errorMessage
-        ? this.wrap(String(data.errorMessage), width).map((line) => this.theme.fg("error", line))
+        ? (collapsed
+            ? this.preview(String(data.errorMessage), width)
+            : this.wrap(String(data.errorMessage), width)
+          ).map((line) => this.theme.fg("error", line))
         : []),
       "",
     ];
@@ -281,10 +307,10 @@ export class LiveAgentView {
               `Tool ${tool.toolName} — ${tool.state}${tool.isError ? " (error)" : ""}${tool.parentToolCallId ? " (nested)" : ""}`,
             ),
           ),
-          ...this.wrap(json(tool.args), columns),
+          ...this.preview(json(tool.args), columns),
         );
         if (tool.result !== undefined)
-          body.push(...this.blocks(object(tool.result)?.content ?? tool.result, columns));
+          body.push(...this.preview(object(tool.result)?.content ?? tool.result, columns));
         body.push("");
       }
       if (!body.length)
