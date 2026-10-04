@@ -497,7 +497,11 @@ for (const Renderer of [TuiMainScreen, TuiAltScreen]) {
       assert.ok(session instanceof DialogSession);
       const menu = session.getComponent();
       assert.ok(menu instanceof DialogMenu);
-      for (let steps = 0; menu.getSelectedId() !== id && steps < 20; steps++) await input(DOWN);
+      const target = menu.rows.findIndex((row) => row.id === id);
+      for (let steps = 0; menu.getSelectedId() !== id && steps < 20; steps++) {
+        const current = menu.rows.findIndex((row) => row.id === menu.getSelectedId());
+        await input(current < target ? DOWN : "\x1b[A");
+      }
       assert.equal(menu.getSelectedId(), id, `settings row ${id} is reachable`);
     };
 
@@ -509,6 +513,12 @@ for (const Renderer of [TuiMainScreen, TuiAltScreen]) {
     await replaceField("33");
     assert.ok(notifications.some((message) => message.includes("at most 32")));
     await replaceField("5");
+    // The model chooser also reuses the overlay and preserves its bounds.
+    await selectRow("modelSelection");
+    await input("\r");
+    await input(DOWN);
+    await input("\r");
+    await selectRow("maxLevels");
     // A canceled field editor, a scope toggle and the nested definitions
     // editor all remain inside the same outer overlay.
     await input("\r");
@@ -530,6 +540,10 @@ for (const Renderer of [TuiMainScreen, TuiAltScreen]) {
     assert.equal(
       loadManagerSettings({ cwd: root, agentDir: root, includeProject: false }).settings.subagentMode,
       "orchestration",
+    );
+    assert.equal(
+      loadManagerSettings({ cwd: root, agentDir: root, includeProject: false }).settings.modelSelection,
+      "use-current",
     );
   });
 

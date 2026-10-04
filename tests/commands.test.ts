@@ -118,12 +118,12 @@ function seedThreads(ctx: ExtensionCommandContext, paths: string[]) {
 
 test("agents command defaults to settings and saved settings persist and reach the system prompt", async () => {
   await withCommands(async ({ command, ctx, hooks, renders, replies, cwd }) => {
-    replies.push("maxLevels", "5", "scopedModelFiltering", "save");
+    replies.push("maxLevels", "5", "modelSelection", "pick-first-available", "save");
     await command.handler("", ctx);
     assert.match(renders[0]!.join("\n"), /Agents settings/);
     const { settings } = loadManagerSettings({ cwd, agentDir: cwd, includeProject: false });
     assert.equal(settings.maxLevels, 5);
-    assert.equal(settings.scopedModelFiltering, false);
+    assert.equal(settings.modelSelection, "pick-first-available");
     const result = await hooks.get("before_agent_start")!(
       { prompt: "User request", systemPrompt: "Main" },
       ctx,

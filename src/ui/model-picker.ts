@@ -409,7 +409,7 @@ export class OrderedModelEditorComponent extends Container {
 
   private withScopeWarning(text: string): string {
     if (this.scopedIdentities.size === 0) {
-      return `No scoped models: explicit preferences cannot run. Configure /scoped-models. ${text}`;
+      return `No scoped models: Pick First (scoped) cannot run explicit preferences. Configure /scoped-models or change Model Picking. ${text}`;
     }
     return text;
   }

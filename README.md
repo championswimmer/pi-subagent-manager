@@ -106,14 +106,14 @@ report concrete findings, and do not modify files.
 
 The Markdown body is the agent's system prompt. `name` and `description` are required. Other fields are optional:
 
-- **models:** an ordered YAML list of exact `provider/model-id` preferences. Model IDs may contain additional slashes. With scoped model filtering enabled (the default), the first entry that exists in `/scoped-models` wins; the scan follows the definition's list order, not the scoped-model order. With filtering disabled, the first entry available in pi's model registry wins instead.
+- **models:** an ordered YAML list of exact `provider/model-id` preferences. Model IDs may contain additional slashes. **Model Picking** controls selection: **Pick First (available)** picks the first available entry; **Pick First (scoped)** (default) additionally requires it to be in the main session's `/scoped-models`; **Use Current** ignores this list and uses the main session's current model. Preference order, not scoped-model order, determines the first match. Availability requires a configured provider with credentials.
 - **model:** deprecated compatibility alias for a single preference. Existing definitions still parse, but saving normalizes them to `models:` and does not write `model:` back out.
 - **modelSuggestions:** optional YAML list of advisory display names, such as `sonnet-5.5` or `gpt-6.1-sol`. These are not `provider/model-id` pins, not ordered runtime preferences, and not scoped-model matches. They never select a model and never bypass scoped runtime preferences, including when a definition also sets `models`. Omitting them leaves inheritance unchanged. A same-name user or project definition can replace the list; replacement still does not select a model unless that definition sets `models` or `model`.
 - **thinkingLevel:** `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. The SDK applies the selected model's supported levels.
 - **color:** a pi semantic color, such as `accent`, `success`, `warning`, `error`, `muted` or `dim`, used as the background of the agent's type pill (e.g. `[architect]`) and the foreground of its task-based path. Pill text is bold and automatically contrasts with the background. The color picker previews both; colors follow theme changes. Unset uses `accent`.
 - **tools:** exact-name `allow` and/or `block` lists, applied according to the manager's **Tool Filtering** setting. By default, only listed `allow` tools are available and `block` wins; an empty or omitted allow list means **no tools**. Unavailable names in active lists fail clearly, rather than widening access; ignored lists do not affect tool selection.
 
-If `models`/`model` is omitted, the agent inherits the effective parent/default model. Matching is strict: with scoped model filtering enabled, preferences are matched verbatim against `/scoped-models`, and if none match — including when `/scoped-models` is empty — spawn fails with an actionable error instead of falling back to the registry. Turn filtering off in `/agents` to allow unscoped, available models; spawn still fails if no preference is available.
+In either **Pick First** mode, if `models`/`model` is omitted, the agent inherits the effective parent/default model. Matching is exact, and spawn fails clearly if no configured preference is available (or scoped, in scoped mode); it does not silently fall back. An empty `/scoped-models` list has no matches. **Use Current** always uses the main session's model, even for nested agents or reopened sessions; each agent's thinking level remains independent. `modelSuggestions` only assists searching in the model picker and never participates in runtime selection.
 
 Discovery precedence:
 
@@ -144,7 +144,7 @@ Automatic project discovery requires project trust. Only agent definitions are o
 - `/agents types`: open the bordered agent-definition browser and two-column editor: **field names** on the left, **current values** on the right. **↑↓/Tab** selects fields, **Enter** edits, **Ctrl+S** saves, and **Esc** discards the draft. Multiline field dialogs use **Enter** for a newline and **Ctrl+S** to apply to the draft. Edit the system prompt, models, thinking, tools, color and save scope. Model preferences use an ordered picker: selected models appear first in fallback order, followed by available models (scoped entries are marked). **Enter** toggles a model, **Ctrl+↑/↓** reorders a selected model without unselecting it, **Ctrl+S** applies preferences, and **Esc** discards changes. Below the selected models, [fuzzysort](https://github.com/farzher/fuzzysort) fuzzy-matches the draft's `modelSuggestions` against provider/id and display name: scoped matches first, other matches next (ranked by best match score), then remaining models alphabetically without duplicates. Typing filters these groups while keeping selected models visible; without suggestions the available models are alphabetical. Suggestions only aid selection and never change runtime model resolution. The YAML editor edits the header together; **External editor** edits the whole Markdown file using `$VISUAL`, `$EDITOR`, or `vi`.
 - `/agents import`: select individual external definitions for model-driven migration.
 - `/agents reload`: reload definitions and show diagnostics.
-- `/agents` or `/agents settings`: open a bordered settings dialog. Choose **Subagent Mode** (**Off**, **Opportunistic**, or **Orchestration**), edit level, concurrency and retained-thread limits, toggle **Scoped model filtering**, choose global or trusted-project scope, and save with **Ctrl+S**. The mode field and chooser explain each option. Settings apply immediately without interrupting existing work. **Agent definitions** opens the type editor.
+- `/agents` or `/agents settings`: open a bordered settings dialog. Choose **Subagent Mode** (**Off**, **Opportunistic**, or **Orchestration**), edit level, concurrency and retained-thread limits, choose **Model Picking** (**Pick First (available)**, **Pick First (scoped)**, or **Use Current**), choose global or trusted-project scope, and save with **Ctrl+S**. The mode field and chooser explain each option. Settings apply immediately without interrupting existing work. **Agent definitions** opens the type editor.
 - `/agents tree`: open a live, bordered tree of all retained agents, including running and paused sessions. **↑↓** select, **←→** collapse/expand, **PgUp/PgDn** scroll, **Enter** inspects the selected thread, **Esc** close. The dialog refreshes every second and preserves selection. An optional path preselects that agent, for example `/agents tree /root/controller-security-research`.
 - `/agents status`: alias of `/agents tree`.
 
@@ -193,7 +193,7 @@ Settings belong to **this extension**, not another subagent package:
   "maxLevels": 3,
   "maxConcurrent": 16,
   "maxThreads": 64,
-  "scopedModelFiltering": true,
+  "modelSelection": "pick-first-scoped",
   "subagentMode": "opportunistic",
   "toolFiltering": "allowed"
 }
@@ -211,7 +211,13 @@ Mode changes apply immediately without canceling running work or discarding reta
 
 `maxConcurrent` counts starting/running threads **across the entire tree**, including parents waiting for children; `maxThreads` counts all retained threads. Both require positive safe integers. Capacity exhaustion fails clearly rather than queuing. Omitted settings use the defaults above. Unknown keys, malformed values and symlinked settings paths produce warnings; an invalid file is ignored atomically, preserving the preceding valid layer/defaults.
 
-`scopedModelFiltering` is a boolean, defaulting to `true` to preserve scoped-only selection. When enabled, explicitly configured agents must match a scoped model, in definition preference order, or fail. When disabled, the same ordered selection uses all available models, regardless of scope. Agents without model preferences still inherit. Changes apply to new agents and future requests by retained agents; toggling does not cancel an in-flight request. Re-enabling filtering restores scoped checks on subsequent requests.
+**Model Picking** (`modelSelection`) controls the model chosen when an agent's SDK session starts:
+
+- **Pick First (available)** (`"pick-first-available"`): scan the definition's `models` in order and use the first available model with configured credentials, regardless of scope.
+- **Pick First (scoped)** (`"pick-first-scoped"`, default): the same scan, restricted to available models in the main session's `/scoped-models`.
+- **Use Current** (`"use-current"`): ignore `models` (and legacy `model`) and use the main session's current model, not a nested parent's or restored session's model. Agent-specific thinking levels still apply.
+
+Neither `modelSuggestions` nor the scoped list's order affects runtime selection. Changing modes does not cancel an in-flight request or switch already-open sessions to the main model. Scoped checks continue to apply to future requests by retained preference-based agents while scoped mode is selected. Legacy `scopedModelFiltering: true` migrates to `"pick-first-scoped"`; `false` migrates to `"pick-first-available"`. An explicit `modelSelection` wins, and saving writes only the new setting.
 
 **Tool Filtering** in `/agents settings` controls which tools each agent receives when its SDK session starts:
 

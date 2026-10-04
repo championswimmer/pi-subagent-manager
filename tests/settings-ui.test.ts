@@ -146,32 +146,76 @@ for (const width of [32, 80]) {
   });
 }
 
-test("filtering toggle and other edits are draft-only until save", async (t) => {
-  const canceled = await run(t, ["scopedModelFiltering", "maxLevels", "4", "cancel"]);
+test("Model Picking explains and saves all three modes", async (t) => {
+  for (const [mode, label] of [
+    ["pick-first-available", "Pick First (available)"],
+    ["pick-first-scoped", "Pick First (scoped)"],
+    ["use-current", "Use Current"],
+  ]) {
+    const result = await run(t, ["modelSelection", mode, "save"]);
+    const field = result.menus[0]!.rows.find((row) => row.id === "modelSelection")!;
+    assert.equal(field.label, "Model Picking");
+    assert.equal(field.value, "Pick First (scoped)");
+    assert.match(field.help ?? "", /enabled, authenticated provider/);
+    assert.match(field.help ?? "", /current session's \/scoped-models/);
+    assert.match(field.help ?? "", /main session's current model; keep the agent's thinking level/);
+    assert.match(field.help ?? "", /modelSuggestions are search hints/);
+    assert.equal(result.menus[0]!.rows.some((row) => row.id === "scopedModelFiltering"), false);
+    const chooser = result.menus[1]!;
+    assert.equal(chooser.title, "Model Picking");
+    assert.deepEqual(chooser.rows.map((row) => row.id), [
+      "pick-first-available", "pick-first-scoped", "use-current",
+    ]);
+    assert.deepEqual(chooser.rows.map((row) => row.label), [
+      "Pick First (available)", "Pick First (scoped)", "Use Current",
+    ]);
+    assert.ok(chooser.rows.every((row) => row.value && row.help));
+    assert.match(chooser.rows[0]!.help ?? "", /models list available in Pi/);
+    assert.match(chooser.rows[0]!.help ?? "", /providers without credentials; try the next preference/);
+    assert.match(chooser.rows[1]!.help ?? "", /also selected in the current session's \/scoped-models/);
+    assert.match(chooser.rows[2]!.help ?? "", /Ignore the agent's models list/);
+    assert.match(chooser.rows[2]!.help ?? "", /each agent's configured thinking level/);
+    assert.equal(result.value(2, "modelSelection"), label);
+    assert.equal(result.applied, 1);
+    assert.equal(result.loaded.settings.modelSelection, mode);
+    assert.equal(result.loaded.diagnostics.length, 0);
+    const stored = JSON.parse(readFileSync(result.userFile, "utf8"));
+    assert.equal(stored.modelSelection, mode);
+    assert.equal(Object.hasOwn(stored, "scopedModelFiltering"), false);
+  }
+});
+
+test("Model Picking and other edits stay draft-only until save; chooser cancellation keeps the value", async (t) => {
+  const canceled = await run(t, ["modelSelection", "pick-first-available", "maxLevels", "4", "cancel"]);
   assert.equal(canceled.applied, 0);
   assert.equal(existsSync(canceled.userFile), false);
   assert.deepEqual(canceled.loaded.settings, DEFAULT_MANAGER_SETTINGS);
-  assert.equal(canceled.value(0, "scopedModelFiltering"), "on");
-  assert.equal(canceled.value(1, "scopedModelFiltering"), "off");
-  assert.match(canceled.menus[1]?.title ?? "", /unsaved/);
-  assert.equal(canceled.value(2, "maxLevels"), "4");
+  assert.equal(canceled.value(0, "modelSelection"), "Pick First (scoped)");
+  assert.equal(canceled.value(2, "modelSelection"), "Pick First (available)");
+  assert.match(canceled.menus[2]?.title ?? "", /unsaved/);
+  assert.equal(canceled.value(3, "maxLevels"), "4");
 
-  const escaped = await run(t, ["scopedModelFiltering", undefined]);
-  assert.equal(escaped.applied, 0);
-  assert.equal(existsSync(escaped.userFile), false);
+  const escaped = await run(t, ["modelSelection", undefined, "save"]);
+  assert.equal(escaped.value(2, "modelSelection"), "Pick First (scoped)");
+  assert.doesNotMatch(escaped.menus[2]!.title, /unsaved/);
+  assert.equal(escaped.loaded.settings.modelSelection, "pick-first-scoped");
+});
 
-  const saved = await run(t, ["scopedModelFiltering", "save"]);
+test("Model Picking saves to a trusted project", async (t) => {
+  const saved = await run(t, ["modelSelection", "use-current", "save"], { trusted: true });
   assert.equal(saved.applied, 1);
-  assert.equal(saved.loaded.settings.scopedModelFiltering, false);
-  assert.equal(saved.loaded.diagnostics.length, 0);
-  assert.match(readFileSync(saved.userFile, "utf8"), /"scopedModelFiltering": false/);
+  assert.equal(saved.loaded.settings.modelSelection, "use-current");
+  assert.equal(JSON.parse(readFileSync(saved.projectFile, "utf8")).modelSelection, "use-current");
+  assert.equal(existsSync(saved.userFile), false);
 });
 
 test("save shows a warning-colored changes value only while the draft is dirty", async (t) => {
   const result = await run(t, [
-    "scopedModelFiltering", "scopedModelFiltering", "maxLevels", "5", "defaults", "cancel",
+    "modelSelection", "pick-first-available", "modelSelection", "pick-first-scoped",
+    "maxLevels", "5", "defaults", "cancel",
   ]);
-  const save = (index: number) => result.menus[index]!.rows.find((row) => row.id === "save")!;
+  const settingsMenus = result.menus.filter((menu) => menu.title.startsWith("Agents settings"));
+  const save = (index: number) => settingsMenus[index]!.rows.find((row) => row.id === "save")!;
   for (const index of [0, 2, 4]) {
     assert.equal(save(index).value, undefined, "unchanged or reverted drafts clear the indicator");
     assert.equal(save(index).valueColor, undefined);
@@ -182,6 +226,20 @@ test("save shows a warning-colored changes value only while the draft is dirty",
     assert.equal(save(index).valueColor, "warning");
   }
 });
+
+for (const width of [32, 80]) {
+  test(`Model Picking screen and chooser render bordered frames at width ${width}`, async (t) => {
+    const result = await run(t, ["modelSelection", "use-current", "cancel"], { width });
+    assert.ok(result.renders.every((lines) =>
+      lines[0]!.includes("Model Picking") || lines[0]!.includes("Agents settings"),
+    ));
+    // The chooser opens on the scoped default. Narrow layouts clip labels,
+    // but preserve the selected choice's help and the updated settings value.
+    assert.ok(result.renders[1]!.join("\n").includes("Pick First (scoped):"));
+    assert.equal(result.value(2, "modelSelection"), "Use Current");
+    assert.ok(result.renders[2]!.join("\n").includes("Use Current"));
+  });
+}
 
 test("scope help explains the destination and precedence without changing the draft", async (t) => {
   const result = await run(t, ["maxLevels", "5", "scope", "scope", "cancel"], { trusted: true });
@@ -205,16 +263,16 @@ test("restore defaults resets the whole draft before save", async (t) => {
       ...DEFAULT_MANAGER_SETTINGS,
       subagentMode: "orchestration",
       toolFiltering: "all",
-      scopedModelFiltering: false,
+      modelSelection: "use-current",
       maxLevels: 9,
     },
   });
   assert.equal(result.applied, 1);
-  assert.equal(result.value(1, "scopedModelFiltering"), "on");
+  assert.equal(result.value(1, "modelSelection"), "Pick First (scoped)");
   assert.equal(result.value(1, "subagentMode"), "Opportunistic");
   assert.equal(result.value(1, "toolFiltering"), "Allowed (except blocked)");
   assert.deepEqual(result.loaded.settings, DEFAULT_MANAGER_SETTINGS);
-  assert.match(readFileSync(result.userFile, "utf8"), /"scopedModelFiltering": true/);
+  assert.match(readFileSync(result.userFile, "utf8"), /"modelSelection": "pick-first-scoped"/);
 });
 
 test("project scope requires trust; trusted projects save to the project file", async (t) => {

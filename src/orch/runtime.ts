@@ -19,7 +19,7 @@ import {
   DurableMailbox,
 } from "./mailbox.ts";
 import { selectTools } from "../prefs/config.ts";
-import type { ToolFilteringMode } from "../prefs/settings.ts";
+import type { ModelSelectionMode, ToolFilteringMode } from "../prefs/settings.ts";
 import { modelIdentity, getModelPreferences, selectPreferredModel } from "../prefs/models.ts";
 import {
   THINKING_LEVELS,
@@ -134,7 +134,7 @@ async function assertAcceptedSessionFile(
 /** Isolated SDK sessions; neither external extensions nor the CLI's MCP factories are loaded. */
 export function createDriverFactory(
   getRootContext: () => ExtensionContext,
-  getScopedModelFiltering: () => boolean = () => true,
+  getModelSelection: () => ModelSelectionMode = () => "pick-first-scoped",
   getToolFiltering: () => ToolFilteringMode = () => "allowed",
 ): DriverFactory {
   // Keep resolved settings even after disposal: descendants inherit settings, not the caller's history.
@@ -209,11 +209,14 @@ export function createDriverFactory(
     }
     const parent = options.parentPath ? resolved.get(`${rootId}:${options.parentPath}`) : undefined;
     const restored = options.sessionFile ? sessionManager.buildSessionContext() : undefined;
-    const modelPreferences = getModelPreferences(options.type);
+    const modelSelection = getModelSelection();
+    // Use Current ignores definition preferences, including for restored/nested sessions.
+    const modelPreferences =
+      modelSelection === "use-current" ? undefined : getModelPreferences(options.type);
     const normalizeScopedModels = (
       scopedModels: ExtensionContext["scopedModels"] | null | undefined,
     ): readonly ScopedModel[] => scopedModels ?? [];
-    const filteringEnabled = getScopedModelFiltering;
+    const filteringEnabled = () => getModelSelection() === "pick-first-scoped";
     const selectModelPreference = (
       candidates: readonly { model: { provider: string; id: string } }[],
       filtering = filteringEnabled(),
@@ -232,13 +235,26 @@ export function createDriverFactory(
       }
     };
     const availableModelCandidates = () =>
-      ctx.modelRegistry.getAvailable().map((model) => ({ model }));
+      getRootContext()
+        .modelRegistry.getAvailable()
+        .map((model) => ({ model }));
+    const availableScopedModels = (scopedModels: readonly ScopedModel[]) => {
+      const available = new Set(
+        availableModelCandidates().map(({ model }) => modelIdentity(model)),
+      );
+      return scopedModels.filter(({ model }) => available.has(modelIdentity(model)));
+    };
     const initialScopedModels = normalizeScopedModels(ctx.scopedModels);
     let provider = parent?.provider ?? ctx.model?.provider;
     let id = parent?.id ?? ctx.model?.id;
-    if (modelPreferences !== undefined) {
-      const filtering = filteringEnabled();
-      const candidates = filtering ? initialScopedModels : availableModelCandidates();
+    if (modelSelection === "use-current") {
+      provider = ctx.model?.provider;
+      id = ctx.model?.id;
+    } else if (modelPreferences !== undefined) {
+      const filtering = modelSelection === "pick-first-scoped";
+      const candidates = filtering
+        ? availableScopedModels(initialScopedModels)
+        : availableModelCandidates();
       ({ provider, id } = parseModelIdentity(selectModelPreference(candidates, filtering)!));
     } else if (restored?.model) {
       provider = restored.model.provider;
@@ -380,7 +396,10 @@ export function createDriverFactory(
       liveScopedModels: readonly ScopedModel[],
     ) => {
       if (!filteringEnabled() || modelPreferences === undefined) return;
-      const preferredIdentity = selectModelPreference(liveScopedModels, true);
+      const preferredIdentity = selectModelPreference(
+        availableScopedModels(liveScopedModels),
+        true,
+      );
       if (!preferredIdentity) return;
       if (!currentIdentity) throw new Error(`Subagent ${options.path} has no selected model`);
       if (currentIdentity !== preferredIdentity) {
@@ -407,7 +426,10 @@ export function createDriverFactory(
         updateResolved();
         return;
       }
-      const preferredIdentity = selectModelPreference(liveScopedModels, true);
+      const preferredIdentity = selectModelPreference(
+        availableScopedModels(liveScopedModels),
+        true,
+      );
       if (!preferredIdentity) {
         updateResolved();
         return;

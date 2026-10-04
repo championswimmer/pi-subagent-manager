@@ -25,7 +25,7 @@ import {
 } from "../src/orch/mailbox.ts";
 import { createDriverFactory } from "../src/orch/runtime.ts";
 import type { AgentDriver, DriverEvent, DriverOptions } from "../src/types.ts";
-import type { ToolFilteringMode } from "../src/prefs/settings.ts";
+import type { ModelSelectionMode, ToolFilteringMode } from "../src/prefs/settings.ts";
 
 const answer = (text: string): AssistantMessage => ({
   role: "assistant",
@@ -157,6 +157,7 @@ test("isolated real SDK driver without credentials", async (t) => {
     registerProvider("runtime-other", ["backup"]);
     await runtime.setRuntimeApiKey("runtime-test", "fake-runtime-only-key");
     await runtime.setRuntimeApiKey("runtime-other", "other-runtime-only-key");
+    await registry.refresh({ allowNetwork: false });
     assert.equal(registry.getProviderAuthStatus("runtime-test").source, "runtime");
     assert.equal(registry.getProviderAuthStatus("runtime-other").source, "runtime");
     const root = SessionManager.create(cwd, path.join(directory, "root"));
@@ -218,11 +219,11 @@ test("isolated real SDK driver without credentials", async (t) => {
       };
       return { tool, started, release };
     };
-    let scopedModelFiltering = true;
+    let modelSelection: ModelSelectionMode = "pick-first-scoped";
     let toolFiltering: ToolFilteringMode = "allowed";
     const factory = createDriverFactory(
       () => ctx,
-      () => scopedModelFiltering,
+      () => modelSelection,
       () => toolFiltering,
     );
     const events: DriverEvent[] = [];
@@ -257,7 +258,7 @@ test("isolated real SDK driver without credentials", async (t) => {
       return driver;
     };
     const restoreScope = () => {
-      scopedModelFiltering = true;
+      modelSelection = "pick-first-scoped";
       setScopedModels("runtime-test/model/with/slashes", "runtime-other/backup");
       setRootModel("runtime-test/model/with/slashes");
     };
@@ -1031,11 +1032,157 @@ test("isolated real SDK driver without credentials", async (t) => {
     });
 
     await t.test(
+      "pick-first modes skip unconfigured providers and ignore suggestions",
+      async () => {
+        registerProvider("runtime-no-auth", ["missing-key"]);
+        await registry.refresh({ allowNetwork: false });
+        assert.ok(registry.find("runtime-no-auth", "missing-key"));
+        assert.ok(!registry.getAvailable().some((model) => model.provider === "runtime-no-auth"));
+        try {
+          for (const mode of ["pick-first-available", "pick-first-scoped"] as const) {
+            modelSelection = mode;
+            setScopedModels(
+              "runtime-no-auth/missing-key",
+              "runtime-other/backup",
+              "runtime-test/fallback",
+            );
+            const driver = await create(
+              options({
+                path: `/root/${mode}-without-auth`,
+                type: {
+                  ...options().type,
+                  models: [
+                    "runtime-no-auth/missing-key",
+                    "missing-provider/missing-model",
+                    "runtime-test/fallback",
+                    "runtime-other/backup",
+                  ],
+                  modelSuggestions: ["backup", "model/with/slashes"],
+                  thinkingLevel: "high",
+                },
+              }),
+            );
+            await driver.prompt("skip missing credentials");
+            assertModel("runtime-test/fallback");
+            assert.equal(
+              SessionManager.open(driver.sessionFile!).buildSessionContext().thinkingLevel,
+              "high",
+            );
+            await assert.rejects(
+              create(modelOptions(`/root/${mode}-unavailable`, ["runtime-no-auth/missing-key"])),
+              /none are available/,
+            );
+          }
+        } finally {
+          registry.unregisterProvider("runtime-no-auth");
+          restoreScope();
+        }
+      },
+    );
+
+    await t.test(
+      "pick-first scoped intersects availability and scope in preference order",
+      async () => {
+        try {
+          setScopedModels("runtime-other/backup", "runtime-test/model/with/slashes");
+          for (const [mode, expected] of [
+            ["pick-first-available", "runtime-test/fallback"],
+            ["pick-first-scoped", "runtime-other/backup"],
+          ] as const) {
+            modelSelection = mode;
+            const driver = await create(
+              modelOptions(`/root/${mode}-ordered`, [
+                "runtime-test/fallback",
+                "runtime-other/backup",
+                "runtime-test/model/with/slashes",
+              ]),
+            );
+            await driver.prompt("respect definition order");
+            assertModel(expected);
+          }
+        } finally {
+          restoreScope();
+        }
+      },
+    );
+
+    await t.test("Use Current ignores preferences and keeps each agent's thinking", async () => {
+      modelSelection = "use-current";
+      setScopedModels("runtime-test/fallback");
+      setRootModel("runtime-other/backup");
+      try {
+        let index = 0;
+        for (const preferences of [
+          { models: ["missing-provider/missing-model", "runtime-test/fallback"] },
+          { model: "runtime-test/fallback" },
+          {},
+        ]) {
+          for (const thinkingLevel of ["off", "low", "high"] as const) {
+            const driver = await create(
+              options({
+                path: `/root/current-${index++}`,
+                type: {
+                  ...options().type,
+                  ...preferences,
+                  thinkingLevel,
+                  modelSuggestions: ["fallback"],
+                },
+              }),
+            );
+            await driver.prompt("use main model");
+            assertModel("runtime-other/backup");
+            assert.equal(
+              SessionManager.open(driver.sessionFile!).buildSessionContext().thinkingLevel,
+              thinkingLevel,
+            );
+          }
+        }
+      } finally {
+        restoreScope();
+      }
+    });
+
+    await t.test("Use Current ignores parent and restored models", async () => {
+      try {
+        modelSelection = "pick-first-available";
+        const parent = await create(
+          modelOptions("/root/current-parent", ["runtime-test/fallback"]),
+        );
+        await parent.prompt("persist parent model");
+        const sessionFile = parent.sessionFile!;
+        await parent.dispose();
+        setRootModel("runtime-other/backup");
+        setScopedModels();
+        modelSelection = "use-current";
+        const child = await create(
+          options({
+            path: "/root/current-parent/child",
+            parentPath: "/root/current-parent",
+            type: { ...options().type, thinkingLevel: "high" },
+          }),
+        );
+        await child.prompt("ignore parent model");
+        assertModel("runtime-other/backup");
+        assert.equal(
+          SessionManager.open(child.sessionFile!).buildSessionContext().thinkingLevel,
+          "high",
+        );
+        const reopened = await create(
+          modelOptions("/root/current-parent", ["runtime-test/fallback"], { sessionFile }),
+        );
+        await reopened.prompt("ignore restored model");
+        assertModel("runtime-other/backup");
+      } finally {
+        restoreScope();
+      }
+    });
+
+    await t.test(
       "disabled filtering picks the first available preference, even outside or without a scope",
       async () => {
         // Re-setting keys refreshes the registry's available-model list.
         await runtime.setRuntimeApiKey("runtime-test", apiKeys["runtime-test"]);
-        scopedModelFiltering = false;
+        modelSelection = "pick-first-available";
         setScopedModels("runtime-other/backup");
         setRootModel("runtime-other/backup");
         try {
@@ -1067,7 +1214,7 @@ test("isolated real SDK driver without credentials", async (t) => {
     await t.test(
       "omitted models inherit the root model despite unmatched suggestions or disabled filtering",
       async () => {
-        scopedModelFiltering = false;
+        modelSelection = "pick-first-available";
         setScopedModels();
         setRootModel("runtime-other/backup");
         try {
@@ -1100,7 +1247,7 @@ test("isolated real SDK driver without credentials", async (t) => {
     await t.test(
       "disabling scoped filtering stops scope-drift rejection without reselection",
       async () => {
-        scopedModelFiltering = true;
+        modelSelection = "pick-first-scoped";
         setScopedModels("runtime-test/model/with/slashes", "runtime-other/backup");
         setRootModel("runtime-test/model/with/slashes");
         const { tool, started, release } = gatedTool("filter_gate");
@@ -1116,7 +1263,7 @@ test("isolated real SDK driver without credentials", async (t) => {
           const run = driver.prompt("tool turn");
           await started;
           setScopedModels();
-          scopedModelFiltering = false;
+          modelSelection = "pick-first-available";
           await driver.steer("steer while scope drifted");
           next = answer("continued on original");
           release();
@@ -1130,7 +1277,7 @@ test("isolated real SDK driver without credentials", async (t) => {
           await driver.prompt("later request");
           assertModel("runtime-test/model/with/slashes");
 
-          scopedModelFiltering = true;
+          modelSelection = "pick-first-scoped";
           setScopedModels("runtime-other/backup");
           next = answer("reselected backup");
           await driver.prompt("scope restored");

@@ -19,26 +19,33 @@ export type SubagentMode = (typeof SUBAGENT_MODES)[number];
 export const TOOL_FILTERING_MODES = ["allowed", "all-except-blocked", "all"] as const;
 export type ToolFilteringMode = (typeof TOOL_FILTERING_MODES)[number];
 
+export const MODEL_SELECTION_MODES = [
+  "pick-first-available",
+  "pick-first-scoped",
+  "use-current",
+] as const;
+export type ModelSelectionMode = (typeof MODEL_SELECTION_MODES)[number];
+
 export interface ManagerSettings {
   subagentMode: SubagentMode;
   toolFiltering: ToolFilteringMode;
   maxLevels: number;
   maxConcurrent: number;
   maxThreads: number;
-  scopedModelFiltering: boolean;
+  modelSelection: ModelSelectionMode;
 }
 
 export const DEFAULT_MANAGER_SETTINGS: ManagerSettings = {
   maxLevels: 3,
   maxConcurrent: 16,
   maxThreads: 64,
-  scopedModelFiltering: true,
+  modelSelection: "pick-first-scoped",
   subagentMode: "opportunistic",
   toolFiltering: "allowed",
 };
 
 const KEYS = [
-  "maxLevels", "maxConcurrent", "maxThreads", "scopedModelFiltering", "subagentMode", "toolFiltering",
+  "maxLevels", "maxConcurrent", "maxThreads", "modelSelection", "subagentMode", "toolFiltering",
 ] as const;
 const MAX_LEVELS = 32;
 
@@ -78,9 +85,9 @@ function positiveSafeInteger(value: unknown): value is number {
 function requirement(key: (typeof KEYS)[number]): string {
   if (key === "subagentMode") return "subagentMode must be off, opportunistic or orchestration";
   if (key === "toolFiltering") return "toolFiltering must be allowed, all-except-blocked or all";
-  return key === "scopedModelFiltering"
-    ? "scopedModelFiltering must be a boolean"
-    : `${key} must be a positive safe integer`;
+  if (key === "modelSelection")
+    return "modelSelection must be pick-first-available, pick-first-scoped or use-current";
+  return `${key} must be a positive safe integer`;
 }
 
 function parseSettings(content: string): Partial<ManagerSettings> {
@@ -96,9 +103,16 @@ function parseSettings(content: string): Partial<ManagerSettings> {
   }
   const record = parsed as Record<string, unknown>;
   for (const key of Object.keys(record)) {
-    if (!isSupportedKey(key)) throw new Error(`Unknown settings key: ${key}`);
+    if (!isSupportedKey(key) && key !== "scopedModelFiltering")
+      throw new Error(`Unknown settings key: ${key}`);
   }
   const layer: Partial<ManagerSettings> = {};
+  if (Object.hasOwn(record, "scopedModelFiltering")) {
+    if (typeof record.scopedModelFiltering !== "boolean")
+      throw new Error("scopedModelFiltering must be a boolean");
+    if (!Object.hasOwn(record, "modelSelection"))
+      layer.modelSelection = record.scopedModelFiltering ? "pick-first-scoped" : "pick-first-available";
+  }
   for (const key of KEYS) {
     if (!Object.hasOwn(record, key)) continue;
     const value = record[key];
@@ -113,9 +127,10 @@ function parseSettings(content: string): Partial<ManagerSettings> {
       layer.toolFiltering = value as ToolFilteringMode;
       continue;
     }
-    if (key === "scopedModelFiltering") {
-      if (typeof value !== "boolean") throw new Error(requirement(key));
-      layer.scopedModelFiltering = value;
+    if (key === "modelSelection") {
+      if (!MODEL_SELECTION_MODES.includes(value as ModelSelectionMode))
+        throw new Error(requirement(key));
+      layer.modelSelection = value as ModelSelectionMode;
       continue;
     }
     if (!positiveSafeInteger(value)) throw new Error(requirement(key));
