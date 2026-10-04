@@ -12,6 +12,17 @@ Generated from version tags and merged GitHub pull requests. Do not edit this fi
 
 **Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v0.4.0...v0.5.0
 
+#### [v0.5.2](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.5.2) — Patch release (2026-10-04)
+
+<!-- Release notes generated using configuration in .github/release.yml at v0.5.2 -->
+
+##### What's Changed
+###### Merged pull requests
+* Render multiline settings descriptions by @championswimmer in https://github.com/championswimmer/pi-subagent-manager/pull/2
+
+
+**Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v0.5.1...v0.5.2
+
 #### [v0.5.1](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.5.1) — Patch release (2026-10-04)
 
 <!-- Release notes generated using configuration in .github/release.yml at v0.5.1 -->
@@ -54,8 +65,6 @@ Generated from version tags and merged GitHub pull requests. Do not edit this fi
 ##### What's Changed
 * test: prune redundant and over-broad tests by @championswimmer in https://github.com/championswimmer/pi-subagent-manager/pull/1
 
-##### New Contributors
-* @championswimmer made their first contribution in https://github.com/championswimmer/pi-subagent-manager/pull/1
 
 **Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v0.3.0...v0.3.1
 
