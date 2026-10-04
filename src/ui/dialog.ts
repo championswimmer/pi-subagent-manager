@@ -1,5 +1,5 @@
 import type {
-  ExtensionCommandContext,
+  ExtensionContext,
   ExtensionUIContext,
   KeybindingsManager,
   Theme,
@@ -167,7 +167,7 @@ export class DialogEditor {
 }
 
 export function dialogEditor(
-  ctx: ExtensionCommandContext,
+  ctx: ExtensionContext,
   title: string,
   prefill: string,
 ): Promise<string | undefined> {
@@ -273,7 +273,7 @@ export class DialogMenu {
   }
 }
 
-export function canOpenDialog(ctx: ExtensionCommandContext): boolean {
+export function canOpenDialog(ctx: ExtensionContext): boolean {
   if (!ctx.hasUI) return false;
   if (ctx.mode && ctx.mode !== "tui") {
     ctx.ui.notify("Agents dialogs require interactive TUI mode.", "warning");
@@ -283,7 +283,7 @@ export function canOpenDialog(ctx: ExtensionCommandContext): boolean {
 }
 
 export async function dialogMenu(
-  ctx: ExtensionCommandContext,
+  ctx: ExtensionContext,
   title: string,
   rows: DialogRow[],
   options: { selectedId?: string; footer?: string; saveId?: string } = {},
@@ -305,7 +305,7 @@ export async function dialogMenu(
 }
 
 export async function dialogInput(
-  ctx: ExtensionCommandContext,
+  ctx: ExtensionContext,
   title: string,
   initial: string,
   help: string,
@@ -366,7 +366,7 @@ interface PendingView {
   resolve: (value: unknown) => void;
 }
 
-const dialogScopes = new WeakSet<ExtensionCommandContext>();
+const dialogScopes = new WeakSet<ExtensionContext>();
 
 function isPromise<T>(value: T | Promise<T>): value is Promise<T> {
   return (
@@ -512,6 +512,7 @@ export class DialogSession {
     this.disposed = true;
     this.closed = true;
     this.inputLocked = true;
+    this.resolvePending();
     const child = this.child;
     this.child = undefined;
     safeDispose(child);
@@ -567,10 +568,10 @@ export class DialogSession {
   }
 }
 
-function scopeDialogContext(
-  ctx: ExtensionCommandContext,
+export function scopeDialogContext<T extends ExtensionContext>(
+  ctx: T,
   session: DialogSession,
-): ExtensionCommandContext {
+): T {
   const source = ctx.ui;
   const originalCustom = source.custom.bind(source);
   const ui = Object.create(source) as ExtensionUIContext;
@@ -584,16 +585,16 @@ function scopeDialogContext(
   // Define an own property while keeping the remaining context getters live.
   return Object.create(ctx, {
     ui: { value: ui, writable: true, enumerable: true, configurable: true },
-  }) as ExtensionCommandContext;
+  }) as T;
 }
 
 /**
  * Run a dialog workflow inside one ctx.ui.custom overlay.
  * Nested calls on the scoped context reuse that overlay instead of opening another.
  */
-export async function withDialogSession(
-  ctx: ExtensionCommandContext,
-  run: (ctx: ExtensionCommandContext) => Promise<void>,
+export async function withDialogSession<T extends ExtensionContext>(
+  ctx: T,
+  run: (ctx: T) => Promise<void>,
 ): Promise<void> {
   if (dialogScopes.has(ctx)) {
     await run(ctx);

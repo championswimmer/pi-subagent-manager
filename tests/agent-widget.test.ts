@@ -298,7 +298,7 @@ test("sanitizes controls and clips unicode without dropping right counters", () 
   const counters = "0s ↑0 ↓0";
   for (const width of [0, 1, 2, 20, 80, 160]) {
     const lines = renderAgentTree(threads, width, theme);
-    assert.ok(lines.length <= 10, String(width));
+    assert.ok(lines.length <= 12, String(width));
     assert.ok(
       lines.every((line) => visibleWidth(line) <= width),
       String(width),
@@ -318,7 +318,15 @@ test("sanitizes controls and clips unicode without dropping right counters", () 
   assert.match(wide.join("\n"), /missing parent/);
 });
 
-test("bounds the widget to ten lines and counts every omitted real agent", () => {
+test("always shows navigation and interrupt help below the agents", () => {
+  for (const state of ["running", "completed"] as const) {
+    const lines = plain(renderAgentTree([thread("/root/job", { state })], 80, theme));
+    assert.deepEqual(lines.slice(-1), ["Esc: abort main, not subagents"]);
+    assert.doesNotMatch(lines.join("\n"), /more agents/);
+  }
+});
+
+test("bounds the widget to twelve lines and counts every omitted real agent", () => {
   const many = Array.from({ length: 6 }, (_, index) =>
     thread(`/root/m${index}`, {
       parent: "/root",
@@ -327,18 +335,22 @@ test("bounds the widget to ten lines and counts every omitted real agent", () =>
       status: `status ${index}`,
     }),
   );
+  // Each agent takes two lines; five fit exactly, otherwise one slot becomes the omitted count.
   const five = renderAgentTree(many.slice(0, 5), 80, theme);
-  assert.equal(five.length, 10);
-  assert.match(plain(five).at(-1)!, /^\+1 more agents · \/agents tree$/);
+  assert.equal(five.length, 12);
   assert.equal(
-    plain(five).some((line) => line.includes("Job 4")),
+    plain(five).some((line) => line.includes("more agents")),
     false,
   );
   const six = renderAgentTree(many, 80, theme);
-  assert.equal(six.length, 10);
-  assert.match(plain(six).at(-1)!, /^\+2 more agents · \/agents tree$/);
+  assert.equal(six.length, 11);
+  assert.match(plain(six).at(-2)!, /^\+2 more agents$/);
+  assert.equal(
+    plain(six).some((line) => line.includes("Job 4")),
+    false,
+  );
   const four = renderAgentTree(many.slice(0, 4), 80, theme);
-  assert.equal(four.length, 9);
+  assert.equal(four.length, 10);
   assert.equal(
     plain(four).some((line) => line.includes("more agents")),
     false,
@@ -355,9 +367,9 @@ test("bounds the widget to ten lines and counts every omitted real agent", () =>
     ),
   ];
   const packed = renderAgentTree(nested, 90, theme);
-  assert.equal(packed.length, 10);
+  assert.equal(packed.length, 11);
   assert.match(plain(packed)[0]!, /7 live · 0 paused$/);
-  assert.match(plain(packed).at(-1)!, /^\+3 more agents · \/agents tree$/);
+  assert.match(plain(packed).at(-2)!, /^\+3 more agents$/);
   assert.ok(indexOf(packed, "Parent") < indexOf(packed, "Child 0"));
   assert.match(plain(packed).join("\n"), /Child 2/);
   assert.equal(
@@ -381,11 +393,11 @@ test("live branches cannot be hidden by settled descendants", () => {
     100,
     theme,
   );
-  assert.equal(lines.length, 10);
+  assert.equal(lines.length, 11);
   assert.match(plain(lines)[0]!, /2 live · 0 paused$/);
   assert.ok(indexOf(lines, "Active parent") < indexOf(lines, "Settled child 0"));
   assert.ok(indexOf(lines, "Other active branch") >= 0);
-  assert.match(plain(lines).at(-1)!, /^\+2 more agents/);
+  assert.match(plain(lines).at(-2)!, /^\+2 more agents/);
 });
 
 test("cycle rendering stays finite and keeps both agents with their parent row", () => {
@@ -396,7 +408,7 @@ test("cycle rendering stays finite and keeps both agents with their parent row",
   const snapshot = structuredClone(threads);
   const lines = renderAgentTree(threads, 80, theme);
   assert.deepEqual(threads, snapshot);
-  assert.ok(lines.length <= 10);
+  assert.ok(lines.length <= 12);
   assert.ok(indexOf(lines, "Alpha") < indexOf(lines, "Beta"));
   assert.match(lineOf(lines, "Beta"), /└─ |├─ /);
   assert.equal(renderAgentTree([], 80, theme).length, 0);
@@ -440,7 +452,7 @@ test("updateWidget pins the tree above the editor, clears when empty, and uses s
   calls.length = 0;
   updateWidget(context("rpc"), [thread("/root/job", { status: "Digging", startedAt: Date.now() })]);
   const rpcLines = calls[0]!.content as string[];
-  assert.ok(Array.isArray(rpcLines) && rpcLines.length <= 10);
+  assert.ok(Array.isArray(rpcLines) && rpcLines.length <= 12);
   assert.ok(rpcLines.every((line) => visibleWidth(line) <= 80));
   assert.match(plain(rpcLines).join("\n"), /Agents[\s\S]*Digging/);
 

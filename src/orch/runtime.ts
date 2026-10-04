@@ -21,6 +21,7 @@ import {
   DurableMailbox,
 } from "./mailbox.ts";
 import { selectTools } from "../prefs/config.ts";
+import { TranscriptChannel } from "./transcript.ts";
 import type { InheritedToolSource } from "./inherited-tools.ts";
 import type { ModelSelectionMode, ToolFilteringMode } from "../prefs/settings.ts";
 import { modelIdentity, getModelPreferences, selectPreferredModel } from "../prefs/models.ts";
@@ -185,6 +186,7 @@ export function createDriverFactory(
       sessionManager.appendCustomEntry(THREAD_OWNERSHIP_TYPE, {
         rootId,
         threadPath: options.path,
+        inheritedCount: options.inherited.length,
       });
       for (const message of options.inherited) {
         // Summary messages are projections, not appendable SDK session entries.
@@ -563,7 +565,26 @@ export function createDriverFactory(
       return { input, output, reported: input + output + usage.totalTokens > 0 };
     };
 
+    const ownership = sessionManager
+      .getBranch()
+      .find((entry) => entry.type === "custom" && entry.customType === THREAD_OWNERSHIP_TYPE);
+    const inheritedMetadata =
+      ownership?.type === "custom"
+        ? (ownership.data as { inheritedCount?: unknown })?.inheritedCount
+        : undefined;
+    const inheritedCount =
+      typeof inheritedMetadata === "number" &&
+      Number.isInteger(inheritedMetadata) &&
+      inheritedMetadata >= 0
+        ? inheritedMetadata
+        : options.inherited.length;
+    const transcript = new TranscriptChannel(
+      () => session.messages,
+      // A restored compaction has replaced the original inherited prefix.
+      session.messages.some((message) => message.role === "compactionSummary") ? 0 : inheritedCount,
+    );
     const unsubscribe = session.subscribe((event) => {
+      transcript.accept(event);
       if (event.type === "tool_execution_start") emit("activity", `Tool: ${event.toolName}`);
       if (event.type === "tool_execution_end")
         emit(
@@ -653,6 +674,10 @@ export function createDriverFactory(
       snapshot() {
         return structuredClone(session.messages);
       },
+      observeTranscript(listener) {
+        assertOpen();
+        return transcript.observe(listener);
+      },
       output() {
         return finalOutput;
       },
@@ -671,6 +696,7 @@ export function createDriverFactory(
         disposed = true;
         aborted = true;
         restoreAppends();
+        transcript.dispose();
         unsubscribe();
         session.dispose();
       },
@@ -691,6 +717,7 @@ export function createDriverFactory(
             { triggerTurn: false },
           );
           mailbox.markEnqueued(accepted.id);
+          transcript.reconcile();
         } catch (error) {
           emit("error", error instanceof Error ? error.message : String(error));
           throw error;

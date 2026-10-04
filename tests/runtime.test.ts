@@ -24,7 +24,7 @@ import {
   MAILBOX_FIELD,
 } from "../src/orch/mailbox.ts";
 import { createDriverFactory } from "../src/orch/runtime.ts";
-import type { AgentDriver, DriverEvent, DriverOptions } from "../src/types.ts";
+import type { AgentDriver, DriverEvent, DriverOptions, TranscriptSnapshot } from "../src/types.ts";
 import type { ModelSelectionMode, ToolFilteringMode } from "../src/prefs/settings.ts";
 
 const answer = (text: string): AssistantMessage => ({
@@ -262,6 +262,117 @@ test("isolated real SDK driver without credentials", async (t) => {
       setScopedModels("runtime-test/model/with/slashes", "runtime-other/backup");
       setRootModel("runtime-test/model/with/slashes");
     };
+
+    await t.test(
+      "read-only observation attaches mid-assistant stream and retains inherited metadata",
+      async () => {
+        const driver = await create(options({ path: "/root/watch-assistant" }));
+        const partial = { ...answer("live partial"), stopReason: "pending" as const };
+        const final = answer("live final");
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => (release = resolve));
+        let sawPartial!: () => void;
+        const streamed = new Promise<void>((resolve) => (sawPartial = resolve));
+        const updates: TranscriptSnapshot[] = [];
+        const initial = driver.observeTranscript!((snapshot) => {
+          updates.push(snapshot);
+          if (messageText(snapshot.assistant) === "live partial") sawPartial();
+        });
+        assert.equal(initial.snapshot.inheritedCount, 1);
+        assert.equal(initial.snapshot.assistant, null);
+        scripted = (stream) => {
+          void (async () => {
+            stream.push({ type: "start", partial });
+            stream.push({ type: "text_delta", contentIndex: 0, delta: "live partial", partial });
+            await gate;
+            stream.push({ type: "done", reason: "stop", message: final });
+            stream.end(final);
+          })();
+        };
+        const turn = driver.prompt("watch me");
+        try {
+          await streamed;
+          const attached = driver.observeTranscript!(() => {});
+          assert.equal(messageText(attached.snapshot.assistant), "live partial");
+          assert.equal(countTextMessages([...attached.snapshot.messages], "live partial"), 0);
+          assert.throws(() => (attached.snapshot.messages as unknown[]).push("bad"));
+          attached.unsubscribe();
+        } finally {
+          release();
+        }
+        await turn;
+        assert.equal(updates.at(-1)?.assistant, null);
+        assert.equal(countTextMessages([...updates.at(-1)!.messages], "live final"), 1);
+        assert.equal(countTextMessages(driver.snapshot(), "bad"), 0);
+        initial.unsubscribe();
+        const file = driver.sessionFile!;
+        driver.dispose();
+        const restored = await create(
+          options({ path: "/root/watch-assistant", sessionFile: file, inherited: [] }),
+        );
+        const history = restored.observeTranscript!(() => {});
+        assert.equal(
+          history.snapshot.inheritedCount,
+          1,
+          "persisted ownership retains inherited prefix count",
+        );
+        assert.equal(countTextMessages([...history.snapshot.messages], "live final"), 1);
+        history.unsubscribe();
+      },
+    );
+
+    await t.test(
+      "read-only observation captures a running tool and its partial/error result",
+      async () => {
+        let release!: () => void;
+        let entered!: () => void;
+        const started = new Promise<void>((resolve) => (entered = resolve));
+        const gate = new Promise<void>((resolve) => (release = resolve));
+        const tool: ToolDefinition = {
+          name: "watch_tool",
+          label: "watch_tool",
+          description: "watch_tool",
+          parameters: Type.Object({}),
+          async execute(_id, _args, _signal, onUpdate) {
+            onUpdate?.({ content: [{ type: "text", text: "partial output" }], details: undefined });
+            entered();
+            await gate;
+            next = answer("after failed tool");
+            throw new Error("expected tool failure");
+          },
+        };
+        const driver = await create(toolOptions("/root/watch-tool", tool));
+        next = toolCall("watch-call", tool.name);
+        const turn = driver.prompt("watch tool");
+        await started;
+        // onUpdate's SDK event dispatch is asynchronous; tool entry alone is not its completion.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        const updates: TranscriptSnapshot[] = [];
+        const observation = driver.observeTranscript!((snapshot) => updates.push(snapshot));
+        try {
+          assert.equal(observation.snapshot.tools[0]?.toolCallId, "watch-call");
+          assert.equal(observation.snapshot.tools[0]?.state, "running");
+          assert.match(JSON.stringify(observation.snapshot.tools[0]?.result), /partial output/);
+        } finally {
+          release();
+        }
+        await turn;
+        assert.ok(updates.some((snapshot) => snapshot.tools.some((item) => item.isError)));
+        const latest = updates.at(-1)!;
+        assert.equal(
+          latest.tools.length,
+          0,
+          "finalized results are rendered from history, not duplicated as active tools",
+        );
+        assert.equal(
+          latest.messages.filter(
+            (message) => message.role === "toolResult" && message.toolCallId === "watch-call",
+          ).length,
+          1,
+        );
+        observation.unsubscribe();
+      },
+    );
 
     await t.test(
       "tool filtering selects actual builtin/custom declarations and delegation guidance",

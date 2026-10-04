@@ -1,17 +1,37 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { dialogHeight, type DialogHost } from "../src/ui/dialog.ts";
+import {
+  getKeybindings,
+  rgbColor,
+  setKeybindings,
+  KeybindingsManager,
+  TUI_KEYBINDINGS,
+  TuiAltScreen,
+  stripTerminalSequences,
+  visibleWidth,
+  type Terminal,
+  type Component,
+  type OverlayOptions,
+} from "@earendil-works/pi-tui";
+import { AGENT_COLORS } from "../src/prefs/config.ts";
+import { DialogMenu, dialogHeight, type DialogHost } from "../src/ui/dialog.ts";
 import {
   buildStatusTree,
   showAgentStatus,
   showAgentTree,
   StatusDialog,
+  AgentNavigationController,
 } from "../src/ui/status-ui.ts";
+import { LiveAgentView } from "../src/ui/live-agent-view.ts";
+import { createDialogDriver } from "./helpers/dialogDriver.ts";
 import type { ThreadService, ThreadView } from "../src/types.ts";
 
-const theme = { fg: (_token: string, text: string) => text } as Theme;
+const theme = {
+  fg: (_token: string, text: string) => text,
+  colors: Object.fromEntries(AGENT_COLORS.map((color) => [color, rgbColor(238, 238, 238)])),
+  style: (text: string) => text,
+} as unknown as Theme;
 const DOWN = "\x1b[B";
 const RIGHT = "\x1b[C";
 const LEFT = "\x1b[D";
@@ -139,7 +159,7 @@ function treeTitle(lines: string[]) {
 
 /** Drives showAgentTree through a fake DialogSession host, recording each mounted StatusDialog. */
 function launchTree(list: () => ThreadView[], selectedPath?: string, rows = 16) {
-  const mounted: StatusDialog[] = [];
+  const mounted: Array<StatusDialog | LiveAgentView> = [];
   const selectTitles: string[] = [];
   let opens = 0;
   let renders = 0;
@@ -157,17 +177,18 @@ function launchTree(list: () => ThreadView[], selectedPath?: string, rows = 16) 
         releaseSelect = resolve;
       });
     },
-    custom(factory: Function, options: { overlay: boolean; overlayOptions: { anchor: string } }) {
+    custom(factory: Function, options: { overlay: boolean; overlayOptions: { width: string } }) {
       opens++;
       assert.equal(options.overlay, true);
-      assert.equal(options.overlayOptions.anchor, "center");
+      assert.equal(options.overlayOptions.width, "100%");
       return new Promise<void>((resolve) => {
         session = factory(
           {
             requestRender() {
               renders++;
               const next = session?.getComponent();
-              if (next && next !== mounted.at(-1)) mounted.push(next as StatusDialog);
+              if (next && next !== mounted.at(-1))
+                mounted.push(next as StatusDialog | LiveAgentView);
             },
             setFocus() {},
             terminal: { rows },
@@ -179,7 +200,20 @@ function launchTree(list: () => ThreadView[], selectedPath?: string, rows = 16) 
       });
     },
   });
-  const done = showAgentTree(ctx, service(list), selectedPath);
+  const threads = service(list);
+  threads.observeTranscript = async (path) => ({
+    snapshot: {
+      revision: 0,
+      generation: 1,
+      messages: [],
+      assistant: null,
+      tools: [],
+      inheritedCount: 0,
+      thread: threads.get(path),
+    },
+    unsubscribe() {},
+  });
+  const done = showAgentTree(ctx, threads, selectedPath);
   return {
     mounted,
     selectTitles,
@@ -538,6 +572,7 @@ test("showAgentTree uses one dialog session, shows live updates, and returns to 
     assert.equal(clock.timers.size, 1);
     assert.equal(treeTitle(dialog.render(100)).agents, 2);
 
+    assert.ok(dialog instanceof StatusDialog);
     moveTo(dialog, "/root/child");
     dialog.handleInput(LEFT);
     threads = threads.map((item) =>
@@ -551,13 +586,19 @@ test("showAgentTree uses one dialog session, shows live updates, and returns to 
     assert.equal(refreshed.includes("/root/child/deep"), false, "collapse survives refresh");
 
     dialog.handleInput(ENTER);
-    await tree.selectReady;
+    const viewer = await until(() => tree.mounted[1], "live viewer");
+    assert.ok(viewer instanceof LiveAgentView);
     assert.equal(clock.timers.size, 0);
-    assert.match(tree.selectTitles[0] ?? "", /\/root\/child/);
-    tree.releaseSelect("Back");
-    const restored = await until(() => tree.mounted[1], "restored tree");
+    assert.equal(tree.selectTitles.length, 0, "Enter bypasses the inspect menu");
+    viewer.handleInput(ESC);
+    const restored = await until(() => tree.mounted[2], "restored tree");
     assert.ok(showsPath(selectedLine(restored.render(100)), "/root/child"));
     assert.equal(clock.timers.size, 1);
+    assert.equal(
+      plain(restored.render(100)).includes("/root/child/deep"),
+      false,
+      "fold survives watcher return",
+    );
     restored.handleInput(ESC);
     await tree.done;
     assert.equal(clock.timers.size, 0);
@@ -656,4 +697,256 @@ test("showAgentTree clears the refresh timer on dispose, close, and open failure
   } finally {
     globalThis.setInterval = originalSet;
   }
+});
+
+test("navigation root Enter closes with no execution effect; empty tree has a useful hint", async () => {
+  const tree = launchTree(() => []);
+  const dialog = await until(() => tree.mounted[0], "empty tree");
+  assert.match(plain(dialog.render(100)), /No agents yet/);
+  dialog.handleInput(ENTER);
+  await tree.done;
+  assert.equal(tree.opens, 1);
+});
+
+test("controller coalesces opens and rejects stale factories after lifecycle close", async () => {
+  const controller = new AgentNavigationController();
+  let factory: Function | undefined;
+  let complete = () => {};
+  let opens = 0;
+  const ctx = uiContext({
+    custom(next: Function) {
+      opens++;
+      factory = next;
+      return new Promise<void>((resolve) => {
+        complete = resolve;
+      });
+    },
+  });
+  const threads = service(() => []);
+  const first = controller.open(ctx, threads);
+  const second = controller.open(ctx, threads);
+  assert.equal(first, second);
+  assert.equal(opens, 1);
+  controller.close();
+  const session = factory!(
+    { requestRender() {}, terminal: { rows: 10 }, setFocus() {} },
+    theme,
+    {},
+    complete,
+  );
+  await first;
+  assert.equal(session.getComponent(), undefined, "stale host never attaches a view");
+  assert.equal(controller.isOpen, false);
+});
+
+test("real alt-screen input cannot stack host search while navigation owns the overlay", async () => {
+  const previous = getKeybindings();
+  const input = "\x1b[102;6u";
+  assert.ok(previous.matches(input, "tui.altScreen.search"));
+  let dispatch = (_data: string) => {};
+  let overlays = 0;
+  const terminal: Terminal = {
+    rows: 16,
+    columns: 100,
+    kittyProtocolActive: false,
+    start(onInput) {
+      dispatch = onInput;
+    },
+    stop() {},
+    async drainInput() {},
+    write() {},
+    moveBy() {},
+    hideCursor() {},
+    showCursor() {},
+    clearLine() {},
+    clearFromCursor() {},
+    clearScreen() {},
+    setTitle() {},
+    setProgress() {},
+  };
+  class Renderer extends TuiAltScreen {
+    override showOverlay(component: Component, options?: OverlayOptions) {
+      overlays++;
+      return super.showOverlay(component, options);
+    }
+  }
+  const renderer = new Renderer(terminal, false, undefined, { mouse: false });
+  renderer.addChild({ render: () => ["main transcript"], invalidate() {} });
+  const controller = new AgentNavigationController();
+  let session: { getComponent(): unknown; dispose(): void } | undefined;
+  let finishOuter = () => {};
+  const ctx = uiContext({
+    custom(factory: Function, options: { overlayOptions: OverlayOptions }) {
+      return new Promise<void>((resolve) => {
+        finishOuter = () => {
+          renderer.hideOverlay();
+          session?.dispose();
+          resolve();
+        };
+        const component = factory(renderer, theme, {}, finishOuter);
+        session = component;
+        renderer.showOverlay(component, options.overlayOptions);
+      });
+    },
+  });
+  renderer.start();
+  try {
+    let lateListenerCalls = 0;
+    const releaseListener = renderer.addInputListener(() => {
+      lateListenerCalls++;
+      return { consume: true };
+    });
+    dispatch(input);
+    assert.equal(overlays, 1, "real host search runs before extension input listeners");
+    assert.equal(lateListenerCalls, 0);
+    dispatch(input); // Toggle host search closed before observer entry.
+    releaseListener();
+    assert.equal(renderer.hasOverlay(), false);
+
+    const opened = controller.open(
+      ctx,
+      service(() => []),
+    );
+    await until(() => session?.getComponent(), "tree component");
+    assert.notEqual(getKeybindings(), previous);
+    assert.equal(getKeybindings().matches(input, "tui.altScreen.search"), false);
+    assert.deepEqual(
+      getKeybindings().getKeys("tui.select.cancel"),
+      previous.getKeys("tui.select.cancel"),
+    );
+    dispatch(input);
+    assert.equal(overlays, 2, "only our observer overlay was mounted");
+    dispatch(ESC);
+    await opened;
+    assert.equal(
+      renderer.hasOverlay(),
+      false,
+      "Escape closed the observer, not an accidental host search",
+    );
+    assert.equal(getKeybindings(), previous);
+
+    const reopened = controller.open(
+      ctx,
+      service(() => []),
+    );
+    await until(() => session?.getComponent(), "reopened tree");
+    const newer = new KeybindingsManager(TUI_KEYBINDINGS, previous.getUserBindings());
+    setKeybindings(newer);
+    controller.close();
+    await reopened;
+    assert.equal(getKeybindings(), newer, "close must not overwrite a newer extension owner");
+  } finally {
+    controller.close();
+    finishOuter();
+    renderer.stop();
+    setKeybindings(previous);
+  }
+});
+
+test("i Actions retains existing operations in the same overlay and saves folds on reopen", async () => {
+  const controller = new AgentNavigationController();
+  let trees = 0;
+  let actions = 0;
+  const threads = service(() => [thread("/root/a"), thread("/root/a/deep")]);
+  const driver = createDialogDriver({
+    theme,
+    choices: ["Back"],
+    onMenu(menu: DialogMenu, labels) {
+      actions++;
+      assert.match(menu.title, /\/root\/a/);
+      assert.deepEqual(labels, [
+        "View output",
+        "View transcript",
+        "Send input / resume",
+        "Stop",
+        "Children",
+        "Back",
+      ]);
+    },
+  });
+  driver.onChild = (component) => {
+    if (!(component instanceof StatusDialog)) return false;
+    trees++;
+    if (trees === 1) {
+      moveTo(component, "/root/a");
+      component.handleInput(LEFT);
+      component.handleInput("i");
+    } else {
+      assert.ok(showsPath(selectedLine(component.render(100)), "/root/a"));
+      assert.equal(plain(component.render(100)).includes("/root/a/deep"), false);
+      component.handleInput(ESC);
+    }
+    return true;
+  };
+  const ctx = uiContext({
+    custom: driver.custom,
+    select() {
+      throw new Error("must not stack built-in dialogs");
+    },
+  });
+  await controller.open(ctx, threads);
+  assert.equal(driver.stats.outerOpens, 1);
+  assert.equal(actions, 1);
+  assert.equal(trees, 2);
+  await controller.open(ctx, threads);
+  assert.equal(trees, 3);
+  assert.equal(driver.stats.outerOpens, 2);
+});
+
+test("host mount rejection restores scoped keybindings even without component disposal", async () => {
+  const previous = getKeybindings();
+  const controller = new AgentNavigationController();
+  const ctx = uiContext({
+    async custom(factory: Function) {
+      factory({ requestRender() {}, terminal: { rows: 10 }, setFocus() {} }, theme, {}, () => {});
+      throw new Error("host mount rejected");
+    },
+  });
+  await assert.rejects(
+    controller.open(
+      ctx,
+      service(() => []),
+    ),
+    /host mount rejected/,
+  );
+  assert.equal(getKeybindings(), previous);
+  assert.equal(controller.isOpen, false);
+});
+
+test("agent tree shows the type badge and mutes inactive agents with the pi muted token", () => {
+  const tagged = {
+    fg: (token: string, text: string) => `<${token}>${text}</${token}>`,
+    colors: theme.colors,
+    style: (text: string) => `[${text.trim()}]`,
+  } as unknown as Theme;
+  const threads = [
+    thread("/root/a", { parent: "/root", type: "coder", state: "running" }),
+    thread("/root/b", { parent: "/root", type: "reviewer", state: "stopped" }),
+  ];
+  const dialog = new StatusDialog(host(24, () => {}), tagged, service(() => threads), () => {});
+  const out = dialog.render(100).join("\n");
+  assert.match(out, /\[coder\] \/root\/a/);
+  assert.match(out, /<muted>[^\n]*reviewer[^\n]*\/root\/b[^\n]*<\/muted>/);
+  assert.equal(out.includes("[reviewer]"), false);
+});
+
+test("Ctrl+C in the tree stops every live agent once via its top-most live ancestor and is hinted", async () => {
+  const threads = [
+    thread("/root/a", { parent: "/root", state: "running" }),
+    thread("/root/a/b", { parent: "/root/a", state: "running" }),
+    thread("/root/c", { parent: "/root", state: "completed" }),
+    thread("/root/d", { parent: "/root", state: "starting" }),
+  ];
+  const stopped: string[] = [];
+  const base = service(() => threads);
+  const dialog = new StatusDialog(
+    host(24),
+    theme,
+    { ...base, stop: async (path: string) => (stopped.push(path), threads[0]!) } as ThreadService,
+    () => assert.fail("Ctrl+C must not close the tree"),
+  );
+  assert.match(plain(dialog.render(160)), /Ctrl\+C stop all/);
+  dialog.handleInput("\x03");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(stopped.sort(), ["/root/a", "/root/d"]);
 });

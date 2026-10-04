@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { ThreadManager } from "../src/orch/manager.ts";
+import { TranscriptChannel } from "../src/orch/transcript.ts";
 import type {
   AgentDriver,
   AgentType,
@@ -10,6 +11,7 @@ import type {
   SavedThread,
   SavedThreadView,
   ThreadEvent,
+  TranscriptSnapshot,
 } from "../src/types.ts";
 
 const user = (text: string): AgentMessage => ({
@@ -564,4 +566,133 @@ test("restore defaults missing metrics to zero and resumed usage adds to saved t
     assert.equal(thread.elapsedMs, expected.elapsedMs);
     await manager.shutdown();
   }
+});
+
+test("scoped observation attaches while starting, persists no deltas, and disposes independently", async () => {
+  let open!: (driver: AgentDriver) => void;
+  let created = 0;
+  let detached = 0;
+  let aborts = 0;
+  const events: ThreadEvent[] = [];
+  const messages: AgentMessage[] = [user("parent")];
+  const channel = new TranscriptChannel(() => messages, 1);
+  const worker = gated({
+    snapshot: () => structuredClone(messages),
+    observeTranscript: (listener) => {
+      const observation = channel.observe(listener);
+      return {
+        snapshot: observation.snapshot,
+        unsubscribe: () => {
+          detached++;
+          observation.unsubscribe();
+        },
+      };
+    },
+    abort: async () => {
+      aborts++;
+      worker.release();
+    },
+    dispose: () => channel.dispose(),
+  });
+  const manager = new ThreadManager({
+    rootSnapshot: () => messages,
+    getType: () => workerType,
+    toolsFor: () => [],
+    onEvent: (event) => events.push(event),
+    createDriver: () => {
+      created++;
+      return new Promise((resolve) => (open = resolve));
+    },
+  });
+  await manager.spawn("/root", { path: "child", type: "worker", task: "work", wait: false });
+  const updates: TranscriptSnapshot[] = [];
+  const first = await manager.scope("/root").observeTranscript!("child", (snapshot) =>
+    updates.push(snapshot),
+  );
+  const second = await manager.scope("/root").observeTranscript!("child", () => {});
+  assert.equal(first.snapshot.thread?.state, "starting");
+  assert.equal(first.snapshot.generation, 0);
+  assert.equal(first.snapshot.assistant, null);
+  await tick();
+  assert.equal(created, 1, "inspection reuses startup initialization");
+  open(worker.driver);
+  await tick();
+  assert.equal(updates.at(-1)?.thread?.state, "running");
+  assert.equal(updates.at(-1)?.generation, 1);
+  const persistedEvents = events.length;
+  const beforeRevision = updates.at(-1)!.revision;
+  channel.accept({ type: "tool_execution_start", toolCallId: "tool", toolName: "read", args: {} });
+  channel.accept({
+    type: "tool_execution_update",
+    toolCallId: "tool",
+    toolName: "read",
+    args: {},
+    partialResult: { content: [{ type: "text", text: "streaming" }] },
+  });
+  assert.equal(
+    events.length,
+    persistedEvents,
+    "stream events never enter persisted manager events",
+  );
+  assert.equal(updates.at(-1)?.tools[0]?.state, "running");
+  assert.ok(updates.at(-1)!.revision > beforeRevision);
+  first.unsubscribe();
+  assert.equal(detached, 0, "other observer keeps shared subscription alive");
+  const firstCount = updates.length;
+  channel.accept({
+    type: "tool_execution_end",
+    toolCallId: "tool",
+    toolName: "read",
+    result: {},
+    isError: false,
+  });
+  assert.equal(updates.length, firstCount);
+  second.unsubscribe();
+  second.unsubscribe();
+  assert.equal(detached, 1, "unsubscribe is idempotent");
+  assert.equal(aborts, 0, "closing observers never aborts the worker");
+  const reopened = await manager.scope("/root").observeTranscript!("child", (snapshot) =>
+    updates.push(snapshot),
+  );
+  assert.equal(
+    reopened.snapshot.tools[0]?.state,
+    "completed",
+    "reopening uses retained midstream driver state",
+  );
+  await manager.shutdown();
+  assert.equal(detached, 2, "shutdown detaches before disposing the driver");
+  const count = updates.length;
+  channel.accept({ type: "agent_settled" });
+  assert.equal(updates.length, count);
+  await assert.rejects(
+    manager.scope("/root").observeTranscript!("child", () => {}),
+    /shut down/,
+  );
+});
+
+test("restored transcript observation is read-only and enforces scope", async () => {
+  const { manager, drivers } = fixture();
+  manager.restore([
+    saved("/root/a", { state: "completed", sessionFile: "/tmp/a.jsonl" }),
+    saved("/root/b", { state: "paused", sessionFile: "/tmp/b.jsonl" }),
+  ]);
+  const observation = await manager.scope("/root").observeTranscript!("a", () => {});
+  assert.equal(observation.snapshot.thread?.state, "completed");
+  assert.equal(observation.snapshot.generation, 1);
+  assert.deepEqual(drivers.get("/root/a")?.runs, [], "read-only loading never prompts");
+  assert.deepEqual(drivers.get("/root/a")?.steering, []);
+  await assert.rejects(
+    manager.scope("/root/a").observeTranscript!("/root/b", () => {}),
+    /descendants/,
+  );
+  await assert.rejects(
+    manager.scope("/root").observeTranscript!("/root", () => {}),
+    /not a child/,
+  );
+  await assert.rejects(
+    manager.scope("/root").observeTranscript!("missing", () => {}),
+    /Unknown thread/,
+  );
+  observation.unsubscribe();
+  await manager.shutdown();
 });

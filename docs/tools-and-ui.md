@@ -49,16 +49,48 @@ Then `agent_wait` or `agent_status` on `/root/controller-security-research`.
 | ↑↓          | Select            |
 | ←→          | Collapse / expand |
 | PgUp / PgDn | Scroll            |
-| Enter       | Inspect thread    |
-| Esc         | Close             |
+| Enter       | Watch thread; Main returns to the editor |
+| i           | Existing actions: steer, stop, output, transcript |
+| Esc         | Watcher → saved tree → Main |
+| Ctrl+Q      | Return directly to Main |
 
-Refreshes every second and keeps your selection.
+Refreshes every second and keeps your selection, collapse state and scroll position.
+
+### Live agent navigation (read-only)
+
+The fullscreen watcher shows committed messages, the in-progress assistant reply/thinking, tool arguments/output updates, errors, and lifecycle status. It never sends a prompt, switches sessions, or changes model/tool/resource ownership. Inherited context is initially collapsed (**c** toggles it). Unsupported/custom content and images use safe text placeholders rather than native rich rendering. Legacy sessions without reliable inherited-prefix metadata show their whole transcript.
+
+- **Up/Down, PageUp/PageDown, Home** scroll and pause following.
+- **End** or **l** resumes following the live tail. Scroll/follow state is remembered per agent.
+- **r** retries an unavailable observation without starting a turn. Starting threads are watchable; stopped/completed threads remain readable.
+- Frames are sanitized, viewport-bounded and coalesced during bursts. Exit, root replacement and shutdown release observers/timers. Streaming deltas never enter persisted thread events.
+
+#### Experimental exhausted-Down entry
+
+Set `PI_SUBAGENT_NAVIGATION_EDITOR=1` before starting Pi to open the tree when focused physical **Down** has exhausted native history/cursor movement at the end of the draft. Native editing runs first; autocomplete, jumps, paste, configured shortcuts, duplicate history entries and changed drafts do not count as exhausted boundaries. Navigating preserves the main draft/cursor and does not require the root to be idle.
+
+The editor adapter is **opt-in** pending the full real-terminal acceptance matrix. Unset the variable or use `PI_SUBAGENT_NAVIGATION_EDITOR=0` to leave the editor slot untouched; command entry still works. Pi has one custom-editor slot: installation is skipped if another factory owns it or an existing draft is nonempty, since the host cannot transfer cursor/undo/expanded-paste state. Load order can still let a later editor replace ours. Initial startup uses Pi's history hydration; replacement installations seed history once. Session-tree rebuilds keep the existing editor instance.
+
+While navigation is open, the host fullscreen search shortcut is temporarily disabled through public keybindings to avoid stacking a second host overlay. The prior binding owner is restored only if no other extension replaced it. **Known host limitation:** if an unrelated extension stacks another overlay above navigation, Pi's custom-UI completion can close the newer overlay instead. Avoid concurrent extension-owned overlays; a host identity-targeted completion API is needed to remove this limitation. No private host access or unsupported overlay-lifecycle workaround is used.
+
+Run `python3 scripts/live-agent-navigation-smoke.py` after `npm install` for credential-free, offline POSIX PTY checks in regular/fullscreen mode (entry, root return, draft restoration, resize and host-search suppression). No model prompts are submitted. Broader manual acceptance (concurrent live turns, autocomplete/paste/undo interactions, remapped shortcuts and rich custom content) is still required before making the editor gesture default.
 
 ## Agents widget
 
-A compact tree above the input editor, at most ten lines.
+A compact tree above the input editor, at most twelve lines including two help lines.
 
 - Each row: colored type pill, path, state, task, active time, input `↑` / output `↓` tokens.
 - A second, indented line shows latest activity.
 - Active branches are shown first; overflow is counted, not listed.
 - Time freezes while paused and resumes on continue.
+- The footer always shows tree navigation and the default interrupt keys, including when agents overflow.
+
+### Interrupts and stopping agents
+
+With the main input focused (default keybindings):
+
+- **Esc** aborts the main turn (including a pending `agent_wait` or foreground spawn wait), **not the subagents**. Already-started subagents keep running.
+- **Ctrl+C** clears the input; it does not stop the main turn or subagents.
+- **Ctrl+C twice quickly** (within 500 ms) exits Pi. Session shutdown cooperatively stops all agents, retaining their sessions.
+
+Inside the tree/watcher, **Esc** returns to the previous view without stopping an agent. To stop one subtree without exiting Pi, open **`/agents tree`**, select an agent, press **i**, and choose **Stop**. This stops that agent and its working descendants; other branches continue. Cancellation is cooperative, not a guarantee of killing external processes.
