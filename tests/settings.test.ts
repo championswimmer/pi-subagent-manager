@@ -19,7 +19,9 @@ import {
   loadManagerSettings,
   saveManagerSettings,
   SUBAGENT_MODES,
+  TOOL_FILTERING_MODES,
   type SubagentMode,
+  type ToolFilteringMode,
   type ManagerSettings,
 } from "../src/prefs/settings.ts";
 
@@ -58,7 +60,8 @@ const settings = (
   maxThreads: number,
   scopedModelFiltering = true,
   subagentMode: SubagentMode = "opportunistic",
-) => ({ maxLevels, maxConcurrent, maxThreads, scopedModelFiltering, subagentMode });
+  toolFiltering: ToolFilteringMode = "allowed",
+) => ({ maxLevels, maxConcurrent, maxThreads, scopedModelFiltering, subagentMode, toolFiltering });
 
 const escape = (path: string) => new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
@@ -85,6 +88,7 @@ test("missing files return a fresh copy of defaults without diagnostics", (t) =>
       maxThreads: 64,
       scopedModelFiltering: true,
       subagentMode: "opportunistic",
+      toolFiltering: "allowed",
     },
     diagnostics: [],
   });
@@ -139,6 +143,10 @@ test("invalid layer content is rejected with a diagnostic naming the file", (t) 
     ['{"subagentMode":"Off"}', /subagentMode must be off, opportunistic or orchestration/],
     ['{"subagentMode":false}', /subagentMode must be off, opportunistic or orchestration/],
     ['{"subagentMode":null}', /subagentMode must be off, opportunistic or orchestration/],
+    ...["automatic", "Allowed", true, null, 1, [], {}].map((toolFiltering): [string, RegExp] => [
+      JSON.stringify({ toolFiltering }),
+      /toolFiltering must be allowed, all-except-blocked or all/,
+    ]),
     ['{"maxLevels":2,"extra":1}', /Unknown settings key: extra/],
   ];
   for (const [content, pattern] of cases) {
@@ -309,6 +317,7 @@ test("save writes canonical 0600 files, creates owned directories, and reloads w
 
   const reordered = {
     subagentMode: "opportunistic",
+    toolFiltering: "allowed",
     scopedModelFiltering: true,
     maxThreads: 9,
     maxLevels: 3,
@@ -359,6 +368,20 @@ test("invalid save input never creates or mutates files", (t) => {
       { maxLevels: 1, maxConcurrent: 1, maxThreads: 1, scopedModelFiltering: true },
       /subagentMode must be off, opportunistic or orchestration/,
     ],
+    ...["automatic", "Allowed", false, null, 1, [], {}].map((toolFiltering): [unknown, RegExp] => [
+      { ...settings(1, 1, 1), toolFiltering },
+      /toolFiltering must be allowed, all-except-blocked or all/,
+    ]),
+    [
+      {
+        maxLevels: 1,
+        maxConcurrent: 1,
+        maxThreads: 1,
+        scopedModelFiltering: true,
+        subagentMode: "off",
+      },
+      /toolFiltering must be allowed, all-except-blocked or all/,
+    ],
     [{ ...settings(1, 1, 1), extra: 1 }, /Unknown settings key: extra/],
     [null, /must be a JSON object/],
     [[], /must be a JSON object/],
@@ -381,4 +404,32 @@ test("untrusted project saves and unknown scopes are rejected without touching d
   assert.equal(existsSync(join(f.cwd, ".pi")), false);
   rejects(() => save(f, "global" as "user", settings(1, 1, 1)), /Invalid settings scope/);
   assert.equal(existsSync(join(f.agentDir, "subagent-manager")), false);
+});
+
+test("all tool filtering modes save and load with trusted-project precedence", (t) => {
+  const f = fixture(t);
+  for (const mode of TOOL_FILTERING_MODES) {
+    const user = { ...DEFAULTS, toolFiltering: mode };
+    save(f, "user", user);
+    assert.deepEqual(load(f, false), { settings: user, diagnostics: [] });
+    assert.equal(JSON.parse(readFileSync(f.globalFile, "utf8")).toolFiltering, mode);
+    for (const projectMode of TOOL_FILTERING_MODES) {
+      const project = { ...user, toolFiltering: projectMode };
+      save(f, "project", project);
+      assert.deepEqual(load(f), { settings: project, diagnostics: [] });
+      assert.equal(JSON.parse(readFileSync(f.projectFile, "utf8")).toolFiltering, projectMode);
+      assert.equal(load(f, false).settings.toolFiltering, mode);
+    }
+  }
+});
+
+test("invalid tool filtering rejects its entire layer and preserves preceding settings", (t) => {
+  const f = fixture(t);
+  writeJson(f.globalFile, { toolFiltering: "all", maxLevels: 5 });
+  writeJson(f.projectFile, { toolFiltering: "invalid", maxLevels: 2 });
+  const result = load(f);
+  assert.deepEqual(result.settings, { ...DEFAULTS, toolFiltering: "all", maxLevels: 5 });
+  assert.equal(result.diagnostics.length, 1);
+  assert.match(result.diagnostics[0], escape(f.projectFile));
+  assert.match(result.diagnostics[0], /toolFiltering must be allowed, all-except-blocked or all/);
 });

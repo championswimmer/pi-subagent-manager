@@ -19,6 +19,7 @@ import {
   DurableMailbox,
 } from "./mailbox.ts";
 import { selectTools } from "../prefs/config.ts";
+import type { ToolFilteringMode } from "../prefs/settings.ts";
 import { modelIdentity, getModelPreferences, selectPreferredModel } from "../prefs/models.ts";
 import {
   THINKING_LEVELS,
@@ -134,12 +135,15 @@ async function assertAcceptedSessionFile(
 export function createDriverFactory(
   getRootContext: () => ExtensionContext,
   getScopedModelFiltering: () => boolean = () => true,
+  getToolFiltering: () => ToolFilteringMode = () => "allowed",
 ): DriverFactory {
   // Keep resolved settings even after disposal: descendants inherit settings, not the caller's history.
   const resolved = new Map<string, { provider: string; id: string; thinking: ThinkingLevel }>();
   return async (options) => {
     options.signal.throwIfAborted();
     const ctx = getRootContext();
+    // Tool policy is a startup snapshot; retained live sessions keep their selected set.
+    const toolFiltering = getToolFiltering();
     const rootId = ctx.sessionManager.getSessionId();
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(rootId))
       throw new Error("Unsafe root session id for subagent storage");
@@ -296,10 +300,11 @@ export function createDriverFactory(
         : undefined;
     const thinkingLevel =
       savedThinking ?? options.type.thinkingLevel ?? parent?.thinking ?? ctx.thinkingLevel ?? "off";
-    const toolNames = selectTools(options.type.tools, [
-      ...BUILTINS,
-      ...options.tools.map((tool) => tool.name),
-    ]);
+    const toolNames = selectTools(
+      options.type.tools,
+      [...BUILTINS, ...options.tools.map((tool) => tool.name)],
+      toolFiltering,
+    );
     const allowed = new Set(toolNames);
     const settingsManager = SettingsManager.inMemory({ cacheWarming: "off" });
     let parkQueue = () => {};

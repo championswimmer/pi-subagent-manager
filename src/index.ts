@@ -224,7 +224,11 @@ export default function piSubagent(pi: ExtensionAPI): void {
     syncTools();
     const instance = new ThreadManager({
       ...limits,
-      createDriver: createDriverFactory(requireContext, () => limits.scopedModelFiltering),
+      createDriver: createDriverFactory(
+        requireContext,
+        () => limits.scopedModelFiltering,
+        () => limits.toolFiltering,
+      ),
       rootSnapshot: () => buildSessionContext(requireContext().sessionManager.getBranch()).messages,
       getType: (name) => store.get(name),
       toolsFor: (path) => agentTools(requireManager, path, () => store.list()),

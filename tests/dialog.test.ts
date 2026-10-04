@@ -492,12 +492,20 @@ for (const Renderer of [TuiMainScreen, TuiAltScreen]) {
     const replaceField = async (value: string) => {
       for (const key of ["\r", "\x05", "\x15", value, "\r"]) await input(key);
     };
+    const selectRow = async (id: string) => {
+      const session = tui.getFocusedComponent();
+      assert.ok(session instanceof DialogSession);
+      const menu = session.getComponent();
+      assert.ok(menu instanceof DialogMenu);
+      for (let steps = 0; menu.getSelectedId() !== id && steps < 20; steps++) await input(DOWN);
+      assert.equal(menu.getSelectedId(), id, `settings row ${id} is reachable`);
+    };
 
-    // Choose orchestration, then edit the numeric limits below the mode row.
+    // Choose orchestration, then edit the numeric limits by their stable row ID.
     await input("\r");
     await input(DOWN);
     await input("\r");
-    await input(DOWN);
+    await selectRow("maxLevels");
     await replaceField("33");
     assert.ok(notifications.some((message) => message.includes("at most 32")));
     await replaceField("5");
@@ -505,9 +513,9 @@ for (const Renderer of [TuiMainScreen, TuiAltScreen]) {
     // editor all remain inside the same outer overlay.
     await input("\r");
     await input(ESC);
-    for (let i = 0; i < 4; i++) await input(DOWN);
+    await selectRow("scope");
     await input("\r");
-    await input(DOWN);
+    await selectRow("types");
     await input("\r");
     await input(ESC);
     terminal.input(CTRL_S);

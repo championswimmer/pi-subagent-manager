@@ -204,6 +204,7 @@ test("restore defaults resets the whole draft before save", async (t) => {
     settings: {
       ...DEFAULT_MANAGER_SETTINGS,
       subagentMode: "orchestration",
+      toolFiltering: "all",
       scopedModelFiltering: false,
       maxLevels: 9,
     },
@@ -211,6 +212,7 @@ test("restore defaults resets the whole draft before save", async (t) => {
   assert.equal(result.applied, 1);
   assert.equal(result.value(1, "scopedModelFiltering"), "on");
   assert.equal(result.value(1, "subagentMode"), "Opportunistic");
+  assert.equal(result.value(1, "toolFiltering"), "Allowed (except blocked)");
   assert.deepEqual(result.loaded.settings, DEFAULT_MANAGER_SETTINGS);
   assert.match(readFileSync(result.userFile, "utf8"), /"scopedModelFiltering": true/);
 });
@@ -234,3 +236,84 @@ test("project scope requires trust; trusted projects save to the project file", 
   assert.equal(existsSync(toggled.userFile), true);
   assert.equal(existsSync(toggled.projectFile), false);
 });
+
+test("Tool Filtering explains and saves every mode", async (t) => {
+  for (const [mode, label] of [
+    ["allowed", "Allowed (except blocked)"],
+    ["all-except-blocked", "All except blocked"],
+    ["all", "All"],
+  ]) {
+    const result = await run(t, ["toolFiltering", mode, "save"]);
+    const field = result.menus[0]!.rows.find((row) => row.id === "toolFiltering")!;
+    assert.equal(field.label, "Tool Filtering");
+    assert.equal(field.value, "Allowed (except blocked)");
+    assert.match(field.help ?? "", /only allow-listed tools, minus blocked tools/);
+    assert.match(field.help ?? "", /missing or empty allow list means no tools/);
+    assert.match(field.help ?? "", /ignore the allow list; block-listed tools remain blocked/);
+    assert.match(field.help ?? "", /All: ignore both lists/);
+    const chooser = result.menus[1]!;
+    assert.equal(chooser.title, "Tool Filtering");
+    assert.deepEqual(
+      chooser.rows.map((row) => row.id),
+      ["allowed", "all-except-blocked", "all"],
+    );
+    assert.deepEqual(
+      chooser.rows.map((row) => row.label),
+      ["Allowed (except blocked)", "All except blocked", "All"],
+    );
+    assert.ok(chooser.rows.every((row) => row.value && row.help));
+    assert.match(chooser.rows[0]!.help ?? "", /Blocked tools take precedence/);
+    assert.match(chooser.rows[1]!.help ?? "", /allow list is completely ignored/);
+    assert.match(chooser.rows[2]!.help ?? "", /allow and block lists are completely ignored/);
+    assert.equal(result.value(2, "toolFiltering"), label);
+    assert.equal(result.applied, 1);
+    assert.equal(result.loaded.settings.toolFiltering, mode);
+    assert.equal(result.loaded.diagnostics.length, 0);
+    assert.equal(JSON.parse(readFileSync(result.userFile, "utf8")).toolFiltering, mode);
+  }
+});
+
+test("Tool Filtering selection and chooser cancellation remain draft-only", async (t) => {
+  const canceled = await run(t, ["toolFiltering", "all", "cancel"]);
+  assert.equal(canceled.value(2, "toolFiltering"), "All");
+  assert.match(canceled.menus[2]!.title, /unsaved/);
+  assert.equal(canceled.applied, 0);
+  assert.equal(existsSync(canceled.userFile), false);
+  assert.deepEqual(canceled.loaded.settings, DEFAULT_MANAGER_SETTINGS);
+
+  const escaped = await run(t, ["toolFiltering", undefined, "save"]);
+  assert.equal(escaped.value(2, "toolFiltering"), "Allowed (except blocked)");
+  assert.doesNotMatch(escaped.menus[2]!.title, /unsaved/);
+  assert.equal(escaped.loaded.settings.toolFiltering, "allowed");
+});
+
+test("Tool Filtering saves to a trusted project and restores defaults without saving on cancel", async (t) => {
+  const saved = await run(t, ["toolFiltering", "all-except-blocked", "save"], { trusted: true });
+  assert.equal(saved.applied, 1);
+  assert.equal(saved.loaded.settings.toolFiltering, "all-except-blocked");
+  assert.equal(
+    JSON.parse(readFileSync(saved.projectFile, "utf8")).toolFiltering,
+    "all-except-blocked",
+  );
+  assert.equal(existsSync(saved.userFile), false);
+
+  const restored = await run(t, ["toolFiltering", "all", "defaults", "cancel"]);
+  assert.equal(restored.value(2, "toolFiltering"), "All");
+  assert.equal(restored.value(3, "toolFiltering"), "Allowed (except blocked)");
+  assert.doesNotMatch(restored.menus[3]!.title, /unsaved/);
+  assert.equal(restored.applied, 0);
+  assert.equal(existsSync(restored.userFile), false);
+});
+
+for (const width of [32, 80]) {
+  test(`Tool Filtering screen and chooser render bordered frames at width ${width}`, async (t) => {
+    const result = await run(t, ["toolFiltering", "all", "cancel"], { width });
+    assert.ok(
+      result.renders.every(
+        (lines) => lines[0]!.includes("Tool Filtering") || lines[0]!.includes("Agents settings"),
+      ),
+    );
+    assert.ok(result.renders[1]!.join("\n").includes("All"));
+    assert.equal(result.value(2, "toolFiltering"), "All");
+  });
+}
