@@ -142,6 +142,153 @@ test("live viewer shows assistant/tool streams, collapses inherited context, and
   assert.equal(live.unsubscribed, 1);
 });
 
+test("tool calls and results show only three preview rows while messages stay complete", async () => {
+  const fullText = (prefix: string) =>
+    Array.from({ length: 6 }, (_, index) => `${prefix} ${index}`).join("\n");
+  const toolResult = {
+    role: "toolResult",
+    toolCallId: "t1",
+    toolName: "read",
+    content: [
+      { type: "text", text: "output 0\noutput 1" },
+      { type: "text", text: "output 2\noutput 3\noutput 4" },
+    ],
+    isError: false,
+    timestamp: 0,
+  } as AgentMessage;
+  const live = launch(
+    snapshot({
+      messages: [
+        message(fullText("steer")),
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: fullText("agent") },
+            {
+              type: "toolCall",
+              id: "t1",
+              name: "read",
+              arguments: { path: "file.ts", offset: 1, limit: 100, hiddenArgument: "hidden" },
+            },
+          ],
+        } as AgentMessage,
+        toolResult,
+        {
+          role: "custom",
+          customType: "subagent-update",
+          content: fullText("update"),
+          display: true,
+          timestamp: 0,
+        } as AgentMessage,
+      ],
+      assistant: {
+        role: "assistant",
+        content: [{ type: "text", text: fullText("stream") }],
+      } as AgentMessage,
+      tools: [
+        {
+          toolCallId: "t1",
+          toolName: "read",
+          args: {},
+          state: "completed",
+          result: "duplicate result",
+        },
+        {
+          toolCallId: "t2",
+          toolName: "bash",
+          parentToolCallId: "outer",
+          args: { command: "build", cwd: "/tmp", hiddenArgument: "hidden" },
+          state: "completed",
+          isError: true,
+          result: { content: [{ type: "text", text: fullText("running output") }] },
+        },
+      ],
+    }),
+    100,
+  );
+  await tick();
+  const content = live.view.render(120).join("\n");
+  for (const prefix of ["steer", "agent", "update", "stream"])
+    for (let index = 0; index < 6; index++) assert.ok(content.includes(`${prefix} ${index}`));
+  assert.match(content, /Tool call: read/);
+  assert.match(content, /"path": "file.ts"/);
+  assert.match(content, /Tool result: read/);
+  assert.match(content, /Tool bash — completed \(error\) \(nested\)/);
+  assert.match(content, /"command": "build"/);
+  for (const prefix of ["output", "running output"]) {
+    for (let index = 0; index < 3; index++) assert.ok(content.includes(`${prefix} ${index}`));
+    assert.ok(!content.includes(`${prefix} 3`));
+  }
+  assert.doesNotMatch(content, /hiddenArgument|duplicate result/);
+  assert.equal(content.split("\n").filter((line) => line.trim() === "...").length, 4);
+  live.view.dispose();
+});
+
+test("previews count wrapped rows, keep short results intact, and sanitize tool output", async () => {
+  const live = launch(
+    snapshot({
+      tools: [
+        {
+          toolCallId: "long",
+          toolName: "read",
+          args: {},
+          state: "running",
+          result: {
+            content: [{ type: "text", text: "\x1b[31m" + "界".repeat(100000) + "hidden tail" }],
+          },
+        },
+        {
+          toolCallId: "short",
+          toolName: "bash",
+          args: {},
+          state: "completed",
+          result: { content: [{ type: "text", text: "short 0\nshort 1\nshort 2" }] },
+        },
+      ],
+    }),
+    30,
+  );
+  await tick();
+  for (const width of [20, 40]) {
+    const lines = live.view.render(width);
+    assert.equal(lines.filter((line) => line.includes("界")).length, 3);
+    assert.equal(lines.filter((line) => line.trim() === "...").length, 1);
+    const content = lines.join("\n");
+    assert.match(content, /short 0/);
+    assert.match(content, /short 1/);
+    assert.match(content, /short 2/);
+    assert.doesNotMatch(content, /hidden tail|\x1b\[31m/);
+    for (const line of lines) assert.equal(visibleWidth(line), width);
+  }
+  live.view.dispose();
+});
+
+test("long steer and agent messages are not subject to the old tool output size cap", async () => {
+  for (const role of ["user", "assistant", "custom"] as const) {
+    const content = "a".repeat(40000) + "\ncomplete message tail";
+    const live = launch(
+      snapshot({
+        messages: [
+          (role === "assistant"
+            ? { role, content: [{ type: "text", text: content }] }
+            : {
+                role,
+                content,
+                customType: "subagent-update",
+                display: true,
+                timestamp: 0,
+              }) as AgentMessage,
+        ],
+      }),
+    );
+    await tick();
+    const rendered = live.view.render(120).join("\n");
+    assert.match(rendered, /complete message tail/);
+    assert.doesNotMatch(rendered, /Viewer truncated/);
+    live.view.dispose();
+  }
+});
+
 test("tail following pauses on scroll and per-agent state restores across remount", async () => {
   const messages = Array.from({ length: 40 }, (_, index) => message(`line ${index}`));
   const state = { scrollTop: 0, follow: true };

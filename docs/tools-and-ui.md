@@ -58,7 +58,7 @@ Refreshes every second and keeps your selection, collapse state and scroll posit
 
 ### Live agent navigation (read-only)
 
-The fullscreen watcher shows committed messages, the in-progress assistant reply/thinking, tool arguments/output updates, errors, and lifecycle status. It never sends a prompt, switches sessions, or changes model/tool/resource ownership. Inherited context is initially collapsed (**c** toggles it). Unsupported/custom content and images use safe text placeholders rather than native rich rendering. Legacy sessions without reliable inherited-prefix metadata show their whole transcript.
+The fullscreen watcher shows steer and agent messages in full, including the in-progress assistant reply. Tool calls, results, and other metadata show their name/status and only the first three wrapped lines of each arguments/output preview, followed by `...` when more is hidden. Use **i → Transcript** from the tree for retained tool details. Thinking is initially hidden (**t** toggles it). It never sends a prompt, switches sessions, or changes model/tool/resource ownership. Inherited context is initially collapsed (**c** toggles it). Unsupported/custom content and images use safe text placeholders rather than native rich rendering. Legacy sessions without reliable inherited-prefix metadata show their whole transcript.
 
 - **Up/Down, PageUp/PageDown, Home** scroll and pause following.
 - **End** or **l** resumes following the live tail. Scroll/follow state is remembered per agent.
