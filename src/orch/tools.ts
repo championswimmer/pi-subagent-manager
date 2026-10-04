@@ -1,8 +1,8 @@
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { getModelPreferences } from "./models.ts";
+import { getModelPreferences } from "../prefs/models.ts";
 import type { ThreadManager } from "./manager.ts";
-import type { AgentType, ThreadView } from "./types.ts";
+import type { AgentType, ThreadView } from "../types.ts";
 
 const path = Type.String({ description: "Absolute agent path, or name relative to the caller" });
 const text = Type.String({ minLength: 1 });

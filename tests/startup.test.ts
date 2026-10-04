@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ThreadManager } from "../src/manager.ts";
+import { ThreadManager } from "../src/orch/manager.ts";
 import type { AgentDriver, DriverOptions } from "../src/types.ts";
 
 // One regression scenario guards reservation visibility, lazy reopen and late-driver cleanup.

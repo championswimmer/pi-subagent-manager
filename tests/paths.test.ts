@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { canonicalPath, inheritContext, isDescendant, parentPath } from "../src/paths.ts";
+import { canonicalPath, inheritContext, isDescendant, parentPath } from "../src/orch/paths.ts";
 
 test("canonical ancestry is structural, not prefix matching or URL normalization", () => {
   assert.equal(

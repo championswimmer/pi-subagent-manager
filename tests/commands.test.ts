@@ -11,8 +11,8 @@ import {
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { CombinedAutocompleteProvider } from "@earendil-works/pi-tui";
 import piSubagent from "../src/index.ts";
-import { loadManagerSettings } from "../src/settings.ts";
-import { IMPORT_REQUEST_PREFIX, importWasOffered, markImportOffered } from "../src/agent-import.ts";
+import { loadManagerSettings } from "../src/prefs/settings.ts";
+import { IMPORT_REQUEST_PREFIX, importWasOffered, markImportOffered } from "../src/prefs/agent-import.ts";
 import { createDialogDriver } from "./helpers/dialogDriver.ts";
 
 async function withCommands(

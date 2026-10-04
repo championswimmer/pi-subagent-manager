@@ -1,4 +1,4 @@
-import type { ThreadView } from "./types.ts";
+import type { ThreadView } from "../types.ts";
 
 const ROOT = "/root";
 

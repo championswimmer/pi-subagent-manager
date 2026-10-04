@@ -21,7 +21,7 @@ import {
   SUBAGENT_MODES,
   type SubagentMode,
   type ManagerSettings,
-} from "../src/settings.ts";
+} from "../src/prefs/settings.ts";
 
 function fixture(t: TestContext) {
   const root = mkdtempSync(join(tmpdir(), "pi-settings-"));

@@ -26,7 +26,7 @@ import {
   ConfigStore,
   parseAgentType,
   serializeAgentType,
-} from "./config.ts";
+} from "../prefs/config.ts";
 import { editModelPreferences, MODEL_EDITOR_CANCEL } from "./model-picker.ts";
 import {
   canOpenDialog,
@@ -37,14 +37,14 @@ import {
   DIALOG_OPTIONS,
   withDialogSession,
 } from "./dialog.ts";
-import { getModelPreferences } from "./models.ts";
+import { getModelPreferences } from "../prefs/models.ts";
 import { buildStatusTree, type StatusRow } from "./thread-tree.ts";
 import {
   THINKING_LEVELS,
   type AgentType,
   type ThreadService,
   type ThreadView,
-} from "./types.ts";
+} from "../types.ts";
 
 export type ThreadController = Pick<
   ThreadService,

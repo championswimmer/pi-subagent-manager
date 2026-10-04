@@ -4,9 +4,9 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { AGENT_COLORS, type ConfigStore } from "./config.ts";
 import { discoverImportCandidates, type ImportCandidate } from "./import-discovery.ts";
-import { selectImportAgents } from "./import-picker.ts";
+import { selectImportAgents } from "../ui/import-picker.ts";
 import { MIGRATION_INSTRUCTIONS } from "./import-instructions.ts";
-import { dialogText } from "./dialog.ts";
+import { dialogText } from "../ui/dialog.ts";
 
 export const IMPORT_REQUEST_PREFIX =
   "Import ONLY the agents I selected in the pi-subagent-manager migration picker.";

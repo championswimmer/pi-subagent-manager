@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import type { ConfigStore } from "./config.ts";
+import type { ConfigStore } from "../prefs/config.ts";
 import {
   canOpenDialog,
   dialogInput,
@@ -11,7 +11,7 @@ import {
   saveManagerSettings,
   type ManagerSettings,
   type SubagentMode,
-} from "./settings.ts";
+} from "../prefs/settings.ts";
 import { editAgentTypes } from "./ui.ts";
 
 const FIELDS = [

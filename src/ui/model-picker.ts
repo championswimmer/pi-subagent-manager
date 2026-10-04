@@ -18,7 +18,7 @@ import {
   Text,
   type SelectItem,
 } from "@earendil-works/pi-tui";
-import { modelIdentity } from "./models.ts";
+import { modelIdentity } from "../prefs/models.ts";
 import { dialogHeight, frameDialog, DIALOG_OPTIONS } from "./dialog.ts";
 
 const MODEL_EDITOR_LAYOUT = {

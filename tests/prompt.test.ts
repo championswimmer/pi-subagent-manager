@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { subagentPrompt } from "../src/prompt.ts";
-import { DEFAULT_MANAGER_SETTINGS } from "../src/settings.ts";
+import { subagentPrompt } from "../src/orch/prompt.ts";
+import { DEFAULT_MANAGER_SETTINGS } from "../src/prefs/settings.ts";
 
 test("off produces no subagent system prompt", () => {
   assert.equal(subagentPrompt({ ...DEFAULT_MANAGER_SETTINGS, subagentMode: "off" }), undefined);

@@ -12,7 +12,7 @@ import {
   frameDialog,
   withDialogSession,
 } from "./dialog.ts";
-import type { ThreadService } from "./types.ts";
+import type { ThreadService } from "../types.ts";
 import { buildStatusTree, type StatusRow } from "./thread-tree.ts";
 import { showThreads, threadMetrics } from "./ui.ts";
 

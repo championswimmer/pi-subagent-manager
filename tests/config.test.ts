@@ -17,7 +17,7 @@ import {
   parseAgentType,
   selectTools,
   serializeAgentType,
-} from "../src/config.js";
+} from "../src/prefs/config.js";
 import { THINKING_LEVELS, type AgentType } from "../src/types.js";
 
 const definition: AgentType = {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { initTheme, type ScopedModel, type Theme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { OrderedModelEditorComponent } from "../src/model-picker.ts";
+import { OrderedModelEditorComponent } from "../src/ui/model-picker.ts";
 
 initTheme();
 

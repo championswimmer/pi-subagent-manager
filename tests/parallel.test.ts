@@ -4,8 +4,8 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { ThreadManager } from "../src/manager.ts";
-import { DEFAULT_MANAGER_SETTINGS } from "../src/settings.ts";
+import { ThreadManager } from "../src/orch/manager.ts";
+import { DEFAULT_MANAGER_SETTINGS } from "../src/prefs/settings.ts";
 import type { ManagerOptions } from "../src/types.ts";
 import { registry, withOfflineHarness } from "./helpers/integrationHarness.ts";
 

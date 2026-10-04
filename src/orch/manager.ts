@@ -8,9 +8,9 @@ import type {
   SavedThreadView,
   ThreadService,
   ThreadView,
-} from "./types.ts";
+} from "../types.ts";
 import { canonicalPath, inheritContext, isDescendant, parentPath } from "./paths.ts";
-import { DEFAULT_MANAGER_SETTINGS, type ManagerSettings } from "./settings.ts";
+import { DEFAULT_MANAGER_SETTINGS, type ManagerSettings } from "../prefs/settings.ts";
 
 interface Record {
   view: ThreadView;

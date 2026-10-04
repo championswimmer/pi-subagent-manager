@@ -2,8 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { DIALOG_OPTIONS, dialogHeight, type DialogHost } from "../src/dialog.ts";
-import { ImportPicker, selectImportAgents, type ImportPickerItem } from "../src/import-picker.ts";
+import { DIALOG_OPTIONS, dialogHeight, type DialogHost } from "../src/ui/dialog.ts";
+import {
+  ImportPicker,
+  selectImportAgents,
+  type ImportPickerItem,
+} from "../src/ui/import-picker.ts";
 
 const theme = { fg: (_color: string, text: string) => text } as Theme;
 const DOWN = "\x1b[B",

@@ -18,14 +18,14 @@ import {
   buildUpdateDetails,
   DurableMailbox,
 } from "./mailbox.ts";
-import { selectTools } from "./config.ts";
-import { modelIdentity, getModelPreferences, selectPreferredModel } from "./models.ts";
+import { selectTools } from "../prefs/config.ts";
+import { modelIdentity, getModelPreferences, selectPreferredModel } from "../prefs/models.ts";
 import {
   THINKING_LEVELS,
   type DriverFactory,
   type DriverOptions,
   type ThinkingLevel,
-} from "./types.ts";
+} from "../types.ts";
 
 const BUILTINS = ["read", "bash", "powershell", "edit", "write", "grep", "find", "ls"];
 /** Persisted before transcript messages so older-leaf restores still carry ownership. */

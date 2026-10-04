@@ -21,8 +21,8 @@ import {
   DurableMailbox,
   LEGACY_QUEUE_TYPE,
   MAILBOX_FIELD,
-} from "../src/mailbox.ts";
-import { createDriverFactory } from "../src/runtime.ts";
+} from "../src/orch/mailbox.ts";
+import { createDriverFactory } from "../src/orch/runtime.ts";
 import type { AgentDriver, DriverEvent, DriverOptions } from "../src/types.ts";
 
 const answer = (text: string): AssistantMessage => ({

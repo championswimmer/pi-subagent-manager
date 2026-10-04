@@ -2,8 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { dialogHeight, type DialogHost } from "../src/dialog.ts";
-import { buildStatusTree, showAgentStatus, showAgentTree, StatusDialog } from "../src/status-ui.ts";
+import { dialogHeight, type DialogHost } from "../src/ui/dialog.ts";
+import {
+  buildStatusTree,
+  showAgentStatus,
+  showAgentTree,
+  StatusDialog,
+} from "../src/ui/status-ui.ts";
 import type { ThreadService, ThreadView } from "../src/types.ts";
 
 const theme = { fg: (_token: string, text: string) => text } as Theme;

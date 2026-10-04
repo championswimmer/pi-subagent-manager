@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { test, type TestContext } from "node:test";
-import { discoverImportCandidates, type ImportCandidate } from "../src/import-discovery.ts";
+import { discoverImportCandidates, type ImportCandidate } from "../src/prefs/import-discovery.ts";
 
 const ENV = "PI_SUBAGENT_EXTRA_AGENT_DIRS";
 

@@ -4,14 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
-import { ConfigStore } from "../src/config.ts";
-import { dialogHeight, type DialogRow } from "../src/dialog.ts";
-import { configureAgents } from "../src/settings-ui.ts";
+import { ConfigStore } from "../src/prefs/config.ts";
+import { dialogHeight, type DialogRow } from "../src/ui/dialog.ts";
+import { configureAgents } from "../src/ui/settings-ui.ts";
 import {
   DEFAULT_MANAGER_SETTINGS,
   loadManagerSettings,
   type ManagerSettings,
-} from "../src/settings.ts";
+} from "../src/prefs/settings.ts";
 import { createDialogDriver } from "./helpers/dialogDriver.ts";
 
 const theme = { fg: (_color: string, text: string) => text } as Theme;
