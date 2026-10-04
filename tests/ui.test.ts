@@ -565,11 +565,15 @@ function unsavedMenus(menus: { title: string; options: string[] }[]) {
   return menus.filter((menu) => /^Edit .+ \(unsaved\)$/.test(menu.title));
 }
 
-/** Drive the model picker child by selecting values in order. */
+/** Drive the model picker child by selecting values or pressing reorder keys. */
 function pickModels(driver: ReturnType<typeof createDialogDriver>, values: string[]) {
   driver.onChild = (component) => {
     if (typeof component.getMode !== "function") return false;
     for (const value of values) {
+      if (value === "key:ctrl-up") {
+        component.handleInput("\u001B[1;5A");
+        continue;
+      }
       const item = component
         .getCurrentItems()
         .find((entry: { value: string }) => entry.value === value);
@@ -668,11 +672,12 @@ test("model picker uses current draft suggestions, including unsaved edits to th
     driver.onChild = (component) => {
       if (typeof component.getMode !== "function") return false;
       pickerOrders.push(
-        component.getCurrentItems().map((item: { value: string }) => item.value),
+        component.getCurrentItems()
+          .filter((item: { value: string }) => !item.value.startsWith("action:"))
+          .map((item: { value: string }) => item.value),
       );
       if (pickerOrders.length === 1) {
         // Suggestions order the picker but do not commit model preferences.
-        component.handleInput("\u001B");
         component.handleInput("\u001B");
       } else {
         component.handleInput("\r");
@@ -713,8 +718,8 @@ test("legacy scalar model opens the ordered picker and cancel keeps the saved de
       return true;
     };
     await editAgentTypes(ctx, store);
-    assert.equal(observed.mode, "menu");
-    assert.equal(observed.label, "1. openai/gpt-4.1");
+    assert.equal(observed.mode, "picker");
+    assert.equal(observed.label, "[x] 1. openai/gpt-4.1");
     assert.match(observed.description, /scoped in this session/);
     assert.deepEqual(store.get("worker").models, ["openai/gpt-4.1"]);
     assert.equal(await readFile(file, "utf8"), legacy);
@@ -737,10 +742,8 @@ test("saving model preferences stores canonical ordered models after add and reo
     );
     pickModels(driver, [
       "openai/gpt-4.1",
-      "action:add",
       "anthropic/claude-3.7-sonnet",
-      "entry:1",
-      "action:earlier",
+      "key:ctrl-up",
       "action:done",
     ]);
     await editAgentTypes(ctx, store);

@@ -10,8 +10,9 @@ import {
   Container,
   getKeybindings,
   Input,
+  Key,
+  matchesKey,
   SelectList,
-  Spacer,
   stripTerminalSequences,
   truncateToWidth,
   Text,
@@ -26,23 +27,16 @@ const MODEL_EDITOR_LAYOUT = {
 } as const;
 
 const PICKER_TITLE = "Preferred models";
+const SELECTED_GROUP = "Selected models · ordered fallback";
+const ACTIONS_GROUP = "Actions";
 
 export const MODEL_EDITOR_CANCEL = Symbol("model-editor-cancel");
 
 type AvailableModel = Pick<Model<Api>, "provider" | "id" | "name">;
 
 interface ModelSelectItem extends SelectItem {
-  group?: string;
+  group: string;
 }
-
-type ModelEditorMode =
-  | { kind: "menu" }
-  | { kind: "actions"; index: number }
-  | {
-      kind: "picker";
-      replaceIndex: number | undefined;
-      returnTo: "menu" | "actions";
-    };
 
 interface OrderedModelEditorComponentOptions {
   tui: { requestRender(force?: boolean): void; terminal?: { rows: number } };
@@ -81,10 +75,7 @@ function sortModels(models: readonly AvailableModel[]): AvailableModel[] {
   );
 }
 
-function describeModel(
-  model: AvailableModel,
-  scopedIdentities: ReadonlySet<string>,
-): string {
+function describeModel(model: AvailableModel, scopedIdentities: ReadonlySet<string>): string {
   const annotation = scopedIdentities.has(modelIdentity(model))
     ? "scoped in this session"
     : "portable preference · not scoped in this session";
@@ -105,25 +96,14 @@ export class OrderedModelEditorComponent extends Container {
   private readonly scopedIdentities: ReadonlySet<string>;
   private readonly onDone: (models: string[]) => void;
   private readonly onCancel: () => void;
-  private readonly body = new Container();
   private readonly titleText = new Text();
   private readonly subtitleText = new Text();
   private readonly footerText = new Text();
+  private readonly searchInput = new Input({ placeholder: "Search models" });
   private draft: string[];
-  private mode: ModelEditorMode;
   private pickerQuery = "";
-  private pickerSelectedValue: string | undefined;
   private currentItems: ModelSelectItem[] = [];
-  private selectList = new SelectList(
-    [],
-    1,
-    getSelectListTheme(),
-    MODEL_EDITOR_LAYOUT,
-  );
-  private searchInput: Input | undefined;
-  private pickerListChildIndex = -1;
-  private menuSelectedValue: string | undefined;
-  private actionSelectedValue: string | undefined;
+  private selectList = new SelectList([], 1, getSelectListTheme(), MODEL_EDITOR_LAYOUT);
   private _focused = false;
 
   constructor(options: OrderedModelEditorComponentOptions) {
@@ -142,18 +122,27 @@ export class OrderedModelEditorComponent extends Container {
     this.suggestedScores = this.searchScores(options.modelSuggestions ?? []);
     this.onDone = options.onDone;
     this.onCancel = options.onCancel;
-    for (const model of this.allModels)
-      this.modelsByIdentity.set(modelIdentity(model), model);
+    for (const model of this.allModels) this.modelsByIdentity.set(modelIdentity(model), model);
     this.scopedIdentities = new Set(
       options.scopedModels.map((entry) => modelIdentity(entry.model)),
     );
-    this.draft = [...(options.initialModels ?? [])];
-    this.mode =
-      this.draft.length === 0
-        ? { kind: "picker", replaceIndex: undefined, returnTo: "menu" }
-        : { kind: "menu" };
-
-    this.rebuild();
+    this.draft = [...new Set(options.initialModels ?? [])];
+    this.titleText.setText(this.theme.fg("accent", PICKER_TITLE));
+    this.subtitleText.setText(
+      this.theme.fg(
+        "muted",
+        this.withScopeWarning(
+          this.suggestedScores.size
+            ? "Selected first; suggested matches scoped first, then other models; the rest A–Z. Type to search."
+            : "Selected first. Search by provider/id or model name; other models A–Z.",
+        ),
+      ),
+    );
+    this.footerText.setText(
+      this.theme.fg("dim", "↑↓ select · Enter toggle · Ctrl+↑↓ reorder · Ctrl+S done · Esc cancel"),
+    );
+    this.addChild(this.searchInput);
+    this.refreshPickerList();
   }
 
   get focused(): boolean {
@@ -162,11 +151,11 @@ export class OrderedModelEditorComponent extends Container {
 
   set focused(value: boolean) {
     this._focused = value;
-    if (this.searchInput) this.searchInput.focused = value;
+    this.searchInput.focused = value;
   }
 
-  getMode(): ModelEditorMode["kind"] {
-    return this.mode.kind;
+  getMode(): "picker" {
+    return "picker";
   }
 
   getDraftModels(): readonly string[] {
@@ -181,7 +170,7 @@ export class OrderedModelEditorComponent extends Container {
     return this.selectList;
   }
 
-  getSearchInput(): Input | undefined {
+  getSearchInput(): Input {
     return this.searchInput;
   }
 
@@ -198,15 +187,19 @@ export class OrderedModelEditorComponent extends Container {
         inner,
         "",
       ),
+      ...this.searchInput.render(inner),
     ];
-    if (this.searchInput) header.push(...this.searchInput.render(inner));
     const budget = Math.max(1, height - 4 - header.length);
     const selected = this.selectList.getSelectedItem()?.value;
     // Headings are visual rows only: keyboard navigation selects models, not groups.
     const displayRows: (ModelSelectItem | string)[] = [];
     let previousGroup: string | undefined;
+    const hasResults = this.currentItems.some(
+      (item) => item.group !== SELECTED_GROUP && item.group !== ACTIONS_GROUP,
+    );
     for (const item of this.currentItems) {
-      if (item.group && item.group !== previousGroup) {
+      if (item.group !== previousGroup) {
+        if (item.group === ACTIONS_GROUP && !hasResults) displayRows.push("No matching models");
         displayRows.push(item.group);
       }
       previousGroup = item.group;
@@ -214,21 +207,15 @@ export class OrderedModelEditorComponent extends Container {
     }
     const index = Math.max(
       0,
-      displayRows.findIndex(
-        (row) => typeof row !== "string" && row.value === selected,
-      ),
+      displayRows.findIndex((row) => typeof row !== "string" && row.value === selected),
     );
-    const start = Math.max(
-      0,
-      Math.min(index - budget + 1, displayRows.length - budget),
-    );
+    const start = Math.max(0, Math.min(index - budget + 1, displayRows.length - budget));
     // Only format visible rows; a registry can contain thousands of models.
     const rows = displayRows.slice(start, start + budget).map((row) => {
       if (typeof row === "string") return this.theme.fg("muted", row);
       const text = `${row.value === selected ? "›" : " "} ${row.label}  ${this.theme.fg("muted", row.description ?? "")}`;
       return row.value === selected ? this.theme.fg("accent", text) : text;
     });
-    if (!rows.length) rows.push(this.theme.fg("muted", "No matching models"));
     return frameDialog(
       this.theme,
       width,
@@ -244,330 +231,116 @@ export class OrderedModelEditorComponent extends Container {
   }
 
   handleInput(keyData: string): void {
-    if (this.mode.kind === "picker" && this.searchInput) {
-      const kb = getKeybindings();
-      const isNav =
-        kb.matches(keyData, "tui.select.up") ||
-        kb.matches(keyData, "tui.select.down") ||
-        kb.matches(keyData, "tui.select.confirm") ||
-        kb.matches(keyData, "tui.select.cancel");
-      if (isNav) {
-        this.selectList.handleInput(keyData);
-      } else {
-        this.searchInput.handleInput(keyData);
-        const nextQuery = this.searchInput.getValue();
-        if (nextQuery !== this.pickerQuery) {
-          this.pickerQuery = nextQuery;
-          this.pickerSelectedValue = undefined;
-          this.refreshPickerList(this.mode.replaceIndex, this.mode.returnTo);
-          this.tui.requestRender();
-          return;
-        }
-      }
-      this.tui.requestRender();
+    if (matchesKey(keyData, Key.ctrl("s"))) {
+      this.onDone([...this.draft]);
       return;
     }
-    this.selectList.handleInput(keyData);
+    const earlier = matchesKey(keyData, Key.ctrl("up"));
+    const later = matchesKey(keyData, Key.ctrl("down"));
+    if (earlier || later) {
+      const selected = this.selectList.getSelectedItem()?.value;
+      const index = selected === undefined ? -1 : this.draft.indexOf(selected);
+      const next = index + (earlier ? -1 : 1);
+      // Consume reorder keys even on unselected models or at a list boundary.
+      if (index >= 0 && next >= 0 && next < this.draft.length) {
+        [this.draft[index], this.draft[next]] = [this.draft[next], this.draft[index]];
+        this.refreshPickerList(selected);
+        this.tui.requestRender();
+      }
+      return;
+    }
+    const kb = getKeybindings();
+    const isNav =
+      kb.matches(keyData, "tui.select.up") ||
+      kb.matches(keyData, "tui.select.down") ||
+      kb.matches(keyData, "tui.select.confirm") ||
+      kb.matches(keyData, "tui.select.cancel");
+    if (isNav) {
+      this.selectList.handleInput(keyData);
+    } else {
+      this.searchInput.handleInput(keyData);
+      const nextQuery = this.searchInput.getValue();
+      if (nextQuery !== this.pickerQuery) {
+        this.pickerQuery = nextQuery;
+        // Keep selected preferences visible, but focus the first search result
+        // so typing a query and pressing Enter still adds the matching model.
+        this.refreshPickerList(undefined, true);
+      }
+    }
     this.tui.requestRender();
   }
 
-  private rebuild(): void {
-    this.body.clear();
-    this.searchInput = undefined;
-    this.pickerListChildIndex = -1;
-    if (this.mode.kind === "menu") {
-      this.buildMenu();
-    } else if (this.mode.kind === "actions") {
-      this.buildActions(this.mode.index);
-    } else {
-      this.buildPicker(this.mode.replaceIndex);
-    }
-  }
-
-  private buildMenu(): void {
-    this.titleText.setText(this.theme.fg("accent", PICKER_TITLE));
-    this.subtitleText.setText(
-      this.theme.fg(
-        "muted",
-        this.withScopeWarning(
-          this.draft.length
-            ? "Ordered fallback preferences. Select a numbered entry for actions."
-            : "No explicit preferences. Add models or done to inherit the default.",
-        ),
-      ),
+  private refreshPickerList(selectedValue?: string, focusSearchResult = false): void {
+    const previousIndex = this.currentItems.findIndex(
+      (item) => item.value === this.selectList.getSelectedItem()?.value,
     );
-    const items: SelectItem[] = [
+    this.currentItems = [
       ...this.draft.map((identity, index) => ({
-        value: `entry:${index}`,
-        label: `${index + 1}. ${renderModelIdentity(identity)}`,
+        value: identity,
+        label: `[x] ${index + 1}. ${renderModelIdentity(identity)}`,
         description: this.describeDraftIdentity(identity),
+        group: SELECTED_GROUP,
       })),
+      ...this.getPickerItems(),
       {
-        value: "action:add",
-        label: "Add model",
-        description: "Append another preferred model to the ordered list",
+        value: "action:done",
+        label: "Done",
+        description: "Commit this ordered model preference list",
+        group: ACTIONS_GROUP,
       },
       {
         value: "action:clear",
         label: "Use inherited default",
         description: "Clear explicit preferences and inherit the default model",
-      },
-      {
-        value: "action:done",
-        label: "Done",
-        description: "Commit this ordered model preference list",
+        group: ACTIONS_GROUP,
       },
       {
         value: "action:cancel",
         label: "Cancel",
         description: "Discard unsaved model preference changes",
+        group: ACTIONS_GROUP,
       },
     ];
-    this.currentItems = items;
-    this.selectList = this.buildSelectList(
-      items,
-      this.menuSelectedValue,
-      (value) => {
-        if (value.startsWith("entry:")) {
-          const index = Number(value.slice("entry:".length));
-          if (!Number.isNaN(index) && this.draft[index] !== undefined) {
-            this.mode = { kind: "actions", index };
-            this.actionSelectedValue = "action:replace";
-            this.rebuildAndRender();
-          }
-          return;
-        }
-        if (value === "action:add") {
-          this.openPicker(undefined, "menu");
-        } else if (value === "action:clear") {
-          this.draft = [];
-          this.menuSelectedValue = "action:done";
-          this.rebuildAndRender();
-        } else if (value === "action:done") {
-          this.onDone([...this.draft]);
-        } else if (value === "action:cancel") {
-          this.onCancel();
-        }
-      },
-      () => this.onCancel(),
-    );
-    this.body.addChild(this.selectList);
-    this.footerText.setText(
-      this.theme.fg(
-        "dim",
-        "↑↓ select · Enter edit · Esc cancel · Done applies preferences",
-      ),
-    );
-  }
-
-  private buildActions(index: number): void {
-    const identity = this.draft[index] ?? "";
-    this.titleText.setText(this.theme.fg("accent", `Model ${index + 1}`));
-    this.subtitleText.setText(
-      this.theme.fg(
-        "muted",
-        `${index + 1}. ${renderModelIdentity(identity)} · ${this.describeDraftIdentity(identity)}`,
-      ),
-    );
-    const items: SelectItem[] = [
-      {
-        value: "action:replace",
-        label: "Replace",
-        description: "Choose a different available model for this position",
-      },
-      {
-        value: "action:remove",
-        label: "Remove",
-        description: "Delete this preference from the ordered list",
-      },
-      ...(index > 0
-        ? [
-            {
-              value: "action:earlier",
-              label: "Move earlier",
-              description: "Swap with the previous preference",
-            },
-          ]
-        : []),
-      ...(index < this.draft.length - 1
-        ? [
-            {
-              value: "action:later",
-              label: "Move later",
-              description: "Swap with the next preference",
-            },
-          ]
-        : []),
-      {
-        value: "action:back",
-        label: "Back",
-        description: "Return to the ordered preference list",
-      },
-    ];
-    this.currentItems = items;
-    this.selectList = this.buildSelectList(
-      items,
-      this.actionSelectedValue,
-      (value) => {
-        if (value === "action:replace") {
-          this.openPicker(index, "actions");
-        } else if (value === "action:remove") {
-          this.draft.splice(index, 1);
-          this.mode = { kind: "menu" };
-          this.menuSelectedValue = this.draft[index]
-            ? `entry:${index}`
-            : "action:add";
-          this.rebuildAndRender();
-        } else if (value === "action:earlier" && index > 0) {
-          [this.draft[index - 1], this.draft[index]] = [
-            this.draft[index],
-            this.draft[index - 1],
-          ];
-          this.mode = { kind: "menu" };
-          this.menuSelectedValue = `entry:${index - 1}`;
-          this.rebuildAndRender();
-        } else if (value === "action:later" && index < this.draft.length - 1) {
-          [this.draft[index], this.draft[index + 1]] = [
-            this.draft[index + 1],
-            this.draft[index],
-          ];
-          this.mode = { kind: "menu" };
-          this.menuSelectedValue = `entry:${index + 1}`;
-          this.rebuildAndRender();
-        } else if (value === "action:back") {
-          this.mode = { kind: "menu" };
-          this.menuSelectedValue = `entry:${index}`;
-          this.rebuildAndRender();
-        }
-      },
-      () => {
-        this.mode = { kind: "menu" };
-        this.menuSelectedValue = `entry:${index}`;
-        this.rebuildAndRender();
-      },
-    );
-    this.body.addChild(this.selectList);
-    this.footerText.setText(
-      this.theme.fg("dim", "↑↓ select · Enter choose · Esc back"),
-    );
-  }
-
-  private buildPicker(replaceIndex: number | undefined): void {
-    const isReplace = replaceIndex !== undefined;
-    this.titleText.setText(
-      this.theme.fg(
-        "accent",
-        isReplace ? `Replace model ${replaceIndex + 1}` : "Add model",
-      ),
-    );
-    this.subtitleText.setText(
-      this.theme.fg(
-        "muted",
-        this.withScopeWarning(
-          this.suggestedScores.size
-            ? "Suggested matches: scoped first, then other models; the rest A–Z. Type to search."
-            : "Search by provider/id or model name. Models A–Z; selected duplicates are hidden.",
-        ),
-      ),
-    );
-    this.searchInput = new Input({ placeholder: "Search models" });
-    this.searchInput.setValue(this.pickerQuery);
-    this.searchInput.focused = this._focused;
-    this.searchInput.onSubmit = () => {
-      this.selectList.handleInput("\r");
-      this.tui.requestRender();
-    };
-    this.body.addChild(this.searchInput);
-    this.body.addChild(new Spacer(1));
-    const returnTo = this.mode.kind === "picker" ? this.mode.returnTo : "menu";
-    this.pickerListChildIndex = this.body.children.length;
-    this.refreshPickerList(replaceIndex, returnTo);
-    this.footerText.setText(
-      this.theme.fg("dim", "Type filter · ↑↓ select · Enter choose · Esc back"),
-    );
-  }
-
-  private rebuildAndRender(): void {
-    this.rebuild();
-    this.tui.requestRender();
-  }
-
-  private openPicker(
-    replaceIndex: number | undefined,
-    returnTo: "menu" | "actions",
-  ): void {
-    this.mode = { kind: "picker", replaceIndex, returnTo };
-    this.pickerQuery = "";
-    this.pickerSelectedValue = undefined;
-    this.rebuildAndRender();
-  }
-
-  private refreshPickerList(
-    replaceIndex: number | undefined,
-    returnTo: "menu" | "actions",
-  ): void {
-    const items = this.getPickerItems(replaceIndex);
-    this.currentItems = items;
-    const list = this.buildSelectList(
-      items,
-      this.pickerSelectedValue,
-      (value) => {
-        if (replaceIndex === undefined) this.draft.push(value);
-        else this.draft[replaceIndex] = value;
-        this.mode = { kind: "menu" };
-        this.menuSelectedValue = `entry:${replaceIndex === undefined ? this.draft.length - 1 : replaceIndex}`;
-        this.pickerQuery = "";
-        this.pickerSelectedValue = undefined;
-        this.rebuildAndRender();
-      },
-      () => {
-        this.mode =
-          returnTo === "actions" && replaceIndex !== undefined
-            ? { kind: "actions", index: replaceIndex }
-            : { kind: "menu" };
-        this.pickerQuery = "";
-        this.pickerSelectedValue = undefined;
-        this.rebuildAndRender();
-      },
-    );
-    this.selectList = list;
-    if (this.body.children[this.pickerListChildIndex])
-      this.body.children[this.pickerListChildIndex] = list;
-    else this.body.addChild(list);
-  }
-
-  private buildSelectList(
-    items: SelectItem[],
-    selectedValue: string | undefined,
-    onSelect: (value: string) => void,
-    onCancel: () => void,
-  ): SelectList {
     const list = new SelectList(
-      items,
-      Math.min(Math.max(items.length, 1), 10),
+      this.currentItems,
+      Math.min(this.currentItems.length, 10),
       getSelectListTheme(),
       MODEL_EDITOR_LAYOUT,
     );
-    const selectedIndex = selectedValue
-      ? items.findIndex((item) => item.value === selectedValue)
-      : 0;
-    if (selectedIndex >= 0) list.setSelectedIndex(selectedIndex);
+    const preferredIndex = focusSearchResult
+      ? this.currentItems.findIndex(
+          (item) => item.group !== SELECTED_GROUP && item.group !== ACTIONS_GROUP,
+        )
+      : this.currentItems.findIndex((item) => item.value === selectedValue);
+    list.setSelectedIndex(
+      preferredIndex >= 0
+        ? preferredIndex
+        : focusSearchResult
+          ? 0
+          : Math.max(0, Math.min(previousIndex, this.currentItems.length - 1)),
+    );
     list.onSelect = (item) => {
-      if (this.mode.kind === "menu") this.menuSelectedValue = item.value;
-      else if (this.mode.kind === "actions")
-        this.actionSelectedValue = item.value;
-      else this.pickerSelectedValue = item.value;
-      onSelect(item.value);
-    };
-    list.onSelectionChange = (item) => {
-      if (this.mode.kind === "menu") this.menuSelectedValue = item.value;
-      else if (this.mode.kind === "actions")
-        this.actionSelectedValue = item.value;
-      else this.pickerSelectedValue = item.value;
+      if (this.currentItems.find((row) => row.value === item.value)?.group === ACTIONS_GROUP) {
+        if (item.value === "action:done") this.onDone([...this.draft]);
+        else if (item.value === "action:cancel") this.onCancel();
+        else {
+          this.draft = [];
+          this.refreshPickerList("action:done");
+          this.tui.requestRender();
+        }
+        return;
+      }
+      const index = this.draft.indexOf(item.value);
+      if (index >= 0) this.draft.splice(index, 1);
+      else this.draft.push(item.value);
+      this.refreshPickerList(item.value);
       this.tui.requestRender();
     };
-    list.onCancel = onCancel;
-    return list;
+    list.onSelectionChange = () => this.tui.requestRender();
+    list.onCancel = () => this.onCancel();
+    this.selectList = list;
+    if (this.children[1]) this.children[1] = list;
+    else this.addChild(list);
   }
 
   private searchScores(queries: readonly string[]): Map<string, number> {
@@ -589,10 +362,8 @@ export class OrderedModelEditorComponent extends Container {
     return scores;
   }
 
-  private getPickerItems(replaceIndex: number | undefined): ModelSelectItem[] {
-    const excluded = new Set(
-      this.draft.filter((_, index) => index !== replaceIndex),
-    );
+  private getPickerItems(): ModelSelectItem[] {
+    const excluded = new Set(this.draft);
     const query = this.pickerQuery.trim();
     const queryScores = query ? this.searchScores([query]) : undefined;
     const scoped: AvailableModel[] = [];
@@ -600,8 +371,7 @@ export class OrderedModelEditorComponent extends Container {
     const remaining: AvailableModel[] = [];
     for (const model of this.allModels) {
       const identity = modelIdentity(model);
-      if (excluded.has(identity) || (queryScores && !queryScores.has(identity)))
-        continue;
+      if (excluded.has(identity) || (queryScores && !queryScores.has(identity))) continue;
       if (this.suggestedScores.has(identity)) {
         (this.scopedIdentities.has(identity) ? scoped : other).push(model);
       } else {
@@ -609,19 +379,15 @@ export class OrderedModelEditorComponent extends Container {
       }
     }
     const bySuggestionScore = (a: AvailableModel, b: AvailableModel) =>
-      this.suggestedScores.get(modelIdentity(b))! -
-      this.suggestedScores.get(modelIdentity(a))!;
+      this.suggestedScores.get(modelIdentity(b))! - this.suggestedScores.get(modelIdentity(a))!;
     // Stable score sorting preserves alphabetical order for ties. The last
     // tier retains the registry's alphabetical order, irrespective of scope.
     scoped.sort(bySuggestionScore);
     other.sort(bySuggestionScore);
-    const items = (
-      models: AvailableModel[],
-      group: string,
-    ): ModelSelectItem[] =>
+    const items = (models: AvailableModel[], group: string): ModelSelectItem[] =>
       models.map((model) => ({
         value: modelIdentity(model),
-        label: renderModelIdentity(modelIdentity(model)),
+        label: `[ ] ${renderModelIdentity(modelIdentity(model))}`,
         description: describeModel(model, this.scopedIdentities),
         group,
       }));
@@ -630,9 +396,7 @@ export class OrderedModelEditorComponent extends Container {
       ...items(other, "Suggested matches · other models"),
       ...items(
         remaining,
-        scoped.length || other.length
-          ? "All other models · A–Z"
-          : "All models · A–Z",
+        scoped.length || other.length ? "All other models · A–Z" : "All models · A–Z",
       ),
     ];
   }

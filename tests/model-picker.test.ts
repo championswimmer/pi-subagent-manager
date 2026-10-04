@@ -8,6 +8,9 @@ initTheme();
 
 const DOWN = "\u001B[B";
 const ENTER = "\r";
+const CTRL_UP = "\u001B[1;5A";
+const CTRL_DOWN = "\u001B[1;5B";
+const CTRL_S = "\u0013";
 const ESC = "\u001B";
 
 function availableModel(provider: string, id: string, name = id) {
@@ -75,7 +78,11 @@ function activateValue(component: OrderedModelEditorComponent, value: string) {
   press(component, ENTER);
 }
 
-test("ordered model editor searches, annotates scope, and excludes duplicates when adding", () => {
+function modelItems(component: OrderedModelEditorComponent) {
+  return component.getCurrentItems().filter((item) => !item.value.startsWith("action:"));
+}
+
+test("ordered model editor searches, annotates scope, and toggles without leaving the picker", () => {
   const { component, done } = createComponent({
     initialModels: [],
     scopedModels: ["anthropic/claude-3.7-sonnet", "openai/gpt-4.1"],
@@ -89,11 +96,14 @@ test("ordered model editor searches, annotates scope, and excludes duplicates wh
   assert.equal(component.getSelectList().getSelectedItem()?.value, "anthropic/claude-3.7-sonnet");
   press(component, ENTER);
   assert.deepEqual(component.getDraftModels(), ["anthropic/claude-3.7-sonnet"]);
-  assert.equal(component.getMode(), "menu");
-
-  activateValue(component, "action:add");
-  const pickerItems = component.getCurrentItems();
-  assert.ok(!pickerItems.some((item) => item.value === "anthropic/claude-3.7-sonnet"));
+  assert.equal(component.getMode(), "picker");
+  press(component, ...Array(6).fill("\u007f"));
+  const pickerItems = modelItems(component);
+  assert.equal(
+    pickerItems.filter((item) => item.value === "anthropic/claude-3.7-sonnet").length,
+    1,
+  );
+  assert.match(pickerItems[0]!.label, /\[x\] 1\./);
   assert.match(
     pickerItems.find((item) => item.value === "local/llama3.3")?.description ?? "",
     /portable preference/,
@@ -128,7 +138,7 @@ test("suggested fuzzy matches are ranked scoped first, then unscoped, with an al
     modelSuggestions: ["snnt", "GPT", "snnt", " ", "GPT Mini"],
   });
   assert.deepEqual(
-    component.getCurrentItems().map((item) => item.value),
+    modelItems(component).map((item) => item.value),
     ["c/snnt", "a/sonnet-4", "a/gpt-mini", "b/sonnet-4", "a/aardvark", "z/other"],
   );
   const rendered = component.render(200).join("\n");
@@ -153,7 +163,7 @@ test("bundled suggestions match version separator variants without changing raw 
     modelSuggestions: ["sonnet-5.5"],
   });
   assert.deepEqual(
-    component.getCurrentItems().map((item) => item.value),
+    modelItems(component).map((item) => item.value),
     [
       "anthropic/claude-sonnet-5-5",
       "amazon-bedrock/us.anthropic.claude-sonnet-5-5-v1:0",
@@ -163,7 +173,7 @@ test("bundled suggestions match version separator variants without changing raw 
     ],
   );
   press(component, ..."sonnet-5.5");
-  assert.equal(component.getCurrentItems().length, 3);
+  assert.equal(modelItems(component).length, 3);
   press(component, ENTER);
   assert.deepEqual(component.getDraftModels(), ["anthropic/claude-sonnet-5-5"]);
 });
@@ -177,7 +187,7 @@ test("suggestions search display names and provider/id, retaining every match be
     scopedModels: ["provider/opaque-24"],
     modelSuggestions: ["cld snt", "PROVIDER/OPAQUE"],
   });
-  const values = component.getCurrentItems().map((item) => item.value);
+  const values = modelItems(component).map((item) => item.value);
   assert.equal(values.length, 26);
   assert.equal(values[0], "provider/opaque-24");
   assert.deepEqual(
@@ -192,21 +202,21 @@ test("typing fuzzy-filters the suggestion tiers; clearing restores them and anno
     modelSuggestions: ["Gemini", "GPT"],
     scopedModels: ["openai/gpt-4.1"],
   });
-  const initial = component.getCurrentItems().map((item) => item.value);
+  const initial = modelItems(component).map((item) => item.value);
   assert.equal(initial[0], "openai/gpt-4.1");
   assert.equal(initial[1], "google/gemini-2.5-pro");
   press(component, ..."gmnp");
   assert.deepEqual(
-    component.getCurrentItems().map((item) => item.value),
+    modelItems(component).map((item) => item.value),
     ["google/gemini-2.5-pro"],
   );
   press(component, ...Array(4).fill("\u007f"));
   assert.deepEqual(
-    component.getCurrentItems().map((item) => item.value),
+    modelItems(component).map((item) => item.value),
     initial,
   );
   press(component, ..."portable preference");
-  assert.equal(component.getCurrentItems().length, 0);
+  assert.equal(modelItems(component).length, 0);
   assert.match(component.render(100).join("\n"), /No matching models/);
 });
 
@@ -217,31 +227,38 @@ test("missing or unmatched suggestions preserve alphabetical browsing, even with
       scopedModels: ["openai/gpt-4.1"],
     });
     assert.deepEqual(
-      component.getCurrentItems().map((item) => item.value),
+      modelItems(component).map((item) => item.value),
       ["anthropic/claude-3.7-sonnet", "google/gemini-2.5-pro", "local/llama3.3", "openai/gpt-4.1"],
     );
     assert.doesNotMatch(component.render(200).join("\n"), /Suggested matches ·/);
   }
 });
 
-test("suggestion tiers hide already-selected models on add but allow the replaced model", () => {
+test("selected models come first in preference order without duplicates in suggestion tiers", () => {
   const { component } = createComponent({
     initialModels: ["openai/gpt-4.1", "anthropic/claude-3.7-sonnet"],
-    modelSuggestions: ["GPT", "Claude"],
+    modelSuggestions: ["GPT", "Claude", "Gemini"],
     scopedModels: ["openai/gpt-4.1", "anthropic/claude-3.7-sonnet"],
   });
-  activateValue(component, "action:add");
+  assert.equal(component.getMode(), "picker");
   assert.deepEqual(
-    component.getCurrentItems().map((item) => item.value),
-    ["google/gemini-2.5-pro", "local/llama3.3"],
+    modelItems(component).map((item) => item.value),
+    ["openai/gpt-4.1", "anthropic/claude-3.7-sonnet", "google/gemini-2.5-pro", "local/llama3.3"],
   );
-  press(component, ESC);
-  activateValue(component, "entry:0");
-  activateValue(component, "action:replace");
+  assert.match(modelItems(component)[0]!.label, /\[x\] 1\./);
+  assert.match(modelItems(component)[1]!.label, /\[x\] 2\./);
+  const rendered = component.render(200).join("\n");
+  assert.ok(rendered.indexOf("Selected models ·") < rendered.indexOf("Suggested matches ·"));
+  // Enter on a selected row immediately unselects it and returns it to results.
+  press(component, ENTER);
+  assert.deepEqual(component.getDraftModels(), ["anthropic/claude-3.7-sonnet"]);
   assert.deepEqual(
-    component.getCurrentItems().map((item) => item.value),
-    ["openai/gpt-4.1", "google/gemini-2.5-pro", "local/llama3.3"],
+    modelItems(component).map((item) => item.value),
+    ["anthropic/claude-3.7-sonnet", "openai/gpt-4.1", "google/gemini-2.5-pro", "local/llama3.3"],
   );
+  assert.match(modelItems(component)[1]!.label, /\[ \]/);
+  press(component, ENTER);
+  assert.deepEqual(component.getDraftModels(), ["anthropic/claude-3.7-sonnet", "openai/gpt-4.1"]);
 });
 
 test("group headings keep selected models and footer visible on short terminals", () => {
@@ -261,8 +278,8 @@ test("group headings keep selected models and footer visible on short terminals"
       assert.ok(lines.length <= 10);
       assert.ok(lines.every((line) => visibleWidth(line) <= width));
       if (width >= 80) {
-        assert.match(lines.join("\n"), new RegExp(`› ${value}`));
-        assert.match(lines.join("\n"), /Type filter.*Esc back/);
+        assert.match(lines.join("\n"), new RegExp(`› \\[ \\] ${value}`));
+        assert.match(lines.join("\n"), /Ctrl\+↑↓ reorder.*Esc cancel/);
         assert.match(stripTerminalSequences(lines.at(-1)!), /^╰.*╯$/);
       }
     }
@@ -292,7 +309,7 @@ test("ordered model editor warns and annotates portable preferences when scope i
     /No scoped models: explicit preferences cannot run\. Configure \/scoped-models\./,
   );
   assert.match(
-    menu.getCurrentItems().find((item) => item.value === "entry:0")?.description ?? "",
+    menu.getCurrentItems().find((item) => item.value === "openai/gpt-4.1")?.description ?? "",
     /portable preference · not scoped in this session/,
   );
 });
@@ -318,76 +335,80 @@ test("ordered model editor keeps raw identities while sanitizing picker labels",
   assert.deepEqual(done, [[rawIdentity]]);
 });
 
-test("ordered model editor replaces unavailable entries, reorders, removes, and clears", () => {
+test("Ctrl up/down reorder selected models, preserve selection, and stop at boundaries", () => {
   const { component, done } = createComponent({
     initialModels: ["custom/missing", "openai/gpt-4.1", "anthropic/claude-3.7-sonnet"],
     scopedModels: ["anthropic/claude-3.7-sonnet", "openai/gpt-4.1"],
   });
-
   assert.match(
-    component.getCurrentItems().find((item) => item.value === "entry:0")?.description ?? "",
+    modelItems(component)[0]!.description ?? "",
     /unavailable in current model registry/,
   );
-
-  activateValue(component, "entry:0");
-  activateValue(component, "action:replace");
-  press(component, ..."gemini");
-  press(component, ENTER);
+  press(component, CTRL_UP);
+  assert.equal(component.getSelectList().getSelectedItem()?.value, "custom/missing");
+  press(component, CTRL_DOWN);
   assert.deepEqual(component.getDraftModels(), [
-    "google/gemini-2.5-pro",
+    "openai/gpt-4.1",
+    "custom/missing",
+    "anthropic/claude-3.7-sonnet",
+  ]);
+  assert.equal(component.getSelectList().getSelectedItem()?.value, "custom/missing");
+  assert.match(component.getSelectList().getSelectedItem()!.label, /\[x\] 2\./);
+  press(component, CTRL_UP);
+  assert.deepEqual(component.getDraftModels(), [
+    "custom/missing",
     "openai/gpt-4.1",
     "anthropic/claude-3.7-sonnet",
   ]);
-
-  activateValue(component, "entry:2");
-  activateValue(component, "action:earlier");
+  moveSelectionToValue(component, "anthropic/claude-3.7-sonnet");
+  press(component, CTRL_DOWN);
+  assert.equal(component.getSelectList().getSelectedItem()?.value, "anthropic/claude-3.7-sonnet");
+  moveSelectionToValue(component, "google/gemini-2.5-pro");
+  press(component, CTRL_UP, CTRL_DOWN);
   assert.deepEqual(component.getDraftModels(), [
-    "google/gemini-2.5-pro",
-    "anthropic/claude-3.7-sonnet",
+    "custom/missing",
     "openai/gpt-4.1",
-  ]);
-
-  activateValue(component, "entry:0");
-  activateValue(component, "action:later");
-  assert.deepEqual(component.getDraftModels(), [
     "anthropic/claude-3.7-sonnet",
-    "google/gemini-2.5-pro",
-    "openai/gpt-4.1",
   ]);
-
-  activateValue(component, "entry:2");
-  activateValue(component, "action:remove");
-  assert.deepEqual(component.getDraftModels(), [
-    "anthropic/claude-3.7-sonnet",
-    "google/gemini-2.5-pro",
-  ]);
-
+  assert.equal(component.getSelectList().getSelectedItem()?.value, "google/gemini-2.5-pro");
+  assert.equal(component.getSearchInput().getValue(), "");
+  activateValue(component, "custom/missing");
+  assert.deepEqual(component.getDraftModels(), ["openai/gpt-4.1", "anthropic/claude-3.7-sonnet"]);
+  assert.ok(!modelItems(component).some((item) => item.value === "custom/missing"));
   activateValue(component, "action:clear");
   assert.deepEqual(component.getDraftModels(), []);
-  activateValue(component, "action:done");
+  press(component, CTRL_S);
   assert.deepEqual(done, [[]]);
 });
 
-test("ordered model editor cancellation preserves the draft across picker and action menus", () => {
+test("search keeps selected models above results and allows reorder while filtering", () => {
+  const { component, done } = createComponent({
+    initialModels: ["openai/gpt-4.1", "custom/missing"],
+  });
+  press(component, ..."gemini");
+  assert.deepEqual(
+    modelItems(component).map((item) => item.value),
+    ["openai/gpt-4.1", "custom/missing", "google/gemini-2.5-pro"],
+  );
+  assert.equal(component.getSelectList().getSelectedItem()?.value, "google/gemini-2.5-pro");
+  moveSelectionToValue(component, "openai/gpt-4.1");
+  press(component, CTRL_DOWN);
+  assert.deepEqual(component.getDraftModels(), ["custom/missing", "openai/gpt-4.1"]);
+  press(component, ENTER);
+  assert.deepEqual(component.getDraftModels(), ["custom/missing"]);
+  assert.equal(component.getSearchInput().getValue(), "gemini");
+  activateValue(component, "google/gemini-2.5-pro");
+  assert.deepEqual(component.getDraftModels(), ["custom/missing", "google/gemini-2.5-pro"]);
+  press(component, CTRL_S);
+  assert.deepEqual(done, [["custom/missing", "google/gemini-2.5-pro"]]);
+});
+
+test("Escape cancels without committing toggles or reordering", () => {
   const { component, done, getCancelled } = createComponent({
     initialModels: ["openai/gpt-4.1"],
   });
-
-  activateValue(component, "entry:0");
-  assert.equal(component.getMode(), "actions");
-  activateValue(component, "action:replace");
-  assert.equal(component.getMode(), "picker");
-
-  press(component, ..."gemini");
-  press(component, ESC);
-  assert.equal(component.getMode(), "actions");
-  assert.deepEqual(component.getDraftModels(), ["openai/gpt-4.1"]);
-
-  press(component, ESC);
-  assert.equal(component.getMode(), "menu");
-  assert.deepEqual(component.getDraftModels(), ["openai/gpt-4.1"]);
-
-  press(component, ESC);
+  activateValue(component, "google/gemini-2.5-pro");
+  press(component, CTRL_UP, ..."gemini", ESC);
   assert.equal(getCancelled(), 1);
   assert.deepEqual(done, []);
 });
@@ -399,7 +420,7 @@ test("model dialogs keep selected rows, borders and footer visible on short term
     availableModels: models,
     initialModels: models.map((model) => `local/${model.id}`),
   });
-  moveSelectionToValue(component, "entry:29");
+  moveSelectionToValue(component, "local/model-29");
   for (const width of [3, 18, 40, 80]) {
     const lines = component.render(width);
     assert.ok(lines.length <= 10);
@@ -410,11 +431,11 @@ test("model dialogs keep selected rows, borders and footer visible on short term
       assert.match(stripTerminalSequences(lines.at(-1)!), /^╰.*╯$/);
     }
   }
-  activateValue(component, "entry:29");
-  activateValue(component, "action:replace");
+  press(component, CTRL_UP);
+  assert.equal(component.getSelectList().getSelectedItem()?.value, "local/model-29");
   component.focused = true;
   const lines = component.render(80);
   assert.ok(lines.length <= 10);
-  assert.match(lines.join("\n"), /Type filter.*Esc back/);
+  assert.match(lines.join("\n"), /Ctrl\+↑↓ reorder.*Esc cancel/);
   assert.match(stripTerminalSequences(lines.at(-1)!), /^╰.*╯$/);
 });
