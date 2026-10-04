@@ -96,9 +96,12 @@ test("mode settings explain all choices and selecting each mode saves it", async
     const field = result.menus[0]!.rows.find((row) => row.id === "subagentMode")!;
     assert.equal(field.label, "Subagent Mode");
     assert.equal(field.value, "Opportunistic");
-    assert.match(field.help ?? "", /Off: no subagent tools or prompt guidance/);
-    assert.match(field.help ?? "", /Opportunistic: delegate only parallelizable or very large tasks/);
-    assert.match(field.help ?? "", /Orchestration: \/root delegates all execution/);
+    assert.match(field.help ?? "", /^Off: no subagent tools or prompt guidance/m);
+    assert.match(
+      field.help ?? "",
+      /^Opportunistic: delegate only parallelizable or very large tasks/m,
+    );
+    assert.match(field.help ?? "", /^Orchestration: \/root delegates all execution/m);
     const chooser = result.menus[1]!;
     assert.equal(chooser.title, "Subagent Mode");
     assert.deepEqual(chooser.rows.map((row) => row.id), ["off", "opportunistic", "orchestration"]);
@@ -185,7 +188,11 @@ test("scope help explains the destination and precedence without changing the dr
   const scope = (index: number) => result.menus[index]?.rows.find((row) => row.id === "scope");
   assert.match(scope(0)?.help ?? "", /this project only, overriding your global defaults/);
   assert.match(scope(2)?.help ?? "", /defaults for every project/);
-  assert.match(scope(2)?.help ?? "", /trusted-project settings still override/);
+  assert.match(scope(2)?.help ?? "", /project settings still override/);
+  for (const index of [0, 1, 2, 3]) {
+    assert.match(scope(index)?.help ?? "", /^Global: /m);
+    assert.match(scope(index)?.help ?? "", /^Current Project: /m);
+  }
   for (const index of [1, 2, 3]) {
     assert.match(scope(index)?.help ?? "", /only changes where you save, not the values shown/);
     assert.equal(result.value(index, "maxLevels"), "5");
@@ -222,7 +229,7 @@ test("project scope requires trust; trusted projects save to the project file", 
   assert.equal(existsSync(trusted.userFile), false);
 
   const toggled = await run(t, ["scope", "save"], { trusted: true });
-  assert.equal(toggled.value(0, "scope"), "Trusted project");
+  assert.equal(toggled.value(0, "scope"), "Current Project");
   assert.equal(toggled.value(1, "scope"), "Global");
   assert.equal(existsSync(toggled.userFile), true);
   assert.equal(existsSync(toggled.projectFile), false);
