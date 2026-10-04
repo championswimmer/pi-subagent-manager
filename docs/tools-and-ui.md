@@ -71,9 +71,9 @@ Set `PI_SUBAGENT_NAVIGATION_EDITOR=1` before starting Pi to open the tree when f
 
 The editor adapter is **opt-in** pending the full real-terminal acceptance matrix. Unset the variable or use `PI_SUBAGENT_NAVIGATION_EDITOR=0` to leave the editor slot untouched; command entry still works. Pi has one custom-editor slot: installation is skipped if another factory owns it or an existing draft is nonempty, since the host cannot transfer cursor/undo/expanded-paste state. Load order can still let a later editor replace ours. Initial startup uses Pi's history hydration; replacement installations seed history once. Session-tree rebuilds keep the existing editor instance.
 
-While navigation is open, the host fullscreen search shortcut is temporarily disabled through public keybindings to avoid stacking a second host overlay. The prior binding owner is restored only if no other extension replaced it. Independently opened overlays from unrelated extensions remain a host compatibility limitation.
+While navigation is open, the host fullscreen search shortcut is temporarily disabled through public keybindings to avoid stacking a second host overlay. The prior binding owner is restored only if no other extension replaced it. **Known host limitation:** if an unrelated extension stacks another overlay above navigation, Pi's custom-UI completion can close the newer overlay instead. Avoid concurrent extension-owned overlays; a host identity-targeted completion API is needed to remove this limitation. No private host access or unsupported overlay-lifecycle workaround is used.
 
-Regular/fullscreen PTY smoke checks cover entry, root return, draft restoration, resize and host-search suppression. Broader manual acceptance (concurrent live turns, autocomplete/paste/undo interactions, remapped shortcuts and rich custom content) is still required before making the editor gesture default.
+Run `python3 scripts/live-agent-navigation-smoke.py` after `npm install` for credential-free, offline POSIX PTY checks in regular/fullscreen mode (entry, root return, draft restoration, resize and host-search suppression). No model prompts are submitted. Broader manual acceptance (concurrent live turns, autocomplete/paste/undo interactions, remapped shortcuts and rich custom content) is still required before making the editor gesture default.
 
 ## Agents widget
 
