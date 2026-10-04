@@ -226,7 +226,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
       ...limits,
       createDriver: createDriverFactory(
         requireContext,
-        () => limits.scopedModelFiltering,
+        () => limits.modelSelection,
         () => limits.toolFiltering,
       ),
       rootSnapshot: () => buildSessionContext(requireContext().sessionManager.getBranch()).messages,

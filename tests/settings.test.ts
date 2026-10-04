@@ -19,7 +19,9 @@ import {
   loadManagerSettings,
   saveManagerSettings,
   SUBAGENT_MODES,
+  MODEL_SELECTION_MODES,
   TOOL_FILTERING_MODES,
+  type ModelSelectionMode,
   type SubagentMode,
   type ToolFilteringMode,
   type ManagerSettings,
@@ -58,10 +60,10 @@ const settings = (
   maxLevels: number,
   maxConcurrent: number,
   maxThreads: number,
-  scopedModelFiltering = true,
+  modelSelection: ModelSelectionMode = "pick-first-scoped",
   subagentMode: SubagentMode = "opportunistic",
   toolFiltering: ToolFilteringMode = "allowed",
-) => ({ maxLevels, maxConcurrent, maxThreads, scopedModelFiltering, subagentMode, toolFiltering });
+) => ({ maxLevels, maxConcurrent, maxThreads, modelSelection, subagentMode, toolFiltering });
 
 const escape = (path: string) => new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
@@ -86,7 +88,7 @@ test("missing files return a fresh copy of defaults without diagnostics", (t) =>
       maxLevels: 3,
       maxConcurrent: 16,
       maxThreads: 64,
-      scopedModelFiltering: true,
+      modelSelection: "pick-first-scoped",
       subagentMode: "opportunistic",
       toolFiltering: "allowed",
     },
@@ -101,7 +103,7 @@ test("project layer overrides global per key; untrusted project and stray files 
   writeJson(f.globalFile, {
     maxLevels: 32,
     maxConcurrent: Number.MAX_SAFE_INTEGER,
-    scopedModelFiltering: false,
+    modelSelection: "pick-first-available",
   });
   writeJson(f.projectFile, { maxConcurrent: 9, maxThreads: 1_000_000 });
   // Files outside the two scope paths are never read.
@@ -109,7 +111,7 @@ test("project layer overrides global per key; untrusted project and stray files 
   writeJson(join(f.cwd, ".pi", "agent", "settings.json"), { maxLevels: 8 });
   writeJson(join(f.agentDir, "settings.json"), { maxLevels: 7 });
   assert.deepEqual(load(f), {
-    settings: settings(32, 9, 1_000_000, false),
+    settings: settings(32, 9, 1_000_000, "pick-first-available"),
     diagnostics: [],
   });
   assert.deepEqual(load(f, false), {
@@ -117,12 +119,12 @@ test("project layer overrides global per key; untrusted project and stray files 
       ...DEFAULTS,
       maxLevels: 32,
       maxConcurrent: Number.MAX_SAFE_INTEGER,
-      scopedModelFiltering: false,
+      modelSelection: "pick-first-available",
     },
     diagnostics: [],
   });
-  writeJson(f.projectFile, { scopedModelFiltering: true });
-  assert.equal(load(f).settings.scopedModelFiltering, true);
+  writeJson(f.projectFile, { modelSelection: "pick-first-scoped" });
+  assert.equal(load(f).settings.modelSelection, "pick-first-scoped");
 });
 
 test("invalid layer content is rejected with a diagnostic naming the file", (t) => {
@@ -139,6 +141,10 @@ test("invalid layer content is rejected with a diagnostic naming the file", (t) 
     ['{"maxLevels":33}', /maxLevels must be <= 32/],
     ['{"scopedModelFiltering":"true"}', /scopedModelFiltering must be a boolean/],
     ['{"scopedModelFiltering":0}', /scopedModelFiltering must be a boolean/],
+    ...["automatic", "Pick First (scoped)", true, null, 1, [], {}].map((modelSelection): [string, RegExp] => [
+      JSON.stringify({ modelSelection }),
+      /modelSelection must be pick-first-available, pick-first-scoped or use-current/,
+    ]),
     ['{"subagentMode":"automatic"}', /subagentMode must be off, opportunistic or orchestration/],
     ['{"subagentMode":"Off"}', /subagentMode must be off, opportunistic or orchestration/],
     ['{"subagentMode":false}', /subagentMode must be off, opportunistic or orchestration/],
@@ -168,10 +174,10 @@ test("an invalid layer is ignored atomically while other layers still apply", (t
   assert.equal(result.diagnostics.length, 1);
   assert.match(result.diagnostics[0], escape(f.globalFile));
 
-  writeJson(f.globalFile, { maxLevels: 5, scopedModelFiltering: false });
+  writeJson(f.globalFile, { maxLevels: 5, modelSelection: "pick-first-available" });
   writeJson(f.projectFile, { maxLevels: 2, scopedModelFiltering: "no" });
   result = load(f);
-  assert.deepEqual(result.settings, { ...DEFAULTS, maxLevels: 5, scopedModelFiltering: false });
+  assert.deepEqual(result.settings, { ...DEFAULTS, maxLevels: 5, modelSelection: "pick-first-available" });
   assert.equal(result.diagnostics.length, 1);
   assert.match(result.diagnostics[0], escape(f.projectFile));
 
@@ -304,7 +310,7 @@ test("wrong file types at scope paths are refused on load and save", (t) => {
 
 test("save writes canonical 0600 files, creates owned directories, and reloads with precedence", (t) => {
   const f = fixture(t);
-  const user = settings(4, 5, 6, false);
+  const user = settings(4, 5, 6, "pick-first-available");
   assert.equal(save(f, "user", user, false), f.globalFile);
   assert.equal(readFileSync(f.globalFile, "utf8"), `${JSON.stringify(user, null, 2)}\n`);
   assert.equal(lstatSync(f.globalFile).mode & 0o777, 0o600);
@@ -318,7 +324,7 @@ test("save writes canonical 0600 files, creates owned directories, and reloads w
   const reordered = {
     subagentMode: "opportunistic",
     toolFiltering: "allowed",
-    scopedModelFiltering: true,
+    modelSelection: "pick-first-scoped",
     maxThreads: 9,
     maxLevels: 3,
     maxConcurrent: 11,
@@ -352,20 +358,24 @@ test("invalid save input never creates or mutates files", (t) => {
       /maxThreads must be a positive safe integer/,
     ],
     [
-      { maxLevels: 1, maxConcurrent: 1, scopedModelFiltering: true },
+      { maxLevels: 1, maxConcurrent: 1, modelSelection: "pick-first-scoped" },
       /maxThreads must be a positive safe integer/,
     ],
-    [{ maxLevels: 1, maxConcurrent: 1, maxThreads: 1 }, /scopedModelFiltering must be a boolean/],
+    [{ maxLevels: 1, maxConcurrent: 1, maxThreads: 1 }, /modelSelection must be/],
     [
-      { ...settings(1, 1, 1), scopedModelFiltering: "false" },
-      /scopedModelFiltering must be a boolean/,
+      { ...settings(1, 1, 1), modelSelection: "invalid" },
+      /modelSelection must be/,
     ],
+    ...["automatic", "Pick First (scoped)", true, null, 1, [], {}].map((modelSelection): [unknown, RegExp] => [
+      { ...settings(1, 1, 1), modelSelection },
+      /modelSelection must be pick-first-available, pick-first-scoped or use-current/,
+    ]),
     [
       { ...settings(1, 1, 1), subagentMode: "automatic" },
       /subagentMode must be off, opportunistic or orchestration/,
     ],
     [
-      { maxLevels: 1, maxConcurrent: 1, maxThreads: 1, scopedModelFiltering: true },
+      { maxLevels: 1, maxConcurrent: 1, maxThreads: 1, modelSelection: "pick-first-scoped" },
       /subagentMode must be off, opportunistic or orchestration/,
     ],
     ...["automatic", "Allowed", false, null, 1, [], {}].map((toolFiltering): [unknown, RegExp] => [
@@ -377,7 +387,7 @@ test("invalid save input never creates or mutates files", (t) => {
         maxLevels: 1,
         maxConcurrent: 1,
         maxThreads: 1,
-        scopedModelFiltering: true,
+        modelSelection: "pick-first-scoped",
         subagentMode: "off",
       },
       /toolFiltering must be allowed, all-except-blocked or all/,
@@ -432,4 +442,56 @@ test("invalid tool filtering rejects its entire layer and preserves preceding se
   assert.equal(result.diagnostics.length, 1);
   assert.match(result.diagnostics[0], escape(f.projectFile));
   assert.match(result.diagnostics[0], /toolFiltering must be allowed, all-except-blocked or all/);
+});
+
+test("all model selection modes save and load with trusted-project precedence", (t) => {
+  const f = fixture(t);
+  for (const mode of MODEL_SELECTION_MODES) {
+    const user = { ...DEFAULTS, modelSelection: mode };
+    save(f, "user", user);
+    assert.deepEqual(load(f, false), { settings: user, diagnostics: [] });
+    const stored = JSON.parse(readFileSync(f.globalFile, "utf8"));
+    assert.equal(stored.modelSelection, mode);
+    assert.equal(Object.hasOwn(stored, "scopedModelFiltering"), false);
+    for (const projectMode of MODEL_SELECTION_MODES) {
+      writeJson(f.projectFile, { modelSelection: projectMode });
+      assert.deepEqual(load(f), { settings: { ...user, modelSelection: projectMode }, diagnostics: [] });
+      assert.equal(load(f, false).settings.modelSelection, mode);
+    }
+  }
+});
+
+test("legacy filtering migrates per layer; explicit model selection wins and saves canonically", (t) => {
+  const f = fixture(t);
+  for (const [legacy, mode] of [[true, "pick-first-scoped"], [false, "pick-first-available"]] as const) {
+    writeJson(f.globalFile, { scopedModelFiltering: legacy });
+    const migrated = load(f, false);
+    assert.deepEqual(migrated, { settings: { ...DEFAULTS, modelSelection: mode }, diagnostics: [] });
+    save(f, "user", migrated.settings);
+    const stored = JSON.parse(readFileSync(f.globalFile, "utf8"));
+    assert.equal(stored.modelSelection, mode);
+    assert.equal(Object.hasOwn(stored, "scopedModelFiltering"), false);
+    for (const explicit of MODEL_SELECTION_MODES) {
+      writeJson(f.globalFile, { scopedModelFiltering: legacy, modelSelection: explicit });
+      assert.equal(load(f, false).settings.modelSelection, explicit);
+    }
+  }
+  writeJson(f.globalFile, { modelSelection: "use-current" });
+  writeJson(f.projectFile, { scopedModelFiltering: false });
+  assert.equal(load(f).settings.modelSelection, "pick-first-available");
+  assert.equal(load(f, false).settings.modelSelection, "use-current");
+  writeJson(f.globalFile, { scopedModelFiltering: false });
+  writeJson(f.projectFile, { modelSelection: "use-current" });
+  assert.equal(load(f).settings.modelSelection, "use-current");
+});
+
+test("invalid model selection rejects its entire layer and does not fall back to legacy filtering", (t) => {
+  const f = fixture(t);
+  writeJson(f.globalFile, { modelSelection: "use-current", maxLevels: 5 });
+  writeJson(f.projectFile, { modelSelection: "invalid", scopedModelFiltering: true, maxLevels: 2 });
+  const result = load(f);
+  assert.deepEqual(result.settings, { ...DEFAULTS, modelSelection: "use-current", maxLevels: 5 });
+  assert.equal(result.diagnostics.length, 1);
+  assert.match(result.diagnostics[0], escape(f.projectFile));
+  assert.match(result.diagnostics[0], /modelSelection must be pick-first-available, pick-first-scoped or use-current/);
 });

@@ -10,6 +10,7 @@ import {
   DEFAULT_MANAGER_SETTINGS,
   saveManagerSettings,
   type ManagerSettings,
+  type ModelSelectionMode,
   type SubagentMode,
   type ToolFilteringMode,
 } from "../prefs/settings.ts";
@@ -81,11 +82,29 @@ const TOOL_FILTERING_OPTIONS = [
 const TOOL_FILTERING_HELP =
   "Allowed (except blocked): only allow-listed tools, minus blocked tools; a missing or empty allow list means no tools.\nAll except blocked: ignore the allow list; block-listed tools remain blocked.\nAll: ignore both lists.\nSave and apply to affect agents when their sessions start.";
 
-const SCOPED_MODEL_FILTERING = {
-  id: "scopedModelFiltering",
-  label: "Scoped model filtering",
-  help: "On: agents can use only models selected in /scoped-models.\nOff: agents can use any available model.\nSave and apply to activate changes.",
-} as const;
+const MODEL_SELECTION_OPTIONS = [
+  {
+    id: "pick-first-available",
+    label: "Pick First (available)",
+    value: "First available model in the agent's list",
+    help: "Pick First (available):\nPick the first model in the agent's models list available in Pi with an enabled, authenticated provider.\nSkip missing models and providers without credentials; try the next preference.",
+  },
+  {
+    id: "pick-first-scoped",
+    label: "Pick First (scoped)",
+    value: "First available preference in the session scope",
+    help: "Pick First (scoped):\nPick the first available model in the agent's models list that is also selected in the current session's /scoped-models.\nSkip unavailable models and providers without credentials.",
+  },
+  {
+    id: "use-current",
+    label: "Use Current",
+    value: "Use the main session's current model",
+    help: "Use Current:\nIgnore the agent's models list and use the main session's current model.\nKeep each agent's configured thinking level, not the main session's thinking level.",
+  },
+] as const;
+
+const MODEL_SELECTION_HELP =
+  "Pick First (available): first preference with an enabled, authenticated provider in Pi.\nPick First (scoped): same, limited to the current session's /scoped-models.\nUse Current: ignore models and use the main session's current model; keep the agent's thinking level.\nOnly the models list affects runtime picking; modelSuggestions are search hints.\nSave and apply to affect agents when their sessions start.";
 
 export async function configureAgents(
   ctx: ExtensionCommandContext,
@@ -137,10 +156,10 @@ async function configureAgentsDialog(
           value: String(draft[field.id]),
         })),
         {
-          id: SCOPED_MODEL_FILTERING.id,
-          label: SCOPED_MODEL_FILTERING.label,
-          value: draft.scopedModelFiltering ? "on" : "off",
-          help: SCOPED_MODEL_FILTERING.help,
+          id: "modelSelection",
+          label: "Model Picking",
+          value: MODEL_SELECTION_OPTIONS.find((mode) => mode.id === draft.modelSelection)!.label,
+          help: MODEL_SELECTION_HELP,
         },
         {
           id: "scope",
@@ -211,8 +230,12 @@ async function configureAgentsDialog(
         });
         if (TOOL_FILTERING_OPTIONS.some((option) => option.id === mode))
           draft.toolFiltering = mode as ToolFilteringMode;
-      } else if (action === "scopedModelFiltering") {
-        draft.scopedModelFiltering = !draft.scopedModelFiltering;
+      } else if (action === "modelSelection") {
+        const mode = await dialogMenu(ctx, "Model Picking", [...MODEL_SELECTION_OPTIONS], {
+          selectedId: draft.modelSelection,
+        });
+        if (MODEL_SELECTION_OPTIONS.some((option) => option.id === mode))
+          draft.modelSelection = mode as ModelSelectionMode;
       } else if (action === "scope") {
         if (!ctx.isProjectTrusted())
           ctx.ui.notify(

@@ -41,7 +41,7 @@ test(
           unscoped: definition("unscoped", ["integration-test/offline-alt"]),
         },
         scopedModels: ["integration-test/offline"],
-        managerSettings: { scopedModelFiltering: false },
+        managerSettings: { modelSelection: "pick-first-available" },
         onRequest: (request) => answer(request.modelId),
       },
       async ({ directory, cwd, open, tool, requests, errors }) => {
@@ -56,7 +56,7 @@ test(
         );
 
         const settingsPath = join(directory, "subagent-manager", "settings.json");
-        await writeFile(settingsPath, JSON.stringify({ scopedModelFiltering: true }));
+        await writeFile(settingsPath, JSON.stringify({ modelSelection: "pick-first-scoped" }));
         await session.prompt("/agents reload");
         assert.equal((await spawn("second")).state, "completed");
         assert.equal(
@@ -80,7 +80,7 @@ test(
         assert.match(rejected.error ?? "", /\/scoped-models/);
         assert.equal(requests.length, count, "no request for rejected preferences");
 
-        await writeFile(settingsPath, JSON.stringify({ scopedModelFiltering: false }));
+        await writeFile(settingsPath, JSON.stringify({ modelSelection: "pick-first-available" }));
         await session.prompt("/agents reload");
         assert.equal((await spawn("third", "unscoped")).state, "completed");
         assert.equal(requests.at(-1)?.modelId, "offline-alt", "disabling is live too");
