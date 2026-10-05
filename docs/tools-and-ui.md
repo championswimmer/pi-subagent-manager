@@ -65,30 +65,30 @@ The fullscreen watcher shows steer and agent messages in full, including the in-
 - **r** retries an unavailable observation without starting a turn. Starting threads are watchable; stopped/completed threads remain readable.
 - Frames are sanitized, viewport-bounded and coalesced during bursts. Exit, root replacement and shutdown release observers/timers. Streaming deltas never enter persisted thread events.
 
-#### Experimental exhausted-Down entry
+#### Left-arrow entry
 
-Set `PI_SUBAGENT_NAVIGATION_EDITOR=1` before starting Pi to open the tree when focused physical **Down** has exhausted native history/cursor movement at the end of the draft. Native editing runs first; autocomplete, jumps, paste, configured shortcuts, duplicate history entries and changed drafts do not count as exhausted boundaries. Navigating preserves the main draft/cursor and does not require the root to be idle.
+Press physical **Left (←)** at the beginning of the main draft (or in an empty input) to open the subagent browser. Elsewhere, Left retains normal cursor movement. Down is always native editing/history navigation. Autocomplete, jumps, paste and configured shortcuts take precedence. Navigating preserves the main draft/cursor and does not require the root to be idle.
 
-The editor adapter is **opt-in** pending the full real-terminal acceptance matrix. Unset the variable or use `PI_SUBAGENT_NAVIGATION_EDITOR=0` to leave the editor slot untouched; command entry still works. Pi has one custom-editor slot: installation is skipped if another factory owns it or an existing draft is nonempty, since the host cannot transfer cursor/undo/expanded-paste state. Load order can still let a later editor replace ours. Initial startup uses Pi's history hydration; replacement installations seed history once. Session-tree rebuilds keep the existing editor instance.
+Left-arrow entry is enabled by default in the TUI; `/agents tree` remains available everywhere. Pi has one custom-editor slot: installation is skipped if another factory owns it or an existing draft is nonempty, since the host cannot transfer cursor/undo/expanded-paste state. Load order can still let a later editor replace ours. Initial startup uses Pi's history hydration; replacement installations seed history once. Session-tree rebuilds keep the existing editor instance.
 
 While navigation is open, the host fullscreen search shortcut is temporarily disabled through public keybindings to avoid stacking a second host overlay. The prior binding owner is restored only if no other extension replaced it. **Known host limitation:** if an unrelated extension stacks another overlay above navigation, Pi's custom-UI completion can close the newer overlay instead. Avoid concurrent extension-owned overlays; a host identity-targeted completion API is needed to remove this limitation. No private host access or unsupported overlay-lifecycle workaround is used.
 
-Run `python3 scripts/live-agent-navigation-smoke.py` after `npm install` for credential-free, offline POSIX PTY checks in regular/fullscreen mode (entry, root return, draft restoration, resize and host-search suppression). No model prompts are submitted. Broader manual acceptance (concurrent live turns, autocomplete/paste/undo interactions, remapped shortcuts and rich custom content) is still required before making the editor gesture default.
+Run `python3 scripts/live-agent-navigation-smoke.py` after `npm install` for credential-free, offline POSIX PTY checks in regular/fullscreen mode (entry, root return, draft restoration, resize and host-search suppression). No model prompts are submitted. Broader manual acceptance covers concurrent live turns, autocomplete/paste/undo interactions, remapped shortcuts and rich custom content.
 
 ## Agents widget
 
 The widget above the input editor has two display modes, selected with **Status Widget** in `/agents` settings:
 
 - **Full** (default): the existing compact tree, at most twelve lines.
-- **Minimal**: one line such as `3 running, 2 stopped, 1 failed, 1 paused    ↑12k ↓3k`, with semantic theme colors. Starting agents count as running; completed agents are counted when present. Token totals include only currently starting/running agents, not the main conversation or settled threads. Use `/agents tree` for details.
+- **Minimal**: a summary line such as `3 running, 2 stopped, 1 failed, 1 paused    ↑12k ↓3k`, with semantic theme colors. Starting agents count as running; completed agents are counted when present. Token totals include only currently starting/running agents, not the main conversation or settled threads. Use `/agents tree` for details.
 
 In full mode:
 
 - Each row: colored type pill, path, state, task, active time, input `↑` / output `↓` tokens.
 - A second, indented line shows latest activity.
-- Active branches are shown first; overflow is counted, not listed.
+- Active branches are shown first; the most recent agents within each state are preferred when previews overflow. Overflow is counted, not listed.
 - Time freezes while paused and resumes on continue.
-- The footer always shows tree navigation and the default interrupt keys, including when agents overflow.
+- A small status strip below the previews shows the running count (including starting agents) and **Press ← to open subagent browser**, including when agents overflow. Minimal mode also shows the hint. RPC output omits the keyboard hint.
 
 ### Interrupts and stopping agents
 

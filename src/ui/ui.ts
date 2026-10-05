@@ -220,6 +220,31 @@ export function renderThreads(
 const WIDGET_ROOT = "/root";
 const MAX_WIDGET_LINES = 12;
 const AGENT_WIDGET_PLACEMENT = { placement: "aboveEditor" as const };
+const AGENT_BROWSER_HINT = "Press ← to open subagent browser";
+
+interface AgentWidgetRenderOptions {
+  /** RPC widgets cannot open a terminal browser. */
+  showBrowserHint?: boolean;
+}
+
+function agentWidgetStatus(
+  running: number,
+  omitted: number,
+  width: number,
+  theme: Pick<Theme, "fg">,
+  showBrowserHint: boolean,
+): string {
+  const details = [
+    omitted > 0 ? `+${omitted} more agents` : "",
+    showBrowserHint ? AGENT_BROWSER_HINT : "",
+  ].filter(Boolean);
+  return truncateToWidth(
+    theme.fg("accent", `${running} running`) +
+      (details.length ? theme.fg("muted", ` · ${details.join(" · ")}`) : ""),
+    width,
+    "",
+  );
+}
 
 function statePriority(state: ThreadView["state"] | undefined): number {
   if (state === "starting" || state === "running") return 0;
@@ -368,7 +393,8 @@ function takeWidgetRows(rows: StatusRow[], budget: number): StatusRow[] {
     .sort(
       (a, b) =>
         statePriority(a.row.thread!.state) -
-          statePriority(b.row.thread!.state) || a.index - b.index,
+          statePriority(b.row.thread!.state) ||
+        b.row.thread!.createdAt - a.row.thread!.createdAt || a.index - b.index,
     );
   const chosen = new Set<number>();
   let used = 0;
@@ -403,6 +429,7 @@ export function renderAgentTree(
   threads: ThreadView[],
   width: number,
   theme: AgentBadgeTheme,
+  { showBrowserHint = true }: AgentWidgetRenderOptions = {},
 ): string[] {
   const columns = Math.max(0, width);
   const rows = buildStatusTree(
@@ -422,13 +449,9 @@ export function renderAgentTree(
     theme.fg("muted", `${live} live · ${paused} paused`),
     columns,
   );
-  const rowBudget = MAX_WIDGET_LINES - 1;
-  let visible = takeWidgetRows(rows, rowBudget);
-  let omitted = agents.length - visible.filter((row) => row.thread).length;
-  if (omitted > 0) {
-    visible = takeWidgetRows(rows, rowBudget - 1);
-    omitted = agents.length - visible.filter((row) => row.thread).length;
-  }
+  // Reserve the last line for status and browser entry, even with no omissions.
+  const visible = takeWidgetRows(rows, MAX_WIDGET_LINES - 2);
+  const omitted = agents.length - visible.filter((row) => row.thread).length;
   const lines = [heading];
   for (const row of visible) {
     if (!row.thread) {
@@ -438,15 +461,7 @@ export function renderAgentTree(
     lines.push(agentLine(row, columns, theme));
     lines.push(activityLine(row, columns, theme));
   }
-  if (omitted > 0) {
-    lines.push(
-      truncateToWidth(
-        theme.fg("muted", `+${omitted} more agents`),
-        columns,
-        "",
-      ),
-    );
-  }
+  lines.push(agentWidgetStatus(live, omitted, columns, theme, showBrowserHint));
   return lines;
 }
 
@@ -455,6 +470,7 @@ export function renderAgentSummary(
   threads: ThreadView[],
   width: number,
   theme: Pick<Theme, "fg">,
+  { showBrowserHint = true }: AgentWidgetRenderOptions = {},
 ): string[] {
   const agents = new Map<string, ThreadView>();
   for (const thread of threads) {
@@ -491,7 +507,11 @@ export function renderAgentSummary(
     .map(([state, color]) => theme.fg(color, `${counts[state]} ${state}`))
     .join(theme.fg("muted", ", "));
   const right = theme.fg("muted", `↑${formatCount(input)} ↓${formatCount(output)}`);
-  return [fitLine(left, right, Math.max(0, width))];
+  const columns = Math.max(0, width);
+  const lines = [fitLine(left, right, columns)];
+  if (showBrowserHint)
+    lines.push(truncateToWidth(theme.fg("muted", AGENT_BROWSER_HINT), columns, ""));
+  return lines;
 }
 
 export function updateWidget(
@@ -509,7 +529,7 @@ export function updateWidget(
   if (ctx.mode === "rpc") {
     ctx.ui.setWidget(
       "pi-subagent",
-      render(threads, 80, ctx.ui.theme),
+      render(threads, 80, ctx.ui.theme, { showBrowserHint: false }),
       AGENT_WIDGET_PLACEMENT,
     );
     return;

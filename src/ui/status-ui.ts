@@ -423,13 +423,7 @@ export class AgentNavigationController {
             { selectedId: "No" },
           )) === "Yes";
         ui.editor = (title, prefill) => dialogEditor(scoped, title, prefill ?? "");
-        // Defer until Pi has installed/focused the overlay; suppress opening-key repeats briefly.
-        const handoffUntil = Date.now() + 100;
-        const handle = session.handleInput.bind(session);
-        session.handleInput = (data) => {
-          if (Date.now() < handoffUntil && matchesKey(data, Key.down)) return;
-          handle(data);
-        };
+        // Defer until Pi has installed/focused the overlay.
         void Promise.resolve()
           .then(async () => {
             while (generation === this.generation) {
