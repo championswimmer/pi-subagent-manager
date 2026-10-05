@@ -140,17 +140,17 @@ test("agents command defaults to settings and saved settings persist and reach t
 
 test("root turn lifecycle collapses the settled preview without losing the agent tree", async () => {
   await withCommands(async ({ command, ctx, hooks, widgets, renders }) => {
+    await hooks.get("agent_start")!({}, ctx);
     seedThreads(ctx, ["/root/done"]);
     await hooks.get("session_tree")!({}, ctx);
     const preview = () => {
+      if (widgets.at(-1) === undefined) return [];
       const component = (widgets.at(-1) as Function)({ requestRender() {} });
       const lines = component.render(100) as string[];
       component.dispose();
       return lines;
     };
     assert.match(preview().join("\n"), /Agents[\s\S]*\/root\/done/);
-    await hooks.get("agent_start")!({}, ctx);
-    assert.match(preview().join("\n"), /Agents/);
     await hooks.get("agent_end")!({}, ctx);
     assert.equal(preview().length, 1);
     assert.match(preview()[0]!, /0 running, 1 completed/);
@@ -160,11 +160,16 @@ test("root turn lifecycle collapses the settled preview without losing the agent
     assert.equal(preview().length, 1);
 
     await hooks.get("agent_start")!({}, ctx);
-    assert.match(preview().join("\n"), /Agents[\s\S]*\/root\/done/);
+    assert.deepEqual(preview(), [], "new tasks do not display retained completions");
+    await command.handler("tree", ctx);
+    assert.ok(renders.at(-1)!.join("\n").includes("/root/done"));
+    assert.deepEqual(preview(), [], "manual inspection does not revive agents");
     await hooks.get("agent_end")!({}, ctx);
-    assert.equal(preview().length, 1);
-    // A replacement session must not inherit the previous root turn's state.
+    assert.deepEqual(preview(), []);
     await hooks.get("session_tree")!({}, ctx);
+    assert.deepEqual(preview(), [], "tree rebuilds do not revive hidden agents");
+    // A replacement session must not inherit the previous root turn's UI state.
+    await hooks.get("session_start")!({ reason: "resume" }, ctx);
     assert.match(preview().join("\n"), /Agents/);
   });
 });

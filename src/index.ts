@@ -51,6 +51,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
   };
   let generation = 0;
   let rootTurnEnded = false;
+  const hiddenWidgetThreads = new Set<string>();
   let widgetCollapsed = false;
   let summaryRunning = false;
   let suspendingSummaries = false;
@@ -98,7 +99,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
           ? navigation.open(context, manager.scope("/root"), undefined, limits.nerdFontIcons) : undefined,
         canCollapse: () => manager !== undefined && context?.mode === "tui" &&
           limits.subagentMode !== "off" && !navigation.isOpen && !widgetCollapsed &&
-          limits.widgetMode === "full" && manager.list().some((thread) => thread.path !== "/root"),
+          limits.widgetMode === "full" && widgetThreads().some((thread) => thread.path !== "/root"),
         collapseWidget: () => {
           widgetCollapsed = true;
           if (context) refreshWidget(context);
@@ -138,6 +139,12 @@ export default function piSubagent(pi: ExtensionAPI): void {
     if (!manager) throw new Error("Subagent threads are not initialized; start a Pi session first");
     return manager;
   };
+  const widgetThreads = () => requireManager().list().filter((thread) => {
+    // Resuming a retained session makes it visible for this task, even after it settles again.
+    if (thread.state === "starting" || thread.state === "running")
+      hiddenWidgetThreads.delete(thread.path);
+    return !hiddenWidgetThreads.has(thread.path);
+  });
   const requireContext = () => {
     if (!context) throw new Error("No active Pi session");
     return context;
@@ -327,10 +334,18 @@ export default function piSubagent(pi: ExtensionAPI): void {
   const refreshWidget = (ctx: ExtensionContext) => {
     if (limits.subagentMode === "off") {
       if (ctx.hasUI) ctx.ui.setWidget("pi-subagent", undefined);
-    } else updateWidget(ctx, requireManager().list(), widgetCollapsed ? "minimal" : limits.widgetMode,
+    } else updateWidget(ctx, widgetThreads(), widgetCollapsed ? "minimal" : limits.widgetMode,
       limits.nerdFontIcons, rootTurnEnded);
   };
   pi.on("agent_start", async (_event, ctx) => {
+    // A new task must not resurrect the previous task's settled agents. Automatic
+    // final-recap turns still belong to that task and keep its results visible.
+    if (manager && !summaryRunning) {
+      for (const thread of manager.list()) {
+        if (thread.state !== "starting" && thread.state !== "running")
+          hiddenWidgetThreads.add(thread.path);
+      }
+    }
     rootTurnEnded = false;
     if (manager) refreshWidget(ctx);
   });
@@ -368,7 +383,10 @@ export default function piSubagent(pi: ExtensionAPI): void {
     inheritedTools.reset();
     context = ctx;
     rootTurnEnded = false;
-    if (installEditor) widgetCollapsed = false;
+    if (installEditor) {
+      widgetCollapsed = false;
+      hiddenWidgetThreads.clear();
+    }
     store = new ConfigStore({
       cwd: ctx.cwd,
       agentDir: getAgentDir(),

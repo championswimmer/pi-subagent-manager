@@ -92,7 +92,7 @@ The widget above the input editor has two display modes, selected with **Status 
 - **Full** (default): the existing compact tree, at most twelve lines.
 - **Minimal**: a summary line such as `3 running, 2 stopped, 1 failed, 1 paused    ↑12k ↓3k`, with semantic theme colors. Starting agents count as running; completed agents are counted when present. Token totals include only currently starting/running agents, not the main conversation or settled threads. Use `/agents tree` for details.
 
-Once the main turn has ended and no subagents are starting or running, either mode collapses to a single status-count line without the browser hint. The full tree remains available via `/agents tree`; **Left** at the start of the draft opens it only while subagents are starting or running. A new main turn or active subagent restores the configured display mode unless Right has collapsed the widget for this session.
+Once the main turn has ended and no subagents are starting or running, either mode collapses to a single status-count line without the browser hint. The full tree remains available via `/agents tree`; **Left** at the start of the draft opens it only while subagents are starting or running. A fresh main prompt hides agents that were already settled (completed, failed, stopped or paused); they remain in `/agents tree` and reappear in the widget only when resumed. Agents still starting or running remain visible, and new agents appear normally. Automatic Final Recap turns keep the current task's results visible. Visible agents use the configured display mode unless Right has collapsed the widget for this session.
 
 In full mode:
 
