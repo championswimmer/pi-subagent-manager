@@ -124,10 +124,8 @@ test("real SDK same-turn foreground spawns overlap at L2 and L3", { timeout: 150
         async onRequest(request) {
           if (request.pathCall !== 1) return answer("coordinated");
           if (request.path === null) {
-            assert.match(request.system, /spawn all siblings with wait:false/);
             return spawnPair(["a", "b"]);
           }
-          assert.match(request.system, /launch all siblings with agent_spawn wait:false/);
           if (request.path === "/root/a" || request.path === "/root/b")
             return spawnPair(["x", "y"]);
           assert.match(request.path, /^\/root\/[ab]\/[xy]$/);

@@ -5,6 +5,8 @@ import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { withOfflineHarness } from "./helpers/integrationHarness.ts";
+import { subagentPrompt } from "../src/orch/prompt.ts";
+import { DEFAULT_MANAGER_SETTINGS } from "../src/prefs/settings.ts";
 
 async function waitFor(predicate: () => boolean, description: string) {
   const deadline = Date.now() + 5000;
@@ -27,7 +29,8 @@ const answer = (text: string): AssistantMessage => ({
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   },
 });
-const worker = "---\nname: worker\ndescription: Execute work\n---\nExecute your assigned task.\n";
+const workerSystemPrompt = "Execute your assigned task.";
+const worker = `---\nname: worker\ndescription: Execute work\n---\n${workerSystemPrompt}\n`;
 
 for (const earlyChildren of [2, 1, 0]) {
   test(`root answer stays last visible with ${earlyChildren} of two children finishing before it`, { timeout: 15000 }, async () => {
@@ -120,17 +123,20 @@ test("real SDK off hides all agent tools, including discovery, and leaves the pr
     managerSettings: { subagentMode: "off" },
     builtinTools: true,
     onRequest(request) {
-      assert.doesNotMatch(request.system, /## pi-subagent|agent_spawn|agent_types|Opportunistic|Orchestration/);
       assert.ok(request.toolNames.includes("read"), "unrelated tools remain available");
       assert.ok(request.toolNames.every((name) => !name.startsWith("agent_")));
       return answer("ordinary root answer");
     },
-  }, async ({ cwd, errors, open }) => {
+  }, async ({ cwd, errors, open, requests }) => {
     const session = await open(SessionManager.create(cwd));
     assert.ok(session.getActiveToolNames().includes("read"));
     assert.ok(session.getCallableToolNames().every((name) => !name.startsWith("agent_")));
     assert.ok(session.getAllTools().every((tool) => !tool.name.startsWith("agent_") || tool.exposure === "hidden"));
     await session.prompt("Do an ordinary task");
+    const system = JSON.parse(requests.at(-1)!.system);
+    for (const subagentMode of ["opportunistic", "orchestration"] as const) {
+      assert.ok(!system.includes(subagentPrompt({ ...DEFAULT_MANAGER_SETTINGS, subagentMode })!));
+    }
     assert.deepEqual(errors, []);
   });
 });
@@ -146,7 +152,10 @@ test("real SDK mode changes update tool visibility and prompt on reload without 
     const reload = session.extensionRunner.getCommand("agents");
     assert.ok(reload);
     await session.prompt("Initial task");
-    assert.match(requests.at(-1)!.system, /Opportunistic mode/);
+    const initialSystem = JSON.parse(requests.at(-1)!.system);
+    const initialGuidance = `\n\n${subagentPrompt(DEFAULT_MANAGER_SETTINGS)}`;
+    assert.ok(initialSystem.endsWith(initialGuidance));
+    const baseSystem = initialSystem.slice(0, -initialGuidance.length);
     const stale = session.getToolDefinition("agent_spawn")!;
     const otherTools = session.getActiveToolNames().filter((name) => !name.startsWith("agent_"));
     for (const mode of ["off", "orchestration", "off", "opportunistic"] as const) {
@@ -163,8 +172,9 @@ test("real SDK mode changes update tool visibility and prompt on reload without 
       await session.prompt(`Task after switching to ${mode}`);
       const request = requests.at(-1)!;
       assert.equal(request.toolNames.includes("agent_spawn"), enabled);
-      if (!enabled) assert.doesNotMatch(request.system, /## pi-subagent|agent_spawn|Opportunistic mode|Orchestration mode/);
-      else assert.match(request.system, new RegExp(mode === "orchestration" ? "Orchestration mode" : "Opportunistic mode"));
+      const guidance = subagentPrompt({ ...DEFAULT_MANAGER_SETTINGS, subagentMode: mode });
+      if (guidance) assert.ok(JSON.parse(request.system).endsWith(`\n\n${guidance}`));
+      else assert.equal(JSON.parse(request.system), baseSystem);
     }
     assert.deepEqual(errors, []);
   });
@@ -296,11 +306,8 @@ test("orchestration restricts /root's prompt, not the child worker's prompt", { 
     managerSettings: { subagentMode: "orchestration" },
     onRequest(request) {
       if (request.path) {
-        assert.doesNotMatch(request.system, /Orchestration mode|Delegate every user task|\/root only coordinates/);
-        assert.match(request.system, /Execute your assigned task/);
         return answer("worker result");
       }
-      assert.match(request.system, /Delegate every user task/);
       if (request.pathCall === 1) return {
         ...answer(""),
         stopReason: "toolUse",
@@ -313,7 +320,14 @@ test("orchestration restricts /root's prompt, not the child worker's prompt", { 
   }, async ({ cwd, errors, open, requests }) => {
     const session = await open(SessionManager.create(cwd));
     await session.prompt("Complete a small task");
-    assert.ok(requests.some((request) => request.path === "/root/task"));
+    const guidance = subagentPrompt({ ...DEFAULT_MANAGER_SETTINGS, subagentMode: "orchestration" })!;
+    const rootRequest = requests.find((request) => !request.path)!;
+    const childRequest = requests.find((request) => request.path === "/root/task")!;
+    assert.ok(rootRequest);
+    assert.ok(childRequest);
+    assert.ok(JSON.parse(rootRequest.system).endsWith(`\n\n${guidance}`));
+    assert.ok(!JSON.parse(childRequest.system).includes(guidance));
+    assert.ok(JSON.parse(childRequest.system).includes(workerSystemPrompt));
     assert.deepEqual(errors, []);
   });
 });

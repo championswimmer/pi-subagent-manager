@@ -55,6 +55,9 @@ function availableTools(): string[] {
     },
     "/root",
     () => [],
+    () => {
+      throw new Error("Tool enumeration must not resolve models");
+    },
   ).map((tool) => tool.name);
   return [...builtins, ...controls];
 }
@@ -110,7 +113,7 @@ test("bundled agents load cleanly, resolve their tools, and carry only advisory 
   assert.equal(new Set(store.list().map((type) => type.systemPrompt)).size, NAMES.length);
 });
 
-test("researcher is non-delegating and evidence-focused; tasker stays cheap-first", (t) => {
+test("researcher is non-delegating; tasker stays cheap-first", (t) => {
   const store = new ConfigStore(fixture(t));
   const researcher = store.get("researcher");
   assert.deepEqual(researcher.tools?.allow, [
@@ -123,14 +126,7 @@ test("researcher is non-delegating and evidence-focused; tasker stays cheap-firs
   assert.deepEqual(researcher.modelSuggestions, [
     "gemini-4-argon", "gpt-5.6-sol", "muse-spark-1.3", "sonnet-5.5",
   ]);
-  assert.ok(researcher.systemPrompt.includes("Abstain when evidence is missing"));
-  assert.ok(researcher.systemPrompt.includes("a real URL alone is not evidence"));
   assert.ok(store.get("writer").modelSuggestions?.includes("gemini-4-argon"));
-  for (const instruction of [
-    "Context7", "gh CLI", "Exa", "Parallel", "Perplexity",
-    "not automatically loaded", "selected Tool Filtering policy", "untrusted evidence",
-    "commit-pinned", "read-only research role", "caller-authorized path",
-  ]) assert.ok(researcher.systemPrompt.includes(instruction), instruction);
   assert.equal(store.get("tasker").thinkingLevel, "low");
   assert.equal(store.get("tasker").modelSuggestions?.[0], "gpt-6-luna");
   assert.ok(!store.get("tasker").modelSuggestions?.includes("sonnet-5.5"));

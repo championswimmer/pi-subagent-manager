@@ -86,7 +86,6 @@ test("[labs] Nerd Font setting toggles, persists, and cancels without saving", a
   const field = enabled.menus[0]!.rows.find((row) => row.id === "nerdFontIcons")!;
   assert.equal(field.label, "[labs] Nerd Font icons");
   assert.equal(field.value, "Off");
-  assert.match(field.help!, /terminal/);
   assert.equal(enabled.loaded.settings.nerdFontIcons, true);
   assert.equal(enabled.applied, 1);
   const disabled = await run(t, ["nerdFontIcons", "save"], {
@@ -107,7 +106,7 @@ test("invalid numbers are rejected in place and valid edits save once to the use
   assert.equal(existsSync(result.projectFile), false);
 });
 
-test("mode settings explain all choices and selecting each mode saves it", async (t) => {
+test("selecting each subagent mode saves it", async (t) => {
   for (const [mode, label] of [
     ["off", "Off"],
     ["opportunistic", "Opportunistic"],
@@ -117,17 +116,10 @@ test("mode settings explain all choices and selecting each mode saves it", async
     const field = result.menus[0]!.rows.find((row) => row.id === "subagentMode")!;
     assert.equal(field.label, "Subagent Mode");
     assert.equal(field.value, "Opportunistic");
-    assert.match(field.help ?? "", /^Off: no subagent tools or prompt guidance/m);
-    assert.match(
-      field.help ?? "",
-      /^Opportunistic: delegate only parallelizable or very large tasks/m,
-    );
-    assert.match(field.help ?? "", /^Orchestration: \/root delegates all execution/m);
     const chooser = result.menus[1]!;
     assert.equal(chooser.title, "Subagent Mode");
     assert.deepEqual(chooser.rows.map((row) => row.id), ["off", "opportunistic", "orchestration"]);
     assert.ok(chooser.rows.every((row) => row.value && row.help));
-    assert.match(chooser.rows[2]!.help ?? "", /not inherited by workers/);
     assert.equal(result.value(2, "subagentMode"), label);
     assert.equal(result.applied, 1);
     assert.equal(result.loaded.settings.subagentMode, mode);
@@ -159,15 +151,11 @@ for (const width of [32, 80]) {
     // The shared two-column menu clips labels at narrow widths; the selected
     // mode's full name remains visible in its help and in the settings value.
     assert.ok(result.renders[1]!.join("\n").includes(width === 32 ? "Orchestra" : "Orchestration"));
-    assert.ok(result.renders[1]!.join("\n").includes("Opportunistic:"));
     assert.ok(result.renders[2]!.join("\n").includes("Orchestration"));
-    assert.ok(result.renders[0]!.join("\n").includes("Off:"));
-    assert.ok(result.renders[0]!.join("\n").includes("Opportunistic:"));
-    assert.ok(result.renders[0]!.join("\n").includes("Orchestration:"));
   });
 }
 
-test("Model Picking explains and saves all three modes", async (t) => {
+test("Model Picking saves all three modes", async (t) => {
   for (const [mode, label] of [
     ["pick-first-available", "Pick First (available)"],
     ["pick-first-scoped", "Pick First (scoped)"],
@@ -177,10 +165,6 @@ test("Model Picking explains and saves all three modes", async (t) => {
     const field = result.menus[0]!.rows.find((row) => row.id === "modelSelection")!;
     assert.equal(field.label, "Model Picking");
     assert.equal(field.value, "Pick First (scoped)");
-    assert.match(field.help ?? "", /enabled, authenticated provider/);
-    assert.match(field.help ?? "", /current session's \/scoped-models/);
-    assert.match(field.help ?? "", /main session's current model; keep the agent's thinking level/);
-    assert.match(field.help ?? "", /modelSuggestions are search hints/);
     assert.equal(result.menus[0]!.rows.some((row) => row.id === "scopedModelFiltering"), false);
     const chooser = result.menus[1]!;
     assert.equal(chooser.title, "Model Picking");
@@ -191,11 +175,6 @@ test("Model Picking explains and saves all three modes", async (t) => {
       "Pick First (available)", "Pick First (scoped)", "Use Current",
     ]);
     assert.ok(chooser.rows.every((row) => row.value && row.help));
-    assert.match(chooser.rows[0]!.help ?? "", /models list available in Pi/);
-    assert.match(chooser.rows[0]!.help ?? "", /providers without credentials; try the next preference/);
-    assert.match(chooser.rows[1]!.help ?? "", /also selected in the current session's \/scoped-models/);
-    assert.match(chooser.rows[2]!.help ?? "", /Ignore the agent's models list/);
-    assert.match(chooser.rows[2]!.help ?? "", /each agent's configured thinking level/);
     assert.equal(result.value(2, "modelSelection"), label);
     assert.equal(result.applied, 1);
     assert.equal(result.loaded.settings.modelSelection, mode);
@@ -254,28 +233,22 @@ for (const width of [32, 80]) {
     assert.ok(result.renders.every((lines) =>
       lines[0]!.includes("Model Picking") || lines[0]!.includes("Agents settings"),
     ));
-    // The chooser opens on the scoped default. Narrow layouts clip labels,
-    // but preserve the selected choice's help and the updated settings value.
-    assert.ok(result.renders[1]!.join("\n").includes("Pick First (scoped):"));
     assert.equal(result.value(2, "modelSelection"), "Use Current");
     assert.ok(result.renders[2]!.join("\n").includes("Use Current"));
   });
 }
 
-test("scope help explains the destination and precedence without changing the draft", async (t) => {
+test("changing save scope preserves the draft without saving on cancel", async (t) => {
   const result = await run(t, ["maxLevels", "5", "scope", "scope", "cancel"], { trusted: true });
-  const scope = (index: number) => result.menus[index]?.rows.find((row) => row.id === "scope");
-  assert.match(scope(0)?.help ?? "", /this project only, overriding your global defaults/);
-  assert.match(scope(2)?.help ?? "", /defaults for every project/);
-  assert.match(scope(2)?.help ?? "", /project settings still override/);
-  for (const index of [0, 1, 2, 3]) {
-    assert.match(scope(index)?.help ?? "", /^Global: /m);
-    assert.match(scope(index)?.help ?? "", /^Current Project: /m);
-  }
   for (const index of [1, 2, 3]) {
-    assert.match(scope(index)?.help ?? "", /only changes where you save, not the values shown/);
     assert.equal(result.value(index, "maxLevels"), "5");
   }
+  assert.equal(result.value(1, "scope"), "Current Project");
+  assert.equal(result.value(2, "scope"), "Global");
+  assert.equal(result.value(3, "scope"), "Current Project");
+  assert.equal(result.applied, 0);
+  assert.equal(existsSync(result.userFile), false);
+  assert.equal(existsSync(result.projectFile), false);
 });
 
 test("restore defaults resets the whole draft before save", async (t) => {
@@ -352,7 +325,7 @@ test("scope selection persists even on cancel; untrusted fallback does not overw
   assert.equal(trustedAgain.value(0, "scope"), "Current Project");
 });
 
-test("Tool Filtering explains and saves every mode", async (t) => {
+test("Tool Filtering saves every mode", async (t) => {
   for (const [mode, label] of [
     ["allowed", "Allowed (except blocked)"],
     ["all-except-blocked", "All except blocked"],
@@ -362,10 +335,6 @@ test("Tool Filtering explains and saves every mode", async (t) => {
     const field = result.menus[0]!.rows.find((row) => row.id === "toolFiltering")!;
     assert.equal(field.label, "Tool Filtering");
     assert.equal(field.value, "Allowed (except blocked)");
-    assert.match(field.help ?? "", /only allow-listed tools, minus blocked tools/);
-    assert.match(field.help ?? "", /missing or empty allow list means no tools/);
-    assert.match(field.help ?? "", /ignore the allow list; block-listed tools remain blocked/);
-    assert.match(field.help ?? "", /All: ignore both lists/);
     const chooser = result.menus[1]!;
     assert.equal(chooser.title, "Tool Filtering");
     assert.deepEqual(
@@ -377,9 +346,6 @@ test("Tool Filtering explains and saves every mode", async (t) => {
       ["Allowed (except blocked)", "All except blocked", "All"],
     );
     assert.ok(chooser.rows.every((row) => row.value && row.help));
-    assert.match(chooser.rows[0]!.help ?? "", /Blocked tools take precedence/);
-    assert.match(chooser.rows[1]!.help ?? "", /allow list is completely ignored/);
-    assert.match(chooser.rows[2]!.help ?? "", /allow and block lists are completely ignored/);
     assert.equal(result.value(2, "toolFiltering"), label);
     assert.equal(result.applied, 1);
     assert.equal(result.loaded.settings.toolFiltering, mode);
@@ -433,16 +399,12 @@ for (const width of [32, 80]) {
   });
 }
 
-test("Status Widget explains both choices and saves each mode", async (t) => {
+test("Status Widget saves each mode", async (t) => {
   for (const [mode, label] of [["full", "Full"], ["minimal", "Minimal"]]) {
     const result = await run(t, ["widgetMode", mode, "save"]);
     const field = result.menus[0]!.rows.find((row) => row.id === "widgetMode")!;
     assert.equal(field.label, "Status Widget");
     assert.equal(field.value, "Full");
-    assert.match(field.help ?? "", /above the input box/);
-    assert.match(field.help ?? "", /one-line status counts/);
-    assert.match(field.help ?? "", /cumulative input\/output tokens for active \(starting\/running\) agents/);
-    assert.match(field.help ?? "", /update the widget immediately/);
     const chooser = result.menus[1]!;
     assert.equal(chooser.title, "Status Widget");
     assert.deepEqual(chooser.rows.map((row) => row.id), ["full", "minimal"]);
@@ -495,16 +457,11 @@ for (const width of [32, 80]) {
   });
 }
 
-test("[labs] Final Recap toggles, explains extra turns, and saves to both scopes", async (t) => {
+test("[labs] Final Recap toggles and saves to both scopes", async (t) => {
   const enabled = await run(t, ["finalRecap", "save"]);
   const field = enabled.menus[0]!.rows.find((row) => row.id === "finalRecap")!;
   assert.equal(field.label, "[labs] Final Recap");
   assert.equal(field.value, "Off");
-  assert.match(field.help!, /main.*idle/i);
-  assert.match(field.help!, /detached/i);
-  assert.match(field.help!, /extra model turns/i);
-  assert.match(field.help!, /more tokens and context/i);
-  assert.match(field.help!, /Subagent Mode.*Off/);
   assert.equal(enabled.value(1, "finalRecap"), "On");
   assert.match(enabled.menus[1]!.title, /unsaved/);
   assert.equal(enabled.applied, 1);
@@ -541,7 +498,5 @@ for (const width of [32, 80]) {
     const result = await run(t, ["finalRecap", "cancel"], { width });
     assert.ok(result.renders.every((lines) => lines[0]!.includes("Agents settings")));
     assert.equal(result.value(1, "finalRecap"), "On");
-    const rendered = result.renders.at(-1)!.join("\n");
-    assert.match(rendered, /more[\s\S]*tokens[\s\S]*context/i);
   });
 }

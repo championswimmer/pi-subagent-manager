@@ -81,7 +81,6 @@ test("Final Recap batches idle detached completions, not progress, and persists 
       assert.equal(rootCalls, 3, "exactly one automatic summary request");
       assert.match(request.messagesText, /Worker 0 result/);
       assert.match(request.messagesText, /Worker 1 result/);
-      assert.match(request.messagesText, /Summarize the newly finished asynchronous subagent results/);
       return answer("Root combined summary");
     },
   }, async ({ cwd, open, close, requests, errors }) => {

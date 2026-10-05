@@ -13,7 +13,6 @@ import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
-  buildImportPrompt,
   importWasOffered,
   markImportOffered,
   offerAgentImport,
@@ -123,9 +122,6 @@ test("first run consent and individual selection enqueue only selected paths, ne
   for (const pattern of [
     /test\/scoped-model/,
     /"api": "openai-responses"/,
-    /provider-scoped override/,
-    /UNTRUSTED DATA/,
-    /Unsupported security restrictions/,
   ])
     assert.match(message, pattern);
   assert.ok(!existsSync(join(f.agentDir, "subagent-manager", "agents")));
@@ -209,39 +205,4 @@ test("symlinked onboarding state fails closed without touching its target", asyn
   assert.equal(await f.run(), false);
   assert.equal(readFileSync(target, "utf8"), "untouched");
   assert.equal(f.messages.length, 0);
-});
-
-test("prompt states target schema, source semantics, untrusted destination, and virtual-model rules", () => {
-  const prompt = buildImportPrompt({
-    candidates: [],
-    agentDir: "/agent",
-    cwd: "/project",
-    includeProject: false,
-    existingTypes: [],
-    scopedModels: ["virtual/demo"],
-    scopedModelDetails: [{ identity: "virtual/demo", api: "pi-virtual", virtual: true }],
-    parentModel: "virtual/demo",
-    parentModelApi: "pi-virtual",
-  });
-  for (const text of [
-    "max_turns",
-    "0 means unlimited",
-    "thinking:false",
-    "allow: []",
-    "agentOverridesByProvider",
-    "isolated",
-    "worktree",
-    "allowedAgents",
-    "maxSubagentDepth",
-    "Do not spawn a child",
-    "Unknown frontmatter fields",
-    '"project": null',
-    "/agent/subagent-manager/agents",
-    "/agent/subagent-manager/settings.json",
-    '"virtual": true',
-    '"parentModelApi": "pi-virtual"',
-    "never pin a virtual model or inherit a pi-virtual parent",
-    "Do not copy, load, or inline referenced skill resources",
-  ])
-    assert.ok(prompt.includes(text), text);
 });

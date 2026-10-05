@@ -12,7 +12,8 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { CombinedAutocompleteProvider, rgbColor } from "@earendil-works/pi-tui";
 import { AGENT_COLORS } from "../src/prefs/config.ts";
 import piSubagent from "../src/index.ts";
-import { loadManagerSettings } from "../src/prefs/settings.ts";
+import { DEFAULT_MANAGER_SETTINGS, loadManagerSettings } from "../src/prefs/settings.ts";
+import { subagentPrompt } from "../src/orch/prompt.ts";
 import { IMPORT_REQUEST_PREFIX, importWasOffered, markImportOffered } from "../src/prefs/agent-import.ts";
 import { createDialogDriver } from "./helpers/dialogDriver.ts";
 
@@ -134,23 +135,23 @@ test("agents command defaults to settings and saved settings persist and reach t
       { prompt: "User request", systemPrompt: "Main" },
       ctx,
     );
-    assert.match(result.systemPrompt, /Maximum depth: 5 levels including L1/);
+    assert.equal(result.systemPrompt, `Main\n\n${subagentPrompt(settings)}`);
   });
 });
 
 test("root turn lifecycle collapses the settled preview without losing the agent tree", async () => {
   await withCommands(async ({ command, ctx, hooks, widgets, renders }) => {
+    await hooks.get("agent_start")!({}, ctx);
     seedThreads(ctx, ["/root/done"]);
     await hooks.get("session_tree")!({}, ctx);
     const preview = () => {
+      if (widgets.at(-1) === undefined) return [];
       const component = (widgets.at(-1) as Function)({ requestRender() {} });
       const lines = component.render(100) as string[];
       component.dispose();
       return lines;
     };
     assert.match(preview().join("\n"), /Agents[\s\S]*\/root\/done/);
-    await hooks.get("agent_start")!({}, ctx);
-    assert.match(preview().join("\n"), /Agents/);
     await hooks.get("agent_end")!({}, ctx);
     assert.equal(preview().length, 1);
     assert.match(preview()[0]!, /0 running, 1 completed/);
@@ -160,11 +161,16 @@ test("root turn lifecycle collapses the settled preview without losing the agent
     assert.equal(preview().length, 1);
 
     await hooks.get("agent_start")!({}, ctx);
-    assert.match(preview().join("\n"), /Agents[\s\S]*\/root\/done/);
+    assert.deepEqual(preview(), [], "new tasks do not display retained completions");
+    await command.handler("tree", ctx);
+    assert.ok(renders.at(-1)!.join("\n").includes("/root/done"));
+    assert.deepEqual(preview(), [], "manual inspection does not revive agents");
     await hooks.get("agent_end")!({}, ctx);
-    assert.equal(preview().length, 1);
-    // A replacement session must not inherit the previous root turn's state.
+    assert.deepEqual(preview(), []);
     await hooks.get("session_tree")!({}, ctx);
+    assert.deepEqual(preview(), [], "tree rebuilds do not revive hidden agents");
+    // A replacement session must not inherit the previous root turn's UI state.
+    await hooks.get("session_start")!({ reason: "resume" }, ctx);
     assert.match(preview().join("\n"), /Agents/);
   });
 });
@@ -199,7 +205,7 @@ test("saving mode changes updates tools and prompt immediately", async () => {
         assert.equal(tool.exposure, mode === "off" ? "hidden" : "direct");
       const event = await hooks.get("before_agent_start")!({ systemPrompt: "Main", prompt: "Work" }, ctx);
       if (mode === "off") assert.equal(event, undefined);
-      else assert.match(event.systemPrompt, new RegExp(mode === "orchestration" ? "Delegate every user task" : "do ordinary tasks yourself"));
+      else assert.equal(event.systemPrompt, `Main\n\n${subagentPrompt({ ...DEFAULT_MANAGER_SETTINGS, subagentMode: mode })}`);
       assert.equal(loadManagerSettings({ cwd, agentDir: cwd, includeProject: false }).settings.subagentMode, mode);
     }
   });

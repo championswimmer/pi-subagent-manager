@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { clampThinkingLevel } from "@earendil-works/pi-ai/compat";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, realpath } from "node:fs/promises";
 import {
@@ -24,9 +25,16 @@ import { selectTools } from "../prefs/config.ts";
 import { TranscriptChannel } from "./transcript.ts";
 import type { InheritedToolSource } from "./inherited-tools.ts";
 import type { ModelSelectionMode, ToolFilteringMode } from "../prefs/settings.ts";
-import { modelIdentity, getModelPreferences, selectPreferredModel } from "../prefs/models.ts";
+import {
+  modelIdentity,
+  getModelPreferences,
+  selectPreferredModel,
+  ModelPreferenceError,
+} from "../prefs/models.ts";
 import {
   THINKING_LEVELS,
+  type AgentType,
+  type ResolvedAgentSettings,
   type DriverFactory,
   type DriverOptions,
   type ThinkingLevel,
@@ -141,10 +149,99 @@ export function createDriverFactory(
   getModelSelection: () => ModelSelectionMode = () => "pick-first-scoped",
   getToolFiltering: () => ToolFilteringMode = () => "allowed",
   getInheritedTools: () => InheritedToolSource = () => ({ tools: [], activeNames: [] }),
-): DriverFactory {
+): DriverFactory & {
+  resolveAgentSettings(type: AgentType, parentPath: string): ResolvedAgentSettings;
+} {
   // Keep resolved settings even after disposal: descendants inherit settings, not the caller's history.
   const resolved = new Map<string, { provider: string; id: string; thinking: ThinkingLevel }>();
-  return async (options) => {
+  const normalizeScopedModels = (
+    scopedModels: ExtensionContext["scopedModels"] | null | undefined,
+  ): readonly ScopedModel[] => scopedModels ?? [];
+  const availableModelCandidates = () =>
+    getRootContext()
+      .modelRegistry.getAvailable()
+      .map((model) => ({ model }));
+  const availableScopedModels = (scopedModels: readonly ScopedModel[]) => {
+    const available = new Set(availableModelCandidates().map(({ model }) => modelIdentity(model)));
+    return scopedModels.filter(({ model }) => available.has(modelIdentity(model)));
+  };
+  const selectTypeModelPreference = (
+    type: AgentType,
+    candidates: readonly { model: { provider: string; id: string } }[],
+    filtering: boolean,
+  ) => {
+    try {
+      return selectPreferredModel(type, candidates, filtering);
+    } catch (error) {
+      if (
+        filtering &&
+        candidates.length === 0 &&
+        error instanceof Error &&
+        !error.message.includes("[]")
+      ) {
+        const message = `${error.message} Current /scoped-models scope: [].`;
+        throw error instanceof ModelPreferenceError
+          ? new ModelPreferenceError(message, error.scopedModelFiltering)
+          : new Error(message);
+      }
+      throw error;
+    }
+  };
+  // Discovery and new/restored drivers share model selection and thinking inheritance.
+  const resolveInitialSettings = (
+    type: AgentType,
+    parentPath?: string | null,
+    restored?: ReturnType<SessionManager["buildSessionContext"]>,
+  ) => {
+    const ctx = getRootContext();
+    const parent = parentPath
+      ? resolved.get(`${ctx.sessionManager.getSessionId()}:${parentPath}`)
+      : undefined;
+    const mode = getModelSelection();
+    const preferences = mode === "use-current" ? undefined : getModelPreferences(type);
+    let provider = parent?.provider ?? ctx.model?.provider;
+    let id = parent?.id ?? ctx.model?.id;
+    if (mode === "use-current") {
+      provider = ctx.model?.provider;
+      id = ctx.model?.id;
+    } else if (preferences !== undefined) {
+      const filtering = mode === "pick-first-scoped";
+      const candidates = filtering
+        ? availableScopedModels(normalizeScopedModels(ctx.scopedModels))
+        : availableModelCandidates();
+      ({ provider, id } = parseModelIdentity(
+        selectTypeModelPreference(type, candidates, filtering)!,
+      ));
+    } else if (restored?.model) {
+      provider = restored.model.provider;
+      id = restored.model.modelId;
+    }
+    const savedThinking =
+      restored && THINKING_LEVELS.includes(restored.thinkingLevel as ThinkingLevel)
+        ? (restored.thinkingLevel as ThinkingLevel)
+        : undefined;
+    const thinkingLevel =
+      savedThinking ?? type.thinkingLevel ?? parent?.thinking ?? ctx.thinkingLevel ?? "off";
+    return { provider, id, thinkingLevel };
+  };
+  const resolveAgentSettings = (type: AgentType, parentPath: string): ResolvedAgentSettings => {
+    const ctx = getRootContext();
+    const { provider, id, thinkingLevel } = resolveInitialSettings(type, parentPath);
+    const model =
+      normalizeScopedModels(ctx.scopedModels).find(
+        ({ model }) => model.provider === provider && model.id === id,
+      )?.model ?? (provider && id ? ctx.modelRegistry.find(provider, id) : undefined);
+    if (!model)
+      throw new Error(
+        `Subagent model ${provider ?? "(unset)"}/${id ?? "(unset)"} is unavailable; select a physical model in the root or agent type`,
+      );
+    if (model.api === "pi-virtual")
+      throw new Error(
+        `Virtual model ${provider}/${id} cannot be reproduced through the public registry API. Set this agent type's model to a physical provider/model-id.`,
+      );
+    return { model: modelIdentity(model), thinkingLevel: clampThinkingLevel(model, thinkingLevel) };
+  };
+  const createDriver: DriverFactory = async (options) => {
     options.signal.throwIfAborted();
     const ctx = getRootContext();
     // Tool policy is a startup snapshot; retained live sessions keep their selected set.
@@ -213,59 +310,22 @@ export function createDriverFactory(
         }
       }
     }
-    const parent = options.parentPath ? resolved.get(`${rootId}:${options.parentPath}`) : undefined;
     const restored = options.sessionFile ? sessionManager.buildSessionContext() : undefined;
     const modelSelection = getModelSelection();
     // Use Current ignores definition preferences, including for restored/nested sessions.
     const modelPreferences =
       modelSelection === "use-current" ? undefined : getModelPreferences(options.type);
-    const normalizeScopedModels = (
-      scopedModels: ExtensionContext["scopedModels"] | null | undefined,
-    ): readonly ScopedModel[] => scopedModels ?? [];
     const filteringEnabled = () => getModelSelection() === "pick-first-scoped";
     const selectModelPreference = (
       candidates: readonly { model: { provider: string; id: string } }[],
       filtering = filteringEnabled(),
-    ) => {
-      try {
-        return selectPreferredModel(options.type, candidates, filtering);
-      } catch (error) {
-        if (
-          filtering &&
-          candidates.length === 0 &&
-          error instanceof Error &&
-          !error.message.includes("[]")
-        )
-          throw new Error(`${error.message} Current /scoped-models scope: [].`);
-        throw error;
-      }
-    };
-    const availableModelCandidates = () =>
-      getRootContext()
-        .modelRegistry.getAvailable()
-        .map((model) => ({ model }));
-    const availableScopedModels = (scopedModels: readonly ScopedModel[]) => {
-      const available = new Set(
-        availableModelCandidates().map(({ model }) => modelIdentity(model)),
-      );
-      return scopedModels.filter(({ model }) => available.has(modelIdentity(model)));
-    };
+    ) => selectTypeModelPreference(options.type, candidates, filtering);
     const initialScopedModels = normalizeScopedModels(ctx.scopedModels);
-    let provider = parent?.provider ?? ctx.model?.provider;
-    let id = parent?.id ?? ctx.model?.id;
-    if (modelSelection === "use-current") {
-      provider = ctx.model?.provider;
-      id = ctx.model?.id;
-    } else if (modelPreferences !== undefined) {
-      const filtering = modelSelection === "pick-first-scoped";
-      const candidates = filtering
-        ? availableScopedModels(initialScopedModels)
-        : availableModelCandidates();
-      ({ provider, id } = parseModelIdentity(selectModelPreference(candidates, filtering)!));
-    } else if (restored?.model) {
-      provider = restored.model.provider;
-      id = restored.model.modelId;
-    }
+    const { provider, id, thinkingLevel } = resolveInitialSettings(
+      options.type,
+      options.parentPath,
+      restored,
+    );
     options.signal.throwIfAborted();
     const runtime = await ModelRuntime.create({
       authPath: path.join(agentDir, "auth.json"),
@@ -316,12 +376,6 @@ export function createDriverFactory(
       return runtimeModel;
     };
     const model = await resolveRuntimeModel(provider, id, initialScopedModels);
-    const savedThinking =
-      restored && THINKING_LEVELS.includes(restored.thinkingLevel as ThinkingLevel)
-        ? (restored.thinkingLevel as ThinkingLevel)
-        : undefined;
-    const thinkingLevel =
-      savedThinking ?? options.type.thinkingLevel ?? parent?.thinking ?? ctx.thinkingLevel ?? "off";
     const inherited = getInheritedTools();
     const localNames = new Set([...BUILTINS, ...options.tools.map((tool) => tool.name)]);
     const externalTools = inherited.tools.filter((tool) => !localNames.has(tool.name));
@@ -725,4 +779,5 @@ export function createDriverFactory(
       },
     };
   };
+  return Object.assign(createDriver, { resolveAgentSettings });
 }

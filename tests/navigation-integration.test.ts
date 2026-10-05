@@ -232,6 +232,56 @@ test("Left opens only for live subagents, while the tree command always remains 
   }, { threads });
 });
 
+for (const widgetMode of ["full", "minimal"] as const) {
+  test(`${widgetMode} widget keeps old settled agents hidden until explicitly resumed`, async () => {
+    const threads = [
+      thread("completed", "/root/old"),
+      thread("failed", "/root/failed"),
+      thread("stopped", "/root/stopped"),
+      thread("paused", "/root/paused"),
+      thread("running", "/root/live"),
+      thread("starting", "/root/starting"),
+    ];
+    await fixture(async ({ widget, hooks, ctx, command }) => {
+      await hooks.get("agent_start")!({}, ctx);
+      assert.doesNotMatch(widget().join("\n"), /completed|failed|stopped|1 paused|\/root\/old/);
+      if (widgetMode === "full") {
+        assert.match(widget().join("\n"), /\/root\/live/);
+        assert.match(widget().join("\n"), /\/root\/starting/);
+      } else assert.match(widget()[0]!, /2 running/);
+
+      // Repeated model turns and settings refreshes must not expose historical agents.
+      await command.handler("reload", ctx);
+      await hooks.get("agent_end")!({}, ctx);
+      await hooks.get("agent_start")!({}, ctx);
+      assert.doesNotMatch(widget().join("\n"), /completed|failed|stopped|1 paused|\/root\/old/);
+
+      // Simulate the starting-state change emitted when agent_steer resumes /root/old.
+      threads[0]!.state = "starting";
+      await command.handler("reload", ctx);
+      if (widgetMode === "full") assert.match(widget().join("\n"), /\/root\/old/);
+      else assert.match(widget()[0]!, /3 running/);
+      threads[0]!.state = "completed";
+      threads[4]!.state = "completed";
+      threads[5]!.state = "completed";
+      await hooks.get("agent_end")!({}, ctx);
+      assert.match(widget()[0]!, /0 running, 3 completed/);
+      assert.doesNotMatch(widget()[0]!, /failed|stopped|paused/);
+
+      // All settled: even the minimal status line disappears on the next task.
+      await hooks.get("agent_start")!({}, ctx);
+      assert.deepEqual(widget(), []);
+      await command.handler("tree", ctx);
+      assert.deepEqual(widget(), []);
+      threads.push(thread("running", "/root/new"));
+      await command.handler("reload", ctx);
+      if (widgetMode === "full") assert.match(widget().join("\n"), /\/root\/new/);
+      else assert.match(widget()[0]!, /1 running/);
+      assert.doesNotMatch(widget().join("\n"), /completed|failed|stopped|1 paused|\/root\/old/);
+    }, { threads, widgetMode });
+  });
+}
+
 test("Right collapses for this session only, preserves Left entry and never saves preferences", async () => {
   const threads = [thread("running"), thread("paused", "/root/paused")];
   await fixture(async ({ editor, widget, hooks, ctx, driver }) => {
@@ -255,6 +305,7 @@ test("Right collapses for this session only, preserves Left entry and never save
     await hooks.get("agent_start")!({}, ctx);
     await hooks.get("session_tree")!({}, ctx);
     assert.equal(widget().length, 1, "refresh, new turns and tree rebuilds preserve collapse");
+    assert.doesNotMatch(widget()[0]!, /paused/, "old paused agents stay hidden");
 
     threads[0]!.state = "completed";
     await hooks.get("agent_end")!({}, ctx);
