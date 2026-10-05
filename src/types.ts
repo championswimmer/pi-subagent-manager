@@ -3,6 +3,10 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+export interface ResolvedAgentSettings {
+  model: string;
+  thinkingLevel: ThinkingLevel;
+}
 export interface AgentType {
   name: string;
   description: string;

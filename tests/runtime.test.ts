@@ -102,14 +102,14 @@ test("isolated real SDK driver without credentials", async (t) => {
       toolNames: string[];
       apiKey?: string;
     }[] = [];
-    const registerProvider = (provider: string, ids: string[]) =>
+    const registerProvider = (provider: string, ids: string[], reasoning = true) =>
       registry.registerProvider(provider, {
         api: "openai-completions",
         baseUrl: "http://invalid.local",
         models: ids.map((id) => ({
           id,
           name: `${provider}/${id}`,
-          reasoning: true,
+          reasoning,
           input: ["text"],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow: 100000,
@@ -262,6 +262,95 @@ test("isolated real SDK driver without credentials", async (t) => {
       setScopedModels("runtime-test/model/with/slashes", "runtime-other/backup");
       setRootModel("runtime-test/model/with/slashes");
     };
+
+    await t.test(
+      "discovery resolves the same model and effective thinking as new drivers",
+      async () => {
+        const assertSpawnMatches = async (type: DriverOptions["type"], parentPath = "/root") => {
+          const preview = factory.resolveAgentSettings(type, parentPath);
+          const threadPath = `${parentPath}/discovery-${drivers.length}`;
+          const driver = await create(options({ path: threadPath, type, parentPath }));
+          await driver.prompt("Verify discovery settings");
+          const actual = requests.at(-1)!.model;
+          const saved = SessionManager.open(
+            driver.sessionFile!,
+            ctx.sessionManager.getSessionDir(),
+            cwd,
+          ).buildSessionContext();
+          assert.deepEqual(preview, {
+            model: `${actual.provider}/${actual.id}`,
+            thinkingLevel: saved.thinkingLevel,
+          });
+          return threadPath;
+        };
+        const plain = { name: "discovery", description: "Discover", systemPrompt: "Work" };
+        try {
+          assert.deepEqual(
+            factory.resolveAgentSettings({ ...plain, modelSuggestions: ["Missing"] }, "/root"),
+            {
+              model: "runtime-test/model/with/slashes",
+              thinkingLevel: "low",
+            },
+          );
+          await assertSpawnMatches(plain);
+          const preferred = {
+            ...plain,
+            models: ["runtime-other/backup", "runtime-test/fallback"],
+            thinkingLevel: "high" as const,
+          };
+          setScopedModels("runtime-test/fallback");
+          assert.equal(
+            factory.resolveAgentSettings(preferred, "/root").model,
+            "runtime-test/fallback",
+          );
+          await assertSpawnMatches(preferred);
+          setScopedModels("runtime-other/backup");
+          assert.equal(
+            factory.resolveAgentSettings(preferred, "/root").model,
+            "runtime-other/backup",
+          );
+          await assertSpawnMatches(preferred);
+          setScopedModels();
+          assert.throws(() => factory.resolveAgentSettings(preferred, "/root"), /scoped-models/);
+          modelSelection = "pick-first-available";
+          const parent = await assertSpawnMatches(preferred);
+          assert.deepEqual(factory.resolveAgentSettings(plain, parent), {
+            model: "runtime-other/backup",
+            thinkingLevel: "high",
+          });
+          await assertSpawnMatches(plain, parent);
+          modelSelection = "use-current";
+          assert.equal(
+            factory.resolveAgentSettings(preferred, parent).model,
+            "runtime-test/model/with/slashes",
+          );
+          await assertSpawnMatches(preferred, parent);
+          modelSelection = "pick-first-available";
+          assert.equal(
+            factory.resolveAgentSettings({ ...plain, model: "runtime-other/backup" }, "/root")
+              .model,
+            "runtime-other/backup",
+          );
+          assert.throws(
+            () => factory.resolveAgentSettings({ ...plain, model: "missing/model" }, "/root"),
+            /none are available/,
+          );
+          registerProvider("runtime-plain", ["non-reasoning"], false);
+          await runtime.setRuntimeApiKey("runtime-plain", "runtime-test-key");
+          const nonReasoning = {
+            ...plain,
+            model: "runtime-plain/non-reasoning",
+            thinkingLevel: "high" as const,
+          };
+          assert.equal(factory.resolveAgentSettings(nonReasoning, "/root").thinkingLevel, "off");
+          await assertSpawnMatches(nonReasoning);
+          ctx.model = undefined;
+          assert.throws(() => factory.resolveAgentSettings(plain, "/root"), /unavailable/);
+        } finally {
+          restoreScope();
+        }
+      },
+    );
 
     await t.test(
       "read-only observation attaches mid-assistant stream and retains inherited metadata",

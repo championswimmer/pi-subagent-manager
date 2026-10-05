@@ -4,7 +4,7 @@
 
 | Tool           | Purpose                                              |
 | -------------- | ---------------------------------------------------- |
-| `agent_types`  | List types and what they're for                      |
+| `agent_types`  | Names, descriptions, resolved models and thinking    |
 | `agent_spawn`  | Start `{path, type, task, wait?}`. Waits by default. |
 | `agent_wait`   | Wait for settlement; optional `timeoutMs`            |
 | `agent_steer`  | Send `{path, message}`; queues input or resumes      |
@@ -13,6 +13,11 @@
 | `agent_pause`  | Child: pause without an answer                       |
 | `agent_stop`   | Cancel a descendant and its subtree                  |
 | `agent_output` | Page through long final answers by character offset  |
+
+`agent_types` returns one compact line per type, with the model and effective thinking level
+that a new child of the caller would use under current settings. Unresolvable types are
+marked unavailable with a reason. Preference lists, advisory model suggestions and UI metadata
+are omitted. Spawning under another parent path can change inherited settings.
 
 ```json
 {

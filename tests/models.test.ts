@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { getModelPreferences, selectPreferredModel } from "../src/prefs/models.ts";
+import {
+  getModelPreferences,
+  selectPreferredModel,
+  ModelPreferenceError,
+} from "../src/prefs/models.ts";
 import { agentTools } from "../src/orch/tools.ts";
 import type { AgentType } from "../src/types.ts";
 
@@ -64,7 +68,7 @@ test("selectPreferredModel errors name the agent, preferences and available mode
   );
 });
 
-test("agent_types normalizes model pins, keeps suggestions separate, and does not mutate definitions", async () => {
+test("agent_types exposes only names, descriptions and resolved settings in compact text", async () => {
   const definition = (fields: Partial<AgentType>): AgentType => ({
     name: "worker",
     description: "Worker",
@@ -72,7 +76,13 @@ test("agent_types normalizes model pins, keeps suggestions separate, and does no
     ...fields,
   });
   const types = [
-    definition({ models: ["p/second", "p/first"], modelSuggestions: ["Sonnet"] }),
+    definition({
+      models: ["p/second", "p/first"],
+      modelSuggestions: ["Sonnet"],
+      color: "accent",
+      icon: "*",
+      thinkingLevel: "high",
+    }),
     definition({ name: "legacy", model: "p/legacy" }),
     definition({ name: "suggested", modelSuggestions: ["Claude Opus"] }),
   ];
@@ -82,19 +92,70 @@ test("agent_types normalizes model pins, keeps suggestions separate, and does no
     },
     "/root",
     () => types,
+    (type) => ({
+      model: type.models?.[0] ?? type.model ?? "p/inherited",
+      thinkingLevel: type.thinkingLevel ?? "low",
+    }),
   ).find((entry) => entry.name === "agent_types")!;
+  const before = structuredClone(types);
   const output = await tool.execute("list-types", {}, undefined, undefined, {} as never);
-  const entries = output.details as { models?: string[]; modelSuggestions?: string[] }[];
-  assert.deepEqual(
-    entries.map(({ models, modelSuggestions }) => ({ models, modelSuggestions })),
-    [
-      { models: ["p/second", "p/first"], modelSuggestions: ["Sonnet"] },
-      { models: ["p/legacy"], modelSuggestions: undefined },
-      { models: undefined, modelSuggestions: ["Claude Opus"] },
-    ],
+  assert.deepEqual(output.details, [
+    { name: "worker", description: "Worker", model: "p/second", thinkingLevel: "high" },
+    { name: "legacy", description: "Worker", model: "p/legacy", thinkingLevel: "low" },
+    { name: "suggested", description: "Worker", model: "p/inherited", thinkingLevel: "low" },
+  ]);
+  assert.deepEqual(output.content, [
+    {
+      type: "text",
+      text: [
+        "worker (p/second, thinking: high): Worker",
+        "legacy (p/legacy, thinking: low): Worker",
+        "suggested (p/inherited, thinking: low): Worker",
+      ].join("\n"),
+    },
+  ]);
+  assert.deepEqual(types, before);
+  types[0]!.description = "Updated description";
+  const updated = await tool.execute("reload", {}, undefined, undefined, {} as never);
+  assert.match((updated.content[0] as { text: string }).text, /Updated description/);
+});
+
+test("agent_types keeps unavailable entries without failing the whole listing and handles no types", async () => {
+  let types: AgentType[] = [
+    { name: "broken", description: "Needs configuration", systemPrompt: "Work" },
+    { name: "ready", description: "Can work", systemPrompt: "Work" },
+  ];
+  const tool = agentTools(
+    () => {
+      throw new Error("Discovery must not initialize threads");
+    },
+    "/root",
+    () => types,
+    (type) => {
+      if (type.name === "broken")
+        throw new ModelPreferenceError(
+          "Verbose diagnostics with preference lists and all available models",
+          true,
+        );
+      return { model: "p/ready", thinkingLevel: "off" };
+    },
+  ).find((entry) => entry.name === "agent_types")!;
+  const output = await tool.execute("list", {}, undefined, undefined, {} as never);
+  assert.deepEqual(output.details, [
+    {
+      name: "broken",
+      description: "Needs configuration",
+      error:
+        "No preferred model is available in /scoped-models; update the scope or this type's models.",
+    },
+    { name: "ready", description: "Can work", model: "p/ready", thinkingLevel: "off" },
+  ]);
+  assert.match(
+    (output.content[0] as { text: string }).text,
+    /broken \(unavailable\)[\s\S]*ready \(p\/ready, thinking: off\)/,
   );
-  assert.ok(entries.every((entry) => !("model" in entry)));
-  entries[2]?.modelSuggestions?.push("mutated");
-  assert.deepEqual(types[2]?.modelSuggestions, ["Claude Opus"]);
-  assert.equal(types[1]?.model, "p/legacy");
+  types = [];
+  const empty = await tool.execute("empty", {}, undefined, undefined, {} as never);
+  assert.deepEqual(empty.details, []);
+  assert.deepEqual(empty.content, [{ type: "text", text: "No agent types available." }]);
 });
