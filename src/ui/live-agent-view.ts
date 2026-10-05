@@ -13,7 +13,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { ThreadService, TranscriptSnapshot } from "../types.ts";
 import { dialogText, type DialogHost } from "./dialog.ts";
-import { agentTypeLabel } from "./ui.ts";
+import { AGENT_PROGRESS_INTERVAL, agentProgressIcon, agentTypeLabel } from "./ui.ts";
 
 /** Transcript detail level cycled by the t key: full → preview → compact. */
 export type TranscriptDetail = "full" | "preview" | "compact";
@@ -64,6 +64,7 @@ export class LiveAgentView {
   private attachment = 0;
   private unsubscribe: (() => void) | undefined;
   private renderTimer: ReturnType<typeof setTimeout> | undefined;
+  private progressTimer: ReturnType<typeof setInterval> | undefined;
   private cache = new WeakMap<object, { width: number; detail: TranscriptDetail; lines: string[] }>();
   private scroll: ScrollView;
   private content: string[] = [];
@@ -165,6 +166,7 @@ export class LiveAgentView {
     } catch (error) {
       if (this.disposed || attachment !== this.attachment) return;
       this.error = error instanceof Error ? error.message : String(error);
+      this.syncProgress();
       this.scheduleRender();
     }
   }
@@ -179,7 +181,21 @@ export class LiveAgentView {
       return;
     this.snapshot = snapshot;
     this.error = snapshot.error;
+    this.syncProgress();
     this.scheduleRender();
+  }
+
+  private syncProgress(): void {
+    const state = this.snapshot?.thread?.state;
+    const active = this.nerdFontIcons && !this.disposed && !this.error &&
+      (state === "starting" || state === "running");
+    if (!active) {
+      if (this.progressTimer !== undefined) clearInterval(this.progressTimer);
+      this.progressTimer = undefined;
+    } else if (this.progressTimer === undefined) {
+      this.progressTimer = setInterval(() => this.scheduleRender(), AGENT_PROGRESS_INTERVAL);
+      this.progressTimer.unref?.();
+    }
   }
 
   private scheduleRender(): void {
@@ -204,6 +220,7 @@ export class LiveAgentView {
     this.unsubscribe = undefined;
     if (this.renderTimer) clearTimeout(this.renderTimer);
     this.renderTimer = undefined;
+    this.syncProgress();
   }
 
   handleInput(data: string): void {
@@ -460,7 +477,7 @@ export class LiveAgentView {
     const header = this.theme.fg(
       "accent",
       dialogText(
-        `${this.path} · ${agentTypeLabel(thread?.type ?? "agent", thread?.icon, this.nerdFontIcons)} · ${thread?.state ?? "attaching"} — Watching — main continues`,
+        `${this.path} · ${agentTypeLabel(thread?.type ?? "agent", thread ? agentProgressIcon(thread, this.nerdFontIcons) : undefined, this.nerdFontIcons)} · ${thread?.state ?? "attaching"} — Watching — main continues`,
       ),
     );
     const body: string[] = [];

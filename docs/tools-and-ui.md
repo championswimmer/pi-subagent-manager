@@ -68,11 +68,13 @@ The fullscreen watcher renders steer and agent messages (including thinking) as 
 - **Ctrl+R** (or **r** with transcript controls focused) retries an unavailable observation without starting a turn. Starting threads are watchable; stopped/completed threads remain readable.
 - Frames are sanitized, viewport-bounded and coalesced during bursts. Exit, root replacement and shutdown release observers/timers. Streaming deltas never enter persisted thread events.
 
-#### Left-arrow entry
+#### Arrow-key shortcuts
 
 While any subagent is **starting or running**, press physical **Left (←)** at the beginning of the main draft (or in an empty input) to open the subagent browser. With no active subagents, or elsewhere in the draft, Left retains normal cursor movement. `/agents tree` remains available regardless of agent activity. Down is always native editing/history navigation. Autocomplete, jumps, paste and configured shortcuts take precedence. Navigating preserves the main draft/cursor and does not require the root to be idle.
 
-Left-arrow entry is enabled by default in the TUI; `/agents tree` remains available everywhere. Pi has one custom-editor slot: installation is skipped if another factory owns it or an existing draft is nonempty, since the host cannot transfer cursor/undo/expanded-paste state. Load order can still let a later editor replace ours. Initial startup uses Pi's history hydration; replacement installations seed history once. Session-tree rebuilds keep the existing editor instance.
+Press physical **Right (→)** at the end of the main draft (or in an empty input) to collapse the full widget to a single status line for this session. This does not save settings or change the configured **Status Widget** mode. Refreshes, agent resumes, new main turns and session-tree navigation keep it collapsed; starting, switching or reloading a session restores the configured mode. Left still opens the full dialog while subagents are active, without expanding the widget. Elsewhere in the draft Right retains normal cursor movement; autocomplete, jumps, paste and shortcuts take precedence.
+
+Arrow-key shortcuts are enabled by default in the TUI; `/agents tree` remains available everywhere. Pi has one custom-editor slot: installation is skipped if another factory owns it or an existing draft is nonempty, since the host cannot transfer cursor/undo/expanded-paste state. Load order can still let a later editor replace ours. Initial startup uses Pi's history hydration; replacement installations seed history once. Session-tree rebuilds keep the existing editor instance.
 
 While navigation is open, the host fullscreen search shortcut is temporarily disabled through public keybindings to avoid stacking a second host overlay. The prior binding owner is restored only if no other extension replaced it. **Known host limitation:** if an unrelated extension stacks another overlay above navigation, Pi's custom-UI completion can close the newer overlay instead. Avoid concurrent extension-owned overlays; a host identity-targeted completion API is needed to remove this limitation. No private host access or unsupported overlay-lifecycle workaround is used.
 
@@ -85,7 +87,7 @@ The widget above the input editor has two display modes, selected with **Status 
 - **Full** (default): the existing compact tree, at most twelve lines.
 - **Minimal**: a summary line such as `3 running, 2 stopped, 1 failed, 1 paused    ↑12k ↓3k`, with semantic theme colors. Starting agents count as running; completed agents are counted when present. Token totals include only currently starting/running agents, not the main conversation or settled threads. Use `/agents tree` for details.
 
-Once the main turn has ended and no subagents are starting or running, either mode collapses to a single status-count line without the browser hint. The full tree remains available via `/agents tree`; **Left** at the start of the draft opens it only while subagents are starting or running. A new main turn or active subagent restores the configured display mode.
+Once the main turn has ended and no subagents are starting or running, either mode collapses to a single status-count line without the browser hint. The full tree remains available via `/agents tree`; **Left** at the start of the draft opens it only while subagents are starting or running. A new main turn or active subagent restores the configured display mode unless Right has collapsed the widget for this session.
 
 In full mode:
 
@@ -93,7 +95,8 @@ In full mode:
 - Activity and lifecycle messages (such as `Completed; session retained`) are omitted to save space; detailed status remains available in `/agents tree` and `agent_status`.
 - Active branches are shown first; the most recent agents within each state are preferred when previews overflow. Overflow is counted, not listed.
 - Time freezes while paused and resumes on continue.
-- A small status strip below the previews shows the running count (including starting agents) and **Press ← to open subagent browser**, including when agents overflow. Full and minimal modes show the hint only while subagents are starting or running. RPC output omits the keyboard hint.
+- A small status strip below the previews shows the running count (including starting agents) and **Press ← to open subagent browser**, including when agents overflow. The full footer also shows **→ collapse**. Minimal mode keeps **← browser** inline so it stays one line. Browser hints appear only while subagents are starting or running; RPC output omits keyboard hints.
+- With **[labs] Nerd Font icons** enabled, starting/running agents show a cycling progress glyph in the widget and fullscreen tree/live-view headers. Settled agents retain static role icons. The minimal summary also animates its running count. Animation timers stop on settlement or disposal; RPC output stays static.
 
 ### Interrupts and stopping agents
 

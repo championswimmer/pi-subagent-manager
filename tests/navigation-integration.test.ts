@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { mock } from "node:test";
@@ -8,6 +8,7 @@ import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-ag
 import { setKeybindings, TuiMainScreen, type Terminal } from "@earendil-works/pi-tui";
 import piSubagent from "../src/index.ts";
 import { markImportOffered } from "../src/prefs/agent-import.ts";
+import { DEFAULT_MANAGER_SETTINGS, loadManagerSettings, saveManagerSettings } from "../src/prefs/settings.ts";
 import { ThreadManager } from "../src/orch/manager.ts";
 import type { ThreadView } from "../src/types.ts";
 import { AgentNavigationEditor } from "../src/ui/agent-navigation-editor.ts";
@@ -41,6 +42,7 @@ async function fixture(
   run: (state: {
     editor(): AgentNavigationEditor | undefined;
     installations(): number;
+    widget(): string[];
     command: any;
     ctx: ExtensionContext;
     hooks: Map<string, Function>;
@@ -50,12 +52,17 @@ async function fixture(
     mode?: "tui" | "rpc"; hasUI?: boolean; draft?: string;
     competingEditor?: boolean; reason?: "startup" | "resume";
     threads?: ThreadView[];
+    widgetMode?: "full" | "minimal";
   } = {},
 ) {
   const cwd = mkdtempSync(join(tmpdir(), "pi-agent-navigation-"));
   const oldDir = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = cwd;
   markImportOffered(cwd);
+  if (options.widgetMode) saveManagerSettings({
+    cwd, agentDir: cwd, includeProject: false, scope: "user",
+    settings: { ...DEFAULT_MANAGER_SETTINGS, widgetMode: options.widgetMode },
+  });
   const list = mock.method(ThreadManager.prototype, "list", () => options.threads ?? []);
   const hooks = new Map<string, Function>();
   const sessionManager = SessionManager.inMemory(cwd);
@@ -63,7 +70,11 @@ async function fixture(
   const keys = new KeybindingsManager();
   setKeybindings(keys);
   const host = new TuiMainScreen(new FakeTerminal());
-  const theme = { fg: (_color: string, text: string) => text };
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    style: (text: string) => text,
+    colors: { accent: { kind: "rgb", r: 94, g: 172, b: 211 } },
+  };
   const driver = createDialogDriver({ theme: theme as any, rows: 24 });
   driver.onChild = (component) => {
     assert.ok(component instanceof StatusDialog);
@@ -72,6 +83,7 @@ async function fixture(
   };
   let editor: AgentNavigationEditor | undefined;
   let installations = 0;
+  let widget: { render(width: number): string[]; dispose?(): void } | undefined;
   let command: any;
   const pi = {
     on: (event: string, handler: Function) => hooks.set(event, handler),
@@ -86,7 +98,12 @@ async function fixture(
     mode: options.mode ?? "tui",
     isProjectTrusted: () => false,
     ui: {
-      setWidget() {}, notify() {}, custom: driver.custom,
+      theme,
+      setWidget(_key: string, factory: Function | undefined) {
+        widget?.dispose?.();
+        widget = factory?.(host, theme);
+      },
+      notify() {}, custom: driver.custom,
       getEditorText: () => options.draft ?? "",
       getEditorComponent: () => options.competingEditor ? (() => ({})) : undefined,
       setEditorComponent(factory: Function) {
@@ -109,9 +126,11 @@ async function fixture(
   try {
     piSubagent(pi);
     await hooks.get("session_start")!({ reason: options.reason ?? "resume" }, ctx);
-    await run({ editor: () => editor, installations: () => installations, command, ctx, hooks, driver });
+    await run({ editor: () => editor, installations: () => installations,
+      widget: () => widget?.render(120) ?? [], command, ctx, hooks, driver });
   } finally {
     await hooks.get("session_shutdown")?.({}, ctx);
+    widget?.dispose?.();
     list.mock.restore();
     host.stop();
     if (oldDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -211,6 +230,75 @@ test("Left opens only for live subagents, while the tree command always remains 
     await settle();
     assert.equal(driver.stats.outerOpens, opens);
   }, { threads });
+});
+
+test("Right collapses for this session only, preserves Left entry and never saves preferences", async () => {
+  const threads = [thread("running"), thread("paused", "/root/paused")];
+  await fixture(async ({ editor, widget, hooks, ctx, driver }) => {
+    const settingsFile = join(ctx.cwd, "subagent-manager", "settings.json");
+    const configuredMode = () => loadManagerSettings({
+      cwd: ctx.cwd, agentDir: ctx.cwd, includeProject: false,
+    }).settings.widgetMode;
+    const main = editor()!;
+    assert.ok(widget().length > 1);
+    main.handleInput("\x1b[C");
+    await settle();
+    assert.equal(widget().length, 1);
+    assert.match(widget()[0]!, /1 running.*1 paused/);
+    assert.equal(configuredMode(), "full");
+    assert.equal(existsSync(settingsFile), false);
+
+    main.handleInput("\x1b[D");
+    await settle();
+    assert.equal(driver.stats.outerOpens, 1);
+    assert.equal(widget().length, 1, "opening and closing the dialog keeps the override");
+    await hooks.get("agent_start")!({}, ctx);
+    await hooks.get("session_tree")!({}, ctx);
+    assert.equal(widget().length, 1, "refresh, new turns and tree rebuilds preserve collapse");
+
+    threads[0]!.state = "completed";
+    await hooks.get("agent_end")!({}, ctx);
+    assert.equal(widget().length, 1);
+    threads[0]!.state = "running";
+    await hooks.get("agent_start")!({}, ctx);
+    assert.equal(widget().length, 1, "resuming an agent keeps the override");
+
+    await hooks.get("session_start")!({ reason: "resume" }, ctx);
+    assert.ok(widget().length > 1, "replacing the session restores the configured full mode");
+    assert.equal(configuredMode(), "full");
+    assert.equal(existsSync(settingsFile), false);
+  }, { threads });
+});
+
+test("Right can collapse settled previews, but is harmless with no agents or minimal settings", async () => {
+  await fixture(async ({ editor, widget }) => {
+    assert.ok(widget().length > 1);
+    editor()!.handleInput("\x1b[C");
+    await settle();
+    assert.equal(widget().length, 1);
+  }, { threads: [thread("completed")] });
+  for (const options of [
+    { threads: [] },
+    { threads: [thread("running")], widgetMode: "minimal" as const },
+  ]) {
+    await fixture(async ({ editor, widget, hooks, ctx }) => {
+      const before = widget();
+      editor()!.handleInput("\x1b[C");
+      await settle();
+      assert.deepEqual(widget(), before);
+      await hooks.get("session_start")!({ reason: "resume" }, ctx);
+      assert.deepEqual(widget(), before);
+    }, options);
+  }
+});
+
+test("root shutdown cancels queued collapse", async () => {
+  await fixture(async ({ editor, widget, hooks, ctx }) => {
+    editor()!.handleInput("\x1b[C");
+    await hooks.get("session_shutdown")!({}, ctx);
+    await settle();
+    assert.deepEqual(widget(), []);
+  }, { threads: [thread("running")] });
 });
 
 test("non-TUI contexts and existing editors leave the custom-editor slot untouched", async () => {

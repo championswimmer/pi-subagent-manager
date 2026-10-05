@@ -10,6 +10,7 @@ import { AgentNavigationEditor, type AgentNavigationEditorOptions } from "../src
 const UP = "\x1b[A";
 const DOWN = "\x1b[B";
 const LEFT = "\x1b[D";
+const RIGHT = "\x1b[C";
 const HOME = "\x1b[H";
 const END = "\x1b[F";
 const theme: EditorTheme = {
@@ -30,12 +31,15 @@ function setup(bindings: KeybindingsConfig = {}, options: Partial<AgentNavigatio
   const keys = new KeybindingsManager(bindings);
   setKeybindings(keys);
   let opens = 0;
+  let collapses = 0;
   const editor = new AgentNavigationEditor(new TuiMainScreen(new FakeTerminal()), theme, keys, {
-    openTree: () => { opens++; }, canOpen: () => true, generation: () => 1, ...options,
+    openTree: () => { opens++; }, canOpen: () => true,
+    collapseWidget: () => { collapses++; }, canCollapse: () => true,
+    generation: () => 1, ...options,
   });
   editor.focused = true;
   editor.render(80);
-  return { editor, keys, opens: () => opens };
+  return { editor, keys, opens: () => opens, collapses: () => collapses };
 }
 
 test("Left opens at the beginning of the draft after stock dispatch, preserving text and cursor", async () => {
@@ -245,6 +249,93 @@ test("global keybinding conflicts disable navigation", async () => {
   editor.handleInput(LEFT);
   await settle();
   assert.equal(opens(), 0);
+});
+
+test("Right collapses at the end of the draft after stock dispatch without changing it", async () => {
+  for (const draft of ["", "unfinished", "one\ntwo", "one\n", "🦀 café", "a".repeat(150)]) {
+    const { editor, collapses, opens } = setup();
+    editor.setText(draft);
+    const cursor = editor.getCursor();
+    editor.handleInput(RIGHT);
+    editor.handleInput(RIGHT);
+    assert.equal(collapses(), 0);
+    await settle();
+    assert.equal(collapses(), 1, draft);
+    assert.equal(opens(), 0);
+    assert.equal(editor.getText(), draft);
+    assert.deepEqual(editor.getCursor(), cursor);
+  }
+});
+
+test("Right moves normally and never collapses just by reaching the end", async () => {
+  const { editor, collapses } = setup();
+  editor.setText("one\ntwo");
+  editor.handleInput(LEFT);
+  editor.handleInput(RIGHT);
+  await settle();
+  assert.equal(collapses(), 0);
+  editor.handleInput(UP);
+  editor.handleInput(END);
+  editor.handleInput(RIGHT);
+  await settle();
+  assert.equal(collapses(), 0, "end of an earlier line is not end of the draft");
+});
+
+test("Right respects shortcuts, remappings, focus, paste, jumps and autocomplete", async () => {
+  const cases: Array<[KeybindingsConfig, (editor: AgentNavigationEditor) => void]> = [
+    [{ "tui.editor.cursorRight": "ctrl+f" }, () => {}],
+    [{ "tui.editor.deleteCharForward": "right" }, () => {}],
+    [{}, (editor) => { editor.focused = false; }],
+    [{}, (editor) => { editor.onExtensionShortcut = (data) => data === RIGHT; }],
+    [{}, (editor) => { editor.handleInput("\x1b[200~paste"); }],
+    [{ "tui.editor.jumpForward": "ctrl+]" }, (editor) => { editor.handleInput("\x1d"); }],
+    [{}, (editor) => { editor.isShowingAutocomplete = () => true; }],
+  ];
+  for (const [index, [bindings, prepare]] of cases.entries()) {
+    const { editor, collapses } = setup(bindings);
+    prepare(editor);
+    editor.handleInput(RIGHT);
+    await settle();
+    assert.equal(collapses(), 0, `case ${index}`);
+  }
+  const { editor, collapses } = setup();
+  setKeybindings(new KeybindingsManager({ "tui.editor.deleteCharForward": "right" }));
+  editor.handleInput(RIGHT);
+  await settle();
+  assert.equal(collapses(), 0);
+});
+
+test("queued collapse is cancelled by new input, disposal, root replacement or changed eligibility", async () => {
+  for (const cancel of ["input", "dispose", "root", "mode", "focus"] as const) {
+    let generation = 1;
+    let allowed = true;
+    const { editor, collapses } = setup({}, {
+      generation: () => generation, canCollapse: () => allowed,
+    });
+    editor.handleInput(RIGHT);
+    if (cancel === "input") editor.handleInput("x");
+    if (cancel === "dispose") editor.dispose();
+    if (cancel === "root") generation++;
+    if (cancel === "mode") allowed = false;
+    if (cancel === "focus") editor.focused = false;
+    await settle();
+    assert.equal(collapses(), 0, cancel);
+  }
+});
+
+test("collapse failures report errors and release ownership", async () => {
+  let errors = 0;
+  let attempts = 0;
+  const { editor } = setup({}, {
+    collapseWidget: async () => { attempts++; throw new Error("failed collapse"); },
+    onError: () => { errors++; },
+  });
+  editor.handleInput(RIGHT);
+  await settle();
+  editor.handleInput(RIGHT);
+  await settle();
+  assert.equal(attempts, 2);
+  assert.equal(errors, 2);
 });
 
 test("host callbacks survive stock dispatch, replacement, and errors", () => {
