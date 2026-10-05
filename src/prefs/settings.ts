@@ -33,6 +33,7 @@ export interface ManagerSettings {
   subagentMode: SubagentMode;
   toolFiltering: ToolFilteringMode;
   widgetMode: WidgetMode;
+  nerdFontIcons: boolean;
   maxLevels: number;
   maxConcurrent: number;
   maxThreads: number;
@@ -47,10 +48,11 @@ export const DEFAULT_MANAGER_SETTINGS: ManagerSettings = {
   subagentMode: "opportunistic",
   toolFiltering: "allowed",
   widgetMode: "full",
+  nerdFontIcons: false,
 };
 
 const KEYS = [
-  "maxLevels", "maxConcurrent", "maxThreads", "modelSelection", "subagentMode", "toolFiltering", "widgetMode",
+  "maxLevels", "maxConcurrent", "maxThreads", "modelSelection", "subagentMode", "toolFiltering", "widgetMode", "nerdFontIcons",
 ] as const;
 const MAX_LEVELS = 32;
 
@@ -88,6 +90,7 @@ function positiveSafeInteger(value: unknown): value is number {
 }
 
 function requirement(key: (typeof KEYS)[number]): string {
+  if (key === "nerdFontIcons") return "nerdFontIcons must be a boolean";
   if (key === "subagentMode") return "subagentMode must be off, opportunistic or orchestration";
   if (key === "widgetMode") return "widgetMode must be full or minimal";
   if (key === "toolFiltering") return "toolFiltering must be allowed, all-except-blocked or all";
@@ -122,6 +125,11 @@ function parseSettings(content: string): Partial<ManagerSettings> {
   for (const key of KEYS) {
     if (!Object.hasOwn(record, key)) continue;
     const value = record[key];
+    if (key === "nerdFontIcons") {
+      if (typeof value !== "boolean") throw new Error(requirement(key));
+      layer.nerdFontIcons = value;
+      continue;
+    }
     if (key === "subagentMode") {
       if (!SUBAGENT_MODES.includes(value as SubagentMode)) throw new Error(requirement(key));
       layer.subagentMode = value as SubagentMode;

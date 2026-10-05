@@ -1,5 +1,6 @@
 ---
 name: tasker
+icon: ''
 description: Complete short, bounded jobs with clear acceptance criteria, including diagnostics, extraction, mechanical edits, a few tool steps, or a targeted repository lookup. Not for ambiguous features, sustained implementation, or complex code understanding.
 thinkingLevel: low
 color: success

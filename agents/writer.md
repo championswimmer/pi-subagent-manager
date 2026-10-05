@@ -1,5 +1,6 @@
 ---
 name: writer
+icon: ''
 description: Draft or revise original long-form prose for a stated audience and voice. Not for source changes, code review, or UI design, and not for inventing facts, citations, or testimonials.
 thinkingLevel: medium
 color: mdQuote

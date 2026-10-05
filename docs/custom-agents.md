@@ -22,6 +22,7 @@ These are the only locations read. Other packages' `~/.pi/agent/agents` or `.pi/
 name: api-scout
 description: Investigate APIs and find evidence before implementation
 thinkingLevel: high
+icon: "\uf002"
 models:
   - anthropic/claude-sonnet-4-6
   - openai/gpt-5
@@ -49,10 +50,23 @@ Ask the main model to use it: _"spawn an api-scout at `stripe-webhooks` to check
 | `thinkingLevel`    | no       | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Clamped to what the model supports.                                                                      |
 | `tools`            | no       | `allow` / `block` lists of exact tool names. Applied per [Tool Filtering](settings.md#tool-filtering-toolfiltering).                                                |
 | `color`            | no       | pi semantic color (`accent`, `success`, `warning`, `error`, `muted`, `dim`) for the type pill and path. Default `accent`.                                           |
+| `icon`             | no       | Single literal Nerd Font glyph. Displayed only with **[labs] Nerd Font icons** enabled; omit for text-only labels.                                                |
 | `modelSuggestions` | no       | Plain model names (e.g. `sonnet-5.5`) that rank the model picker's search. **Never** select a model at runtime.                                                     |
 | `model`            | no       | Deprecated single-model alias. Still parsed; saved back as `models`.                                                                                                |
 
 The Markdown body is the system prompt.
+
+## Icons [labs]
+
+The optional `icon` field works for any custom or bundled agent type. Choose a glyph from the [Nerd Fonts cheat sheet](https://www.nerdfonts.com/cheat-sheet) and copy the actual character into quoted YAML, for example:
+
+```yaml
+icon: "\uf002" # nf-fa-search, U+F002
+```
+
+Use one Unicode private-use character, not an icon name (`nf-fa-search`), codepoint text (`U+F002`), emoji, or multiple glyphs. Both BMP and supplementary Nerd Font glyphs are supported. Omit the field to remove an icon; empty `icon:` values are invalid.
+
+In `/agents types`, select **[labs] Icon** and paste the glyph, then save the agent. Leave the editor blank to remove it. You can configure icons while the feature is off; enable **[labs] Nerd Font icons** in `/agents` settings to see them. A Nerd Font must also be selected in your terminal. Icons supplement names, never replace them.
 
 ## Tips
 

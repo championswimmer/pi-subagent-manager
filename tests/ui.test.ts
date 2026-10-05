@@ -486,6 +486,7 @@ const EDIT_FIELD_ACTIONS = new Set([
   "tools.allow",
   "tools.block",
   "color",
+  "icon",
   "systemPrompt",
 ]);
 
@@ -1039,6 +1040,7 @@ function fieldLabels(fields: {
     `tools.allow: ${fields.allow ?? UNSET}`,
     `tools.block: ${fields.block ?? UNSET}`,
     `color: ${fields.color ?? INHERIT}`,
+    "icon: None",
     "systemPrompt: 5 lines · 51 characters",
     "Save scope",
     "Source",
@@ -1308,6 +1310,29 @@ test("nested definition editor from settings uses one overlay", async () => {
     assert.equal(applied, 0);
     assert.equal(store.get("worker").description, "Worker");
     assertOneOverlay(driver, "nested definition editor");
+  });
+});
+
+test("custom icon editor validates, cancels, saves, prefills, and removes optional glyphs", async () => {
+  await withFixture(async ({ root, store }) => {
+    const run = async (choices: (string | undefined)[], inputs: (string | undefined)[]) => {
+      const context = editorContext(root, choices, inputs);
+      await editAgentTypes(context.ctx, store, true);
+      return context;
+    };
+    const invalid = await run(["worker", "icon", "Cancel", undefined], ["nf-fa-code"]);
+    assert.match(invalid.diagnostics.join("\n"), /icon must be/);
+    assert.equal(store.get("worker").icon, undefined);
+    await run(["worker", "icon", "Cancel", undefined], ["\uf121"]);
+    assert.equal(store.get("worker").icon, undefined);
+    await run(["worker", "icon", "Save", "Global", undefined], ["\u{f0821}"]);
+    assert.equal(store.get("worker").icon, "\u{f0821}");
+    const cancelled = await run(["worker", "icon", "Cancel", undefined], [undefined]);
+    assert.equal(cancelled.editors[0]!.prefill, "\u{f0821}");
+    assert.equal(store.get("worker").icon, "\u{f0821}");
+    await run(["worker", "icon", "Save", "Global", undefined], ["  "]);
+    assert.equal(store.get("worker").icon, undefined);
+    assert.doesNotMatch(await readFile(store.get("worker").filePath!, "utf8"), /icon:/);
   });
 });
 

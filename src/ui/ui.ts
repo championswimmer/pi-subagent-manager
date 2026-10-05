@@ -89,12 +89,21 @@ function contrastPill(
   });
 }
 
+/** Invalid/untrusted saved icons never reach the terminal. Names remain readable. */
+export function agentTypeLabel(type: string, icon?: string, nerdFontIcons = false): string {
+  const prefix = nerdFontIcons && typeof icon === "string" && /^\p{Co}$/u.test(icon)
+    ? `${icon} ` : "";
+  return `${prefix}${sanitizeText(type)}`;
+}
+
 export function agentTypeBadge(
   type: string,
   color: string | undefined,
   theme: AgentBadgeTheme,
+  icon?: string,
+  nerdFontIcons = false,
 ): string {
-  return contrastPill(type, color, theme);
+  return contrastPill(agentTypeLabel(type, icon, nerdFontIcons), color, theme);
 }
 
 function agentPath(
@@ -170,6 +179,7 @@ export function renderThreads(
   threads: ThreadView[],
   width: number,
   theme: AgentBadgeTheme,
+  nerdFontIcons = false,
 ): string[] {
   const priority = (thread: ThreadView) =>
     thread.state === "starting" || thread.state === "running"
@@ -193,7 +203,7 @@ export function renderThreads(
         : thread.state === "paused"
           ? "warning"
           : "accent";
-    const badge = agentTypeBadge(thread.type, thread.color, theme);
+    const badge = agentTypeBadge(thread.type, thread.color, theme, thread.icon, nerdFontIcons);
     const path = agentPath(thread.path, thread.color, theme);
     const state = theme.fg(stateColor, `[${sanitizeText(thread.state)}]`);
     const left = `${badge} ${path} ${state} ${sanitizeText(thread.status || thread.task)}`;
@@ -225,6 +235,7 @@ const AGENT_BROWSER_HINT = "Press ← to open subagent browser";
 interface AgentWidgetRenderOptions {
   /** RPC widgets cannot open a terminal browser. */
   showBrowserHint?: boolean;
+  nerdFontIcons?: boolean;
 }
 
 function agentWidgetStatus(
@@ -342,9 +353,10 @@ function agentLine(
   row: StatusRow,
   width: number,
   theme: AgentBadgeTheme,
+  nerdFontIcons: boolean,
 ): string {
   const thread = row.thread!;
-  const left = `${row.prefix}${agentTypeBadge(thread.type, thread.color, theme)} ${agentPath(thread.path, thread.color, theme)} ${theme.fg(agentStateColor(thread.state), `[${sanitizeText(thread.state)}]`)} ${sanitizeText(thread.task)}`;
+  const left = `${row.prefix}${agentTypeBadge(thread.type, thread.color, theme, thread.icon, nerdFontIcons)} ${agentPath(thread.path, thread.color, theme)} ${theme.fg(agentStateColor(thread.state), `[${sanitizeText(thread.state)}]`)} ${sanitizeText(thread.task)}`;
   return fitLine(left, theme.fg("muted", threadMetrics(thread)), width);
 }
 
@@ -429,7 +441,7 @@ export function renderAgentTree(
   threads: ThreadView[],
   width: number,
   theme: AgentBadgeTheme,
-  { showBrowserHint = true }: AgentWidgetRenderOptions = {},
+  { showBrowserHint = true, nerdFontIcons = false }: AgentWidgetRenderOptions = {},
 ): string[] {
   const columns = Math.max(0, width);
   const rows = buildStatusTree(
@@ -458,7 +470,7 @@ export function renderAgentTree(
       lines.push(placeholderLine(row, columns, theme));
       continue;
     }
-    lines.push(agentLine(row, columns, theme));
+    lines.push(agentLine(row, columns, theme, nerdFontIcons));
     lines.push(activityLine(row, columns, theme));
   }
   lines.push(agentWidgetStatus(live, omitted, columns, theme, showBrowserHint));
@@ -518,6 +530,7 @@ export function updateWidget(
   ctx: ExtensionContext,
   threads: ThreadView[],
   mode: WidgetMode = "full",
+  nerdFontIcons = false,
 ): void {
   if (!ctx.hasUI) return;
   if (!threads.some((thread) => thread.path !== "/root")) {
@@ -529,7 +542,7 @@ export function updateWidget(
   if (ctx.mode === "rpc") {
     ctx.ui.setWidget(
       "pi-subagent",
-      render(threads, 80, ctx.ui.theme, { showBrowserHint: false }),
+      render(threads, 80, ctx.ui.theme, { showBrowserHint: false, nerdFontIcons }),
       AGENT_WIDGET_PLACEMENT,
     );
     return;
@@ -544,7 +557,7 @@ export function updateWidget(
         timer.unref();
       }
       return {
-        render: (width) => render(snapshot, width, ctx.ui.theme),
+        render: (width) => render(snapshot, width, ctx.ui.theme, { nerdFontIcons }),
         invalidate: () => {},
         dispose: () => {
           if (timer) clearInterval(timer);
@@ -981,6 +994,7 @@ const EDIT_MENU_ACTIONS = [
   "tools.allow",
   "tools.block",
   "color",
+  "icon",
   "systemPrompt",
   "Save scope",
   "Source",
@@ -1001,6 +1015,7 @@ const EDIT_FIELD_LABELS: Record<EditMenuAction, string> = {
   "tools.allow": "Allowed tools",
   "tools.block": "Blocked tools",
   color: "Color",
+  icon: "[labs] Icon",
   systemPrompt: "System prompt",
   "Save scope": "Save scope",
   Source: "Source (read-only)",
@@ -1022,6 +1037,7 @@ const EDIT_FIELD_HELP: Record<EditMenuAction, string> = {
     "Unset uses default policy; an empty list explicitly allows no tools.",
   "tools.block": "Exact tool names to remove from the allowed set.",
   color: "Thread widget color with live preview.",
+  icon: "Paste a single Nerd Font glyph from nerdfonts.com/cheat-sheet (not its name or codepoint).\nLeave blank to remove. Display requires [labs] Nerd Font icons in settings and a Nerd Font in your terminal.",
   systemPrompt: "Edit the Markdown prompt body in a multiline dialog.",
   "Save scope":
     "Project definitions override global definitions with the same name.",
@@ -1088,6 +1104,8 @@ function editMenuLabel(action: EditMenuAction, draft: AgentType): string {
       return `tools.block: ${sanitizeText(toolListMenuValue(draft.tools?.block))}`;
     case "color":
       return `color: ${sanitizeText(draft.color ?? "Default (inherit)")}`;
+    case "icon":
+      return `icon: ${draft.icon ? "Configured" : "None"}`;
     case "systemPrompt":
       return `systemPrompt: ${draft.systemPrompt.split("\n").length} lines · ${draft.systemPrompt.length} characters`;
     default:
@@ -1098,14 +1116,16 @@ function editMenuLabel(action: EditMenuAction, draft: AgentType): string {
 export async function editAgentTypes(
   ctx: ExtensionCommandContext,
   store: ConfigStore,
+  nerdFontIcons = false,
 ): Promise<void> {
   if (!canOpenDialog(ctx)) return;
-  await withDialogSession(ctx, (scoped) => editAgentTypesDialog(scoped, store));
+  await withDialogSession(ctx, (scoped) => editAgentTypesDialog(scoped, store, nerdFontIcons));
 }
 
 async function editAgentTypesDialog(
   ctx: ExtensionCommandContext,
   store: ConfigStore,
+  nerdFontIcons: boolean,
 ): Promise<void> {
   while (true) {
     const types = store.list();
@@ -1119,7 +1139,7 @@ async function editAgentTypesDialog(
       ...types.map((type) => ({
         id: type.name,
         label: type.name,
-        renderLabel: (label: string, theme: Theme) => agentTypeBadge(label, type.color, theme),
+        renderLabel: (label: string, theme: Theme) => agentTypeBadge(label, type.color, theme, type.icon, nerdFontIcons),
         value: type.description,
         help: `${type.source ?? "user"} · ${type.filePath ?? ""}`,
       })),
@@ -1157,9 +1177,11 @@ async function editAgentTypesDialog(
                     ? saveScope === "user"
                       ? "Global"
                       : "Trusted project"
-                    : separator >= 0
-                      ? decorated.slice(separator + 2)
-                      : "",
+                    : action === "icon" && nerdFontIcons && draft.icon
+                      ? draft.icon
+                      : separator >= 0
+                        ? decorated.slice(separator + 2)
+                        : "",
             help:
               action === "Source"
                 ? (original?.filePath ??
@@ -1234,6 +1256,12 @@ async function editAgentTypesDialog(
             value === prefill || value === prefill.trim()
               ? originalValue
               : value;
+        } else if (field === "icon") {
+          const value = await dialogEditor(ctx, "Agent icon (Nerd Font glyph; blank to remove)", candidate.icon ?? "");
+          if (value === undefined) continue;
+          const icon = value.trim();
+          if (!icon) delete candidate.icon;
+          else candidate.icon = icon;
         } else if (field === "models") {
           const value = await editModelPreferences(
             ctx,

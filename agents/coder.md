@@ -1,5 +1,6 @@
 ---
 name: coder
+icon: ''
 description: Own iterative implementation, refactoring, debugging, and frontend UI through a checked patch. Not for lookup-only questions, review-only passes, or long-form prose.
 thinkingLevel: high
 color: mdCode

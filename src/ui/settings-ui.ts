@@ -187,6 +187,12 @@ async function configureAgentsDialog(
           help: WIDGET_MODE_HELP,
         },
         {
+          id: "nerdFontIcons",
+          label: "[labs] Nerd Font icons",
+          value: draft.nerdFontIcons ? "On" : "Off",
+          help: "Experimental: display each agent type’s optional icon.\nRequires a Nerd Font configured in your terminal; otherwise glyphs may appear as boxes.\nOff by default. Save and apply to update the widget immediately.",
+        },
+        {
           id: "scope",
           label: "Save scope",
           value: scope === "user" ? "Global" : "Current Project",
@@ -267,6 +273,8 @@ async function configureAgentsDialog(
         });
         if (WIDGET_MODE_OPTIONS.some((option) => option.id === mode))
           draft.widgetMode = mode as WidgetMode;
+      } else if (action === "nerdFontIcons") {
+        draft.nerdFontIcons = !draft.nerdFontIcons;
       } else if (action === "scope") {
         if (!ctx.isProjectTrusted())
           ctx.ui.notify(
@@ -276,7 +284,7 @@ async function configureAgentsDialog(
         else scope = scope === "user" ? "project" : "user";
       } else if (action === "defaults") draft = { ...DEFAULT_MANAGER_SETTINGS };
       else if (action === "types") {
-        await editAgentTypes(ctx, options.store);
+        await editAgentTypes(ctx, options.store, draft.nerdFontIcons);
         options.store.reload();
       } else if (action === "save") {
         const file = saveManagerSettings({

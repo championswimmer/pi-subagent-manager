@@ -45,13 +45,14 @@ export function agentTools(
       () =>
         result(
           getTypes().map(
-            ({ name, description, thinkingLevel, color, modelSuggestions, ...type }) => ({
+            ({ name, description, thinkingLevel, color, icon, modelSuggestions, ...type }) => ({
               name,
               description,
               models: getModelPreferences(type),
               modelSuggestions: modelSuggestions === undefined ? undefined : [...modelSuggestions],
               thinkingLevel,
               color,
+              icon,
             }),
           ),
         ),

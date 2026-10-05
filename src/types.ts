@@ -14,6 +14,8 @@ export interface AgentType {
   thinkingLevel?: ThinkingLevel;
   /** Pi semantic token for the type pill background and task path foreground. */
   color?: string;
+  /** Optional literal Nerd Font glyph; displayed only when the labs setting is enabled. */
+  icon?: string;
   tools?: { allow?: string[]; block?: string[] };
   systemPrompt: string;
   filePath?: string;
@@ -26,6 +28,7 @@ export interface ThreadView {
   owner: string;
   type: string;
   color?: string;
+  icon?: string;
   state: ThreadState;
   task: string;
   status: string;
@@ -118,6 +121,7 @@ export interface SavedThreadView {
   owner: string;
   type: string;
   color?: string;
+  icon?: string;
   state: ThreadState;
   task: string;
   status: string;

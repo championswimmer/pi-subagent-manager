@@ -81,7 +81,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
         canOpen: () => manager !== undefined && context?.mode === "tui" &&
           limits.subagentMode !== "off" && !navigation.isOpen,
         openTree: () => manager && context
-          ? navigation.open(context, manager.scope("/root")) : undefined,
+          ? navigation.open(context, manager.scope("/root"), undefined, limits.nerdFontIcons) : undefined,
         onError: (error) => context?.ui.notify(
           error instanceof Error ? error.message : String(error), "error"),
       });
@@ -238,7 +238,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
   const refreshWidget = (ctx: ExtensionContext) => {
     if (limits.subagentMode === "off") {
       if (ctx.hasUI) ctx.ui.setWidget("pi-subagent", undefined);
-    } else updateWidget(ctx, requireManager().list(), limits.widgetMode);
+    } else updateWidget(ctx, requireManager().list(), limits.widgetMode, limits.nerdFontIcons);
   };
   syncTools();
   pi.on("before_agent_start", async (event, ctx) => {
@@ -373,7 +373,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
       if (command === "import") {
         await importAgents(ctx, false);
       } else if (command === "types") {
-        await editAgentTypes(ctx, store);
+        await editAgentTypes(ctx, store, limits.nerdFontIcons);
         store.reload();
       } else if (command === "reload") {
         store.reload();
@@ -403,9 +403,9 @@ export default function piSubagent(pi: ExtensionAPI): void {
           },
         });
       } else if (command === "status") {
-        await showAgentStatus(ctx, requireManager().scope("/root"));
+        await showAgentStatus(ctx, requireManager().scope("/root"), undefined, limits.nerdFontIcons);
       } else if (command === "tree") {
-        await navigation.open(ctx, requireManager().scope("/root"), rest.join(" ") || undefined);
+        await navigation.open(ctx, requireManager().scope("/root"), rest.join(" ") || undefined, limits.nerdFontIcons);
       } else
         ctx.ui.notify(
           "Usage: /agents [tree [path] | status | settings | types | import | reload]",
