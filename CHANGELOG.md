@@ -15,6 +15,17 @@ Generated from version tags and merged GitHub pull requests. Do not edit this fi
 
 **Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v0.10.0...v0.11.0
 
+#### [v0.11.1](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.11.1) — Patch release (2026-10-05)
+
+<!-- Release notes generated using configuration in .github/release.yml at v0.11.1 -->
+
+##### What's Changed
+###### Merged pull requests
+* feat: manually steer subagents from the live viewer by @championswimmer in https://github.com/championswimmer/pi-subagent-manager/pull/16
+
+
+**Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v0.11.0...v0.11.1
+
 ### [v0.10.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.10.0) — Minor release (2026-10-05)
 
 <!-- Release notes generated using configuration in .github/release.yml at v0.10.0 -->
