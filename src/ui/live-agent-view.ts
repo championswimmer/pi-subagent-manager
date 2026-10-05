@@ -1,7 +1,8 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import {
   Key,
+  Markdown,
   matchesKey,
   ScrollView,
   stripTerminalSequences,
@@ -19,7 +20,7 @@ export interface AgentViewportState {
   showThinking?: boolean;
 }
 
-/** Fully cover main, including at very small sizes; style sequences originate only from our theme. */
+/** Fully cover main, including at very small sizes; only trusted renderers emit terminal sequences. */
 export function fillViewport(lines: string[], width: number, height: number): string[] {
   width = Math.max(0, Math.floor(width));
   height = Math.max(1, Math.floor(height));
@@ -49,7 +50,7 @@ function json(value: unknown): string {
   }
 }
 
-/** V1 is text-only. Never feed a watched tool's custom renderer or control sequences into main. */
+/** Read-only observer. Never invoke watched tools' custom renderers or pass through raw controls. */
 export class LiveAgentView {
   private snapshot: TranscriptSnapshot | undefined;
   private error: string | undefined;
@@ -180,6 +181,19 @@ export class LiveAgentView {
       .flatMap((line) => wrapTextWithAnsi(line, Math.max(1, width)));
   }
 
+  /** Use the same themed Markdown (including code highlighting) as pi's main transcript. */
+  private markdown(value: string, width: number, thinking = false): string[] {
+    return new Markdown(
+      text(value),
+      0,
+      0,
+      getMarkdownTheme(),
+      thinking
+        ? { color: (value) => this.theme.fg("thinkingText", value), italic: true }
+        : undefined,
+    ).render(Math.max(1, width));
+  }
+
   /** Tool/metadata previews are bounded by rendered rows, not just source newlines. */
   private preview(content: unknown, width: number): string[] {
     const values = Array.isArray(content) ? content : [content];
@@ -207,18 +221,16 @@ export class LiveAgentView {
   }
 
   private blocks(content: unknown, width: number): string[] {
-    if (typeof content === "string") return this.wrap(content, width);
+    if (typeof content === "string") return this.markdown(content, width);
     if (!Array.isArray(content)) return this.wrap(json(content), width);
     return content.flatMap((value) => {
       const block = object(value);
       if (!block) return this.wrap(json(value), width);
-      if (block.type === "text") return this.wrap(String(block.text ?? ""), width);
+      if (block.type === "text") return this.markdown(String(block.text ?? ""), width);
       if (block.type === "image") return ["[Image — text-only observer]"];
       if (block.type === "thinking")
         return this.viewport.showThinking
-          ? this.wrap(String(block.thinking ?? "[redacted thinking]"), width).map((line) =>
-              this.theme.fg("muted", line),
-            )
+          ? this.markdown(String(block.thinking ?? "[redacted thinking]"), width, true)
           : [this.theme.fg("dim", "[Thinking hidden · t show]")];
       if (block.type === "toolCall")
         return [
