@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { Theme } from "@earendil-works/pi-coding-agent";
-import { visibleWidth, stripTerminalSequences } from "@earendil-works/pi-tui";
+import { getMarkdownTheme, initTheme, type Theme } from "@earendil-works/pi-coding-agent";
+import { Markdown, visibleWidth, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { LiveAgentView, type AgentViewportState } from "../src/ui/live-agent-view.ts";
 import type {
   ThreadService,
@@ -11,6 +11,8 @@ import type {
   TranscriptSnapshot,
 } from "../src/types.ts";
 
+// The live UI uses pi's active Markdown theme, just like the main transcript.
+initTheme("dark");
 const theme = { fg: (_token: string, text: string) => text } as Theme;
 const tick = () => new Promise((resolve) => setTimeout(resolve, 25));
 const message = (content: string): AgentMessage => ({ role: "user", content, timestamp: 0 });
@@ -140,6 +142,115 @@ test("live viewer shows assistant/tool streams, collapses inherited context, and
   live.view.dispose();
   live.view.dispose();
   assert.equal(live.unsubscribed, 1);
+});
+
+test("message Markdown matches pi's renderer, including syntax highlighting and resize", async () => {
+  const source = [
+    "# Heading",
+    "",
+    "**bold** and *italic* with `inline code` and [a link](https://example.com)",
+    "",
+    "- first item",
+    "- second item",
+    "",
+    "> quoted text",
+    "",
+    "| Name | Value |",
+    "| --- | --- |",
+    "| answer | 42 |",
+    "",
+    "```typescript",
+    "const answer = 42;",
+    "```",
+  ].join("\n");
+  const live = launch(
+    snapshot({
+      messages: [{ role: "assistant", content: [{ type: "text", text: source }] } as AgentMessage],
+    }),
+    100,
+  );
+  await tick();
+  try {
+    const markdownTheme = getMarkdownTheme();
+    for (const width of [90, 38]) {
+      const lines = live.view.render(width);
+      const rendered = lines.map((line) => stripTerminalSequences(line).trimEnd()).join("\n");
+      const expected = new Markdown(source, 0, 0, markdownTheme)
+        .render(width)
+        .map((line) => stripTerminalSequences(line).trimEnd())
+        .join("\n");
+      assert.ok(rendered.includes(expected), `same Markdown layout at width ${width}`);
+      assert.ok(lines.join("\n").includes(markdownTheme.bold("bold")));
+      const highlighted = markdownTheme.highlightCode!("const answer = 42;", "typescript")[0]!;
+      assert.notEqual(highlighted, "const answer = 42;", "code receives syntax colors");
+      assert.ok(lines.join("\n").includes(highlighted), "uses pi's syntax highlighting");
+      for (const line of lines) assert.equal(visibleWidth(line), width);
+    }
+  } finally {
+    live.view.dispose();
+  }
+});
+
+test("streaming, inherited, custom and visible thinking text use Markdown too", async () => {
+  const live = launch(
+    snapshot({
+      inheritedCount: 1,
+      messages: [
+        message("**inherited bold**"),
+        {
+          role: "custom",
+          customType: "subagent-update",
+          content: "**update bold**",
+          display: true,
+          timestamp: 0,
+        } as AgentMessage,
+      ],
+      assistant: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "**thinking bold**" },
+          { type: "text", text: "**stream bold**\n\n```typescript\nconst partial =" },
+        ],
+      } as AgentMessage,
+    }),
+    50,
+  );
+  await tick();
+  try {
+    let content = live.view.render(100).join("\n");
+    assert.ok(content.includes(getMarkdownTheme().bold("stream bold")));
+    assert.ok(content.includes(getMarkdownTheme().bold("update bold")));
+    assert.doesNotMatch(content, /inherited bold|thinking bold|\*\*/);
+    // Pi deliberately retains styled fence borders, even while a fence is incomplete.
+    assert.ok(
+      content.includes(getMarkdownTheme().highlightCode!("const partial =", "typescript")[0]!),
+    );
+    live.view.handleInput("c");
+    live.view.handleInput("t");
+    content = live.view.render(100).join("\n");
+    assert.ok(content.includes(getMarkdownTheme().bold("inherited bold")));
+    assert.match(stripTerminalSequences(content), /thinking bold/);
+    assert.doesNotMatch(content, /\*\*/);
+
+    live.emit(
+      snapshot({
+        revision: 1,
+        assistant: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "**finished bold**\n\n```typescript\nconst partial = 1;\n```" },
+          ],
+        } as AgentMessage,
+      }),
+    );
+    content = live.view.render(100).join("\n");
+    assert.ok(content.includes(getMarkdownTheme().bold("finished bold")));
+    assert.doesNotMatch(content, /stream bold|\*\*/);
+    live.view.invalidate();
+    assert.equal(live.view.render(100).join("\n"), content);
+  } finally {
+    live.view.dispose();
+  }
 });
 
 test("tool calls and results show only three preview rows while messages stay complete", async () => {
