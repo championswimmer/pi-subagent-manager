@@ -494,3 +494,54 @@ for (const width of [32, 80]) {
     assert.equal(result.value(2, "widgetMode"), "Minimal");
   });
 }
+
+test("[labs] Final Recap toggles, explains extra turns, and saves to both scopes", async (t) => {
+  const enabled = await run(t, ["finalRecap", "save"]);
+  const field = enabled.menus[0]!.rows.find((row) => row.id === "finalRecap")!;
+  assert.equal(field.label, "[labs] Final Recap");
+  assert.equal(field.value, "Off");
+  assert.match(field.help!, /main.*idle/i);
+  assert.match(field.help!, /detached/i);
+  assert.match(field.help!, /extra model turns/i);
+  assert.match(field.help!, /more tokens and context/i);
+  assert.match(field.help!, /Subagent Mode.*Off/);
+  assert.equal(enabled.value(1, "finalRecap"), "On");
+  assert.match(enabled.menus[1]!.title, /unsaved/);
+  assert.equal(enabled.applied, 1);
+  assert.equal(enabled.loaded.settings.finalRecap, true);
+  assert.equal(JSON.parse(readFileSync(enabled.userFile, "utf8")).finalRecap, true);
+
+  const disabled = await run(t, ["finalRecap", "save"], {
+    settings: { ...DEFAULT_MANAGER_SETTINGS, finalRecap: true }, trusted: true,
+  });
+  assert.equal(disabled.value(1, "finalRecap"), "Off");
+  assert.equal(disabled.loaded.settings.finalRecap, false);
+  assert.equal(disabled.applied, 1);
+  assert.equal(JSON.parse(readFileSync(disabled.projectFile, "utf8")).finalRecap, false);
+  assert.equal(existsSync(disabled.userFile), false);
+});
+
+test("[labs] Final Recap cancellation, toggle reversal and restore-defaults keep it opt-in", async (t) => {
+  const cancelled = await run(t, ["finalRecap", "cancel"]);
+  assert.equal(cancelled.applied, 0);
+  assert.equal(existsSync(cancelled.userFile), false);
+  assert.equal(cancelled.loaded.settings.finalRecap, false);
+  const reverted = await run(t, ["finalRecap", "finalRecap", "save"]);
+  assert.doesNotMatch(reverted.menus[2]!.title, /unsaved/);
+  assert.equal(reverted.loaded.settings.finalRecap, false);
+  const restored = await run(t, ["defaults", "save"], {
+    settings: { ...DEFAULT_MANAGER_SETTINGS, finalRecap: true },
+  });
+  assert.equal(restored.value(1, "finalRecap"), "Off");
+  assert.equal(restored.loaded.settings.finalRecap, false);
+});
+
+for (const width of [32, 80]) {
+  test(`[labs] Final Recap renders a bordered settings frame at width ${width}`, async (t) => {
+    const result = await run(t, ["finalRecap", "cancel"], { width });
+    assert.ok(result.renders.every((lines) => lines[0]!.includes("Agents settings")));
+    assert.equal(result.value(1, "finalRecap"), "On");
+    const rendered = result.renders.at(-1)!.join("\n");
+    assert.match(rendered, /more[\s\S]*tokens[\s\S]*context/i);
+  });
+}

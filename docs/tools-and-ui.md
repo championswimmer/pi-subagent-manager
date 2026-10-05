@@ -25,6 +25,8 @@
 
 Then `agent_wait` or `agent_status` on `/root/controller-security-research`.
 
+Child progress and completion notifications are retained in the main agent's context without adding visible chat messages. By default they do not start another turn, keeping the main agent's final response last in the conversation even when detached children finish later. The opt-in **[labs] Final Recap** setting asks an idle main agent to summarize newly completed or failed asynchronous agents; results arriving during a summary are handled after that summary finishes. Progress updates and foreground results do not trigger summaries. Enabling it uses more tokens and context. Use the Agents widget, `/agents tree`, or `agent_output` to inspect child status and answers.
+
 ## Parallel and nested work
 
 - Launch **all independent siblings with `wait: false`, then wait**. Spawning one foreground child and waiting before the next is sequential.

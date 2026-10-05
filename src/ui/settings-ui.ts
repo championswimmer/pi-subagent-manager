@@ -198,6 +198,12 @@ async function configureAgentsDialog(
           help: "Experimental: display each agent type’s optional icon.\nRequires a Nerd Font configured in your terminal; otherwise glyphs may appear as boxes.\nOff by default. Save and apply to update the widget immediately.",
         },
         {
+          id: "finalRecap",
+          label: "[labs] Final Recap",
+          value: draft.finalRecap ? "On" : "Off",
+          help: "Experimental: when detached agents finish or fail and the main agent is idle, automatically ask the main agent to summarize their results.\nEnabling this may cause extra model turns and uses more tokens and context.\nOff by default. Subagent Mode Off suppresses automatic summaries.",
+        },
+        {
           id: "scope",
           label: "Save scope",
           value: scope === "user" ? "Global" : "Current Project",
@@ -280,6 +286,8 @@ async function configureAgentsDialog(
           draft.widgetMode = mode as WidgetMode;
       } else if (action === "nerdFontIcons") {
         draft.nerdFontIcons = !draft.nerdFontIcons;
+      } else if (action === "finalRecap") {
+        draft.finalRecap = !draft.finalRecap;
       } else if (action === "scope") {
         if (!ctx.isProjectTrusted())
           ctx.ui.notify(

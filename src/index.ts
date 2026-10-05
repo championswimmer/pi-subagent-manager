@@ -18,9 +18,11 @@ import type { SavedThread, ThreadEvent } from "./types.ts";
 
 const REGISTRY_ENTRY = "pi-subagent:registry:v1";
 const ROOT_MAILBOX_ENTRY = "pi-subagent:root-mailbox:v1";
+const ROOT_SUMMARY_MESSAGE = "pi-subagent:final-recap";
 type RootNotification = {
   rootSessionId: string;
   content: string;
+  finalRecap?: boolean;
   details: { mailboxId: string; path: string; state: string };
 };
 
@@ -49,6 +51,14 @@ export default function piSubagent(pi: ExtensionAPI): void {
   };
   let generation = 0;
   let rootTurnEnded = false;
+  let summaryRunning = false;
+  let suspendingSummaries = false;
+  let summaryTimer: ReturnType<typeof setTimeout> | undefined;
+  const cancelSummary = () => {
+    if (summaryTimer !== undefined) clearTimeout(summaryTimer);
+    summaryTimer = undefined;
+    summaryRunning = false;
+  };
   let navigation = new AgentNavigationController();
   let navigationEditor: AgentNavigationEditor | undefined;
   let navigationEditorFactory: Parameters<ExtensionContext["ui"]["setEditorComponent"]>[0];
@@ -149,11 +159,61 @@ export default function piSubagent(pi: ExtensionAPI): void {
       {
         customType: "pi-subagent:update",
         content: notification.content,
-        display: true,
+        // Keep asynchronous child updates in model context, not the main chat.
+        // Idle/settlement delivery can follow the root's final answer; rendering it
+        // would leave a child's output as the last visible message. The widget and
+        // agent browser provide status/output without displacing the root response.
+        display: false,
         details: notification.details,
       },
       { triggerTurn: false },
     );
+  };
+  const pendingSummaries = (ctx: ExtensionContext) => {
+    const entries = ctx.sessionManager.getBranch();
+    const summarized = new Set(entries.flatMap((entry) => {
+      if (entry.type !== "custom_message" || entry.customType !== ROOT_SUMMARY_MESSAGE) return [];
+      const ids = (entry.details as { mailboxIds?: unknown } | undefined)?.mailboxIds;
+      return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
+    }));
+    return entries.flatMap((entry) => {
+      if (entry.type !== "custom" || entry.customType !== ROOT_MAILBOX_ENTRY) return [];
+      const notification = entry.data as RootNotification | undefined;
+      return notification?.rootSessionId === ctx.sessionManager.getSessionId() &&
+        notification.finalRecap === true && typeof notification.content === "string" &&
+        typeof notification.details?.mailboxId === "string" &&
+        !summarized.has(notification.details.mailboxId) ? [notification] : [];
+    });
+  };
+  const scheduleSummary = (ctx: ExtensionContext) => {
+    if (!limits.finalRecap || limits.subagentMode === "off" || summaryRunning || suspendingSummaries ||
+        summaryTimer !== undefined || ctx.isIdle() === false || !pendingSummaries(ctx).length) return;
+    const currentGeneration = generation;
+    // Coalesce siblings finishing together and leave the settlement boundary before
+    // starting a new turn. Recheck settings/session/idle state after the deferral.
+    summaryTimer = setTimeout(() => {
+      summaryTimer = undefined;
+      if (currentGeneration !== generation || context?.sessionManager !== ctx.sessionManager ||
+          !limits.finalRecap || limits.subagentMode === "off" || suspendingSummaries || ctx.isIdle() === false) return;
+      const notifications = pendingSummaries(ctx);
+      if (!notifications.length) return;
+      summaryRunning = true;
+      try {
+        pi.sendMessage({
+          customType: ROOT_SUMMARY_MESSAGE,
+          content: "Summarize the newly finished asynchronous subagent results for the user. " +
+            "Their results are in the preceding subagent notifications; use agent_output if more detail is needed. " +
+            "Give a concise main-thread answer covering results and any failures. " +
+            "Do not spawn or resume agents solely to summarize.\nAgents: " +
+            [...new Set(notifications.map((notification) => notification.details.path))].join(", "),
+          display: false,
+          details: { mailboxIds: notifications.map((notification) => notification.details.mailboxId) },
+        }, { triggerTurn: true });
+      } catch (error) {
+        summaryRunning = false;
+        warnDelivery(error);
+      }
+    }, 0);
   };
   const restoreRootMailbox = (ctx: ExtensionContext) => {
     if (limits.subagentMode === "off" || ctx.isIdle?.() === false) return;
@@ -178,9 +238,13 @@ export default function piSubagent(pi: ExtensionAPI): void {
         delivered.add(notification.details.mailboxId);
       }
     }
+    scheduleSummary(ctx);
   };
   pi.on("agent_settled", async (_event, ctx) => {
-    if (context?.sessionManager === ctx.sessionManager) restoreRootMailbox(ctx);
+    if (context?.sessionManager === ctx.sessionManager) {
+      summaryRunning = false;
+      restoreRootMailbox(ctx);
+    }
   });
   const delivery = (event: ThreadEvent) => {
     if (event.kind === "change" || event.kind === "metrics") return;
@@ -196,6 +260,11 @@ export default function piSubagent(pi: ExtensionAPI): void {
         const notification: RootNotification = {
           rootSessionId: requireContext().sessionManager.getSessionId(),
           content: message,
+          // Foreground results already handled by a busy main thread do not need
+          // another turn. Completions during a summary do need a follow-up summary.
+          finalRecap: limits.finalRecap && !suspendingSummaries && event.kind === "settled" &&
+            (thread.state === "completed" || thread.state === "failed") &&
+            (requireContext().isIdle() || summaryRunning),
           details: {
             mailboxId: randomUUID(),
             path: thread.path,
@@ -205,7 +274,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
         // Persist first; defer delivery until the root is idle and the plugin is enabled.
         // The eventual transcript message carries its ID for branch-local recovery.
         pi.appendEntry(ROOT_MAILBOX_ENTRY, notification);
-        sendRootNotification(notification);
+        restoreRootMailbox(requireContext());
       } else void requireManager().deliver(event.recipient, message).catch(warnDelivery);
     } catch (error) {
       warnDelivery(error);
@@ -266,6 +335,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
   });
 
   const attachSession = async (ctx: ExtensionContext, installEditor = false, seedHistory = true) => {
+    cancelSummary();
     const token = ++generation;
     closeNavigation(installEditor);
     navigation = new AgentNavigationController();
@@ -336,11 +406,18 @@ export default function piSubagent(pi: ExtensionAPI): void {
   });
   pi.on("session_tree", async (_event, ctx) => attachSession(ctx));
   const stopWorkingThreads = async () => {
+    cancelSummary();
     closeNavigation();
-    if (!manager) return;
-    for (const thread of manager.list()) {
-      const state = manager.get(thread.path).state;
-      if (state === "starting" || state === "running") await manager.stop("/root", thread.path);
+    suspendingSummaries = true;
+    try {
+      if (!manager) return;
+      for (const thread of manager.list()) {
+        const state = manager.get(thread.path).state;
+        if (state === "starting" || state === "running") await manager.stop("/root", thread.path);
+      }
+    } finally {
+      cancelSummary();
+      suspendingSummaries = false;
     }
   };
   // Finish old-thread cancellation while appendEntry still points to the old branch/session.
@@ -348,6 +425,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
   pi.on("session_before_switch", stopWorkingThreads);
   pi.on("session_before_fork", stopWorkingThreads);
   pi.on("session_shutdown", async () => {
+    cancelSummary();
     generation++;
     closeNavigation(true);
     await manager?.shutdown();
