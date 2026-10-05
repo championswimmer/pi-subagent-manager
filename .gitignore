@@ -8,3 +8,6 @@ coverage/
 
 # Local subagent harness settings (not agent type definitions)
 .pi/subagents.json
+
+# Keep this plugin's settings global, not committed per project
+/.pi/agent/subagent-manager/settings.json
