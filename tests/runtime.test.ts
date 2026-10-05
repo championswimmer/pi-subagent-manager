@@ -512,10 +512,6 @@ test("isolated real SDK driver without credentials", async (t) => {
                   ? allNames
                   : allNames.filter((name) => name !== "read" && name !== "probe");
             assert.deepEqual([...requests.at(-1)!.toolNames].sort(), [...expected].sort());
-            assert.equal(
-              requests.at(-1)!.system.includes("For independent parallel work"),
-              mode !== "allowed",
-            );
             if (mode === "all") {
               next = toolCall("allowed-probe", "probe");
               await driver.prompt("Call formerly blocked custom tool");

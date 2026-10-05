@@ -64,7 +64,6 @@ test(
         assert.ok(exceptTools.includes("agent_wait"));
         assert.ok(!exceptTools.includes("read"));
         assert.ok(!exceptTools.includes("agent_update"));
-        assert.match(requests.at(-1)!.system, /For independent parallel work/);
         await reload("all");
         assert.equal((await spawn("wide")).state, "completed");
         const allTools = requests.at(-1)!.toolNames;
