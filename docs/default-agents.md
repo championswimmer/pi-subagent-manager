@@ -19,6 +19,21 @@ Use tasker for one symbol or a few facts already in the repository; use research
 
 Existing user/project `researcher` overrides still win over the new packaged default. Bundled `worker`, `explorer`, and `designer` remain absent: bounded work routes to tasker, frontend implementation to coder, and source investigation to researcher. Nothing is automatically renamed.
 
+## Nerd Font icons
+
+The optional **[labs] Nerd Font icons** [setting](settings.md#labs-nerd-font-icons-nerdfonticons) is off by default and requires a Nerd Font in your terminal. Each default has a distinct literal `icon` in its frontmatter:
+
+| Role | Nerd Fonts identifier | Codepoint | Why this icon |
+| --- | --- | --- | --- |
+| `architect` | `nf-md-floor_plan` | `U+F0821` | Structure, layout, and architecture planning. |
+| `coder` | `nf-fa-code` | `U+F121` | Implementation and source code. |
+| `researcher` | `nf-fa-search` | `U+F002` | Evidence gathering and investigation. |
+| `reviewer` | `nf-cod-inspect` | `U+EBD1` | Inspecting code for concrete defects. |
+| `tasker` | `nf-oct-checklist` | `U+F45E` | Bounded tasks and checklist-style execution. |
+| `writer` | `nf-fa-pencil` | `U+F040` | Writing and editorial work. |
+
+Names and codepoints were checked against the [official Nerd Fonts glyph mapping](https://raw.githubusercontent.com/ryanoasis/nerd-fonts/master/glyphnames.json); the [cheat sheet](https://www.nerdfonts.com/cheat-sheet) offers previews and character copying. These are role-based design choices, not font-detected fallbacks. User/project overrides may choose another icon or omit it entirely. See [custom icons](custom-agents.md#icons-labs).
+
 ## Model suggestions are plain names, not pins
 
 Suggestions are chosen by task capability, quality, cost, and speed. API formats, SDK adapter compatibility, provider access, and deployment convenience are not selection criteria; Pi's `pi-ai` SDK abstracts model API differences. Availability/release facts are source metadata, not a reason to downrank a capable model.

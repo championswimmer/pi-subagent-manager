@@ -136,6 +136,7 @@ export class ThreadManager {
         owner: current.owner,
         type: current.type,
         color: current.color,
+        icon: current.icon,
         state: current.state,
         task: current.task,
         status: current.status,
@@ -177,6 +178,7 @@ export class ThreadManager {
       const { sessionLeafId, ...storedView } = savedView;
       const view: ThreadView = {
         ...storedView,
+        icon: storedView.icon ?? item.definition.icon,
         updatedAt: Date.now(),
         elapsedMs: storedView.elapsedMs ?? 0,
         inputTokens: storedView.inputTokens ?? 0,
@@ -263,6 +265,7 @@ export class ThreadManager {
         owner: parent ?? caller,
         type: type.name,
         color: type.color,
+        icon: type.icon,
         state: "starting",
         task: args.task,
         status: "Starting",

@@ -1,5 +1,6 @@
 ---
 name: researcher
+icon: ''
 description: Evidence-backed local/remote codebase and internet research; source verification, versioned citations, and decision-ready synthesis
 modelSuggestions:
   - gemini-4-argon

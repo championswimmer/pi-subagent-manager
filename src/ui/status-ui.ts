@@ -25,7 +25,7 @@ import {
 } from "./dialog.ts";
 import type { ThreadService } from "../types.ts";
 import { buildStatusTree, type StatusRow } from "./thread-tree.ts";
-import { agentTypeBadge, showThreads, threadMetrics } from "./ui.ts";
+import { agentTypeBadge, agentTypeLabel, showThreads, threadMetrics } from "./ui.ts";
 import { LiveAgentView, fillViewport, type AgentViewportState } from "./live-agent-view.ts";
 
 export { buildStatusTree, type StatusRow };
@@ -104,6 +104,7 @@ export class StatusDialog {
       actions(path: string): void;
       fullscreen?: boolean;
     },
+    private nerdFontIcons = false,
   ) {
     this.state = navigation?.state ?? { selectedPath: selected || ROOT, collapsed: new Set() };
   }
@@ -238,7 +239,7 @@ export class StatusDialog {
       const status = dialogText(thread.status);
       return [
         this.theme.fg(selected ? "accent" : base, head),
-        this.theme.fg(base, `${dialogText(thread.type)}  ${path}  `),
+        this.theme.fg(base, `${agentTypeLabel(thread.type, thread.icon, this.nerdFontIcons)}  ${path}  `),
         this.theme.fg(hint, state),
         this.theme.fg(base, `  ${status}`),
       ].join("");
@@ -247,8 +248,8 @@ export class StatusDialog {
       .map((part) => dialogText(part))
       .join("  ");
     if (selected)
-      return `${this.theme.fg("accent", head)}${agentTypeBadge(thread.type, thread.color, this.theme)} ${this.theme.fg("accent", rest)}`;
-    return `${head}${agentTypeBadge(thread.type, thread.color, this.theme)} ${rest}`;
+      return `${this.theme.fg("accent", head)}${agentTypeBadge(thread.type, thread.color, this.theme, thread.icon, this.nerdFontIcons)} ${this.theme.fg("accent", rest)}`;
+    return `${head}${agentTypeBadge(thread.type, thread.color, this.theme, thread.icon, this.nerdFontIcons)} ${rest}`;
   }
 
   private detail(row: StatusRow | undefined): string[] {
@@ -311,6 +312,7 @@ async function showAgentDialog(
     title?: string;
     selected?: string;
     inspect?: (path: string) => Promise<void>;
+    nerdFontIcons?: boolean;
   } = {},
 ): Promise<void> {
   const open = options.inspect ?? ((path: string) => showThreads(ctx, service, path));
@@ -321,7 +323,7 @@ async function showAgentDialog(
     let dialog: StatusDialog | undefined;
     try {
       const chosen = await ctx.ui.custom<string | undefined>((host, theme, _keys, done) => {
-        dialog = new StatusDialog(host, theme, service, done, selected, options.title);
+        dialog = new StatusDialog(host, theme, service, done, selected, options.title, undefined, options.nerdFontIcons);
         dialog.startRefresh();
         return dialog;
       }, DIALOG_OPTIONS);
@@ -340,9 +342,10 @@ export async function showAgentStatus(
   ctx: ExtensionCommandContext,
   service: ThreadService,
   inspect?: (path: string) => Promise<void>,
+  nerdFontIcons = false,
 ): Promise<void> {
   if (!canOpenDialog(ctx)) return;
-  await showAgentDialog(ctx, service, { inspect });
+  await showAgentDialog(ctx, service, { inspect, nerdFontIcons });
 }
 
 /** Root-owned navigation state. Opening and closing never changes the executing session. */
@@ -363,7 +366,7 @@ export class AgentNavigationController {
     this.session = undefined;
   }
 
-  open(ctx: ExtensionContext, service: ThreadService, selectedPath?: string): Promise<void> {
+  open(ctx: ExtensionContext, service: ThreadService, selectedPath?: string, nerdFontIcons = false): Promise<void> {
     if (this.opening) return this.opening;
     if (!canOpenDialog(ctx)) return Promise.resolve();
     if (selectedPath) this.tree.selectedPath = selectedPath;
@@ -443,6 +446,7 @@ export class AgentNavigationController {
                     fullscreen: true,
                     actions: (path) => finish({ kind: "actions", path }),
                   },
+                  nerdFontIcons,
                 );
                 treeDialog.startRefresh();
                 return treeDialog;
@@ -460,7 +464,7 @@ export class AgentNavigationController {
               }
               const result = await session.mount<"back" | "main">(
                 (tui, activeTheme, _keys, finish) =>
-                  new LiveAgentView(tui, activeTheme, service, chosen.path, viewport!, finish),
+                  new LiveAgentView(tui, activeTheme, service, chosen.path, viewport!, finish, nerdFontIcons),
               );
               if (result !== "back") break;
             }
@@ -505,11 +509,12 @@ export async function showAgentTree(
   ctx: ExtensionContext,
   service: ThreadService,
   selectedPath?: string,
+  nerdFontIcons = false,
 ): Promise<void> {
   let navigation = navigationByService.get(service);
   if (!navigation) {
     navigation = new AgentNavigationController();
     navigationByService.set(service, navigation);
   }
-  await navigation.open(ctx, service, selectedPath);
+  await navigation.open(ctx, service, selectedPath, nerdFontIcons);
 }

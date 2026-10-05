@@ -77,6 +77,23 @@ async function run(
   };
 }
 
+test("[labs] Nerd Font setting toggles, persists, and cancels without saving", async (t) => {
+  const enabled = await run(t, ["nerdFontIcons", "save"]);
+  const field = enabled.menus[0]!.rows.find((row) => row.id === "nerdFontIcons")!;
+  assert.equal(field.label, "[labs] Nerd Font icons");
+  assert.equal(field.value, "Off");
+  assert.match(field.help!, /terminal/);
+  assert.equal(enabled.loaded.settings.nerdFontIcons, true);
+  assert.equal(enabled.applied, 1);
+  const disabled = await run(t, ["nerdFontIcons", "save"], {
+    settings: { ...DEFAULT_MANAGER_SETTINGS, nerdFontIcons: true },
+  });
+  assert.equal(disabled.loaded.settings.nerdFontIcons, false);
+  const cancelled = await run(t, ["nerdFontIcons", "cancel"]);
+  assert.equal(cancelled.applied, 0);
+  assert.equal(existsSync(cancelled.userFile), false);
+});
+
 test("invalid numbers are rejected in place and valid edits save once to the user scope", async (t) => {
   const result = await run(t, ["maxLevels", "33", "maxLevels", "0", "maxLevels", "5", "save"]);
   assert.equal(result.applied, 1);

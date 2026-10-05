@@ -78,6 +78,7 @@ const FIELDS = new Set([
   "modelSuggestions",
   "thinkingLevel",
   "color",
+  "icon",
   "tools",
 ]);
 const SUBAGENT_MANAGER_DIR = "subagent-manager";
@@ -227,6 +228,11 @@ export function parseAgentType(content: string, filePath?: string): AgentType {
         );
       result.color = data.color as string;
     }
+    if (Object.hasOwn(data, "icon")) {
+      if (typeof data.icon !== "string" || !/^\p{Co}$/u.test(data.icon))
+        throw new Error("icon must be a single literal Nerd Font glyph (Unicode private-use character)");
+      result.icon = data.icon;
+    }
     if (Object.hasOwn(data, "tools")) result.tools = toolPolicy(data.tools);
     if (filePath !== undefined) result.filePath = filePath;
     return result;
@@ -248,7 +254,7 @@ export function serializeAgentType(type: AgentType): string {
   if (models !== undefined) data.models = models;
   if (type.modelSuggestions !== undefined)
     data.modelSuggestions = modelSuggestionNames(type.modelSuggestions);
-  for (const key of ["thinkingLevel", "color", "tools"] as const)
+  for (const key of ["thinkingLevel", "color", "icon", "tools"] as const)
     if (type[key] !== undefined) data[key] = type[key];
   const content = `---\n${stringify(data)}---\n${type.systemPrompt}`;
   parseAgentType(content);

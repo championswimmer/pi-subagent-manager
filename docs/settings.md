@@ -15,6 +15,7 @@ All keys are optional. Defaults:
 {
   "subagentMode": "opportunistic",
   "widgetMode": "full",
+  "nerdFontIcons": false,
   "modelSelection": "pick-first-scoped",
   "toolFiltering": "allowed",
   "maxLevels": 3,
@@ -52,6 +53,14 @@ Controls the subagent status display above the input box. Choose **Status Widget
 | `minimal`          | One line of theme-colored status counts plus cumulative input `↑` / output `↓` tokens for agents currently starting or running. |
 
 Minimal mode groups starting agents with running agents and excludes the main conversation. Token totals exclude completed, stopped, failed and paused agents. The fullscreen tree remains available via `/agents tree` in either mode.
+
+## [labs] Nerd Font icons (`nerdFontIcons`)
+
+Experimental features are tagged **[labs]** in settings. **[labs] Nerd Font icons** is an on/off toggle, **off by default**. Enable it in `/agents` and save with **Ctrl+S**, or set `"nerdFontIcons": true` in your settings file. Configure a [Nerd Font](https://www.nerdfonts.com/) in your terminal first; unsupported fonts may show boxes or incorrect glyphs. The extension does not install or detect fonts.
+
+When enabled, an agent type’s optional `icon` appears before its readable name in the full widget, thread browsers, live watcher header, and type picker. Types without icons remain text-only; turning it off restores text-only labels without removing configured icons. The minimal widget remains an aggregate count, with no per-agent icons. Saved settings apply immediately to newly rendered widgets and dialogs.
+
+All six bundled agents have [role-specific icons](default-agents.md#nerd-font-icons). Add or change an icon with **[labs] Icon** in `/agents types`, or the optional `icon` frontmatter field in [your own agent](custom-agents.md#icons-labs). Retained threads keep the icon from their saved agent definition.
 
 ## Model Picking (`modelSelection`)
 

@@ -12,6 +12,7 @@ import {
 } from "@earendil-works/pi-tui";
 import type { ThreadService, TranscriptSnapshot } from "../types.ts";
 import { dialogText, type DialogHost } from "./dialog.ts";
+import { agentTypeLabel } from "./ui.ts";
 
 export interface AgentViewportState {
   scrollTop: number;
@@ -70,6 +71,7 @@ export class LiveAgentView {
     readonly path: string,
     private viewport: AgentViewportState,
     private done: (result: "back" | "main") => void,
+    private nerdFontIcons = false,
   ) {
     this.scroll = new ScrollView(
       { render: () => this.content, invalidate() {} },
@@ -278,7 +280,7 @@ export class LiveAgentView {
     const header = this.theme.fg(
       "accent",
       dialogText(
-        `${this.path} · ${thread?.type ?? "agent"} · ${thread?.state ?? "attaching"} — Watching — main continues`,
+        `${this.path} · ${agentTypeLabel(thread?.type ?? "agent", thread?.icon, this.nerdFontIcons)} · ${thread?.state ?? "attaching"} — Watching — main continues`,
       ),
     );
     const body: string[] = [];

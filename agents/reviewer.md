@@ -1,5 +1,6 @@
 ---
 name: reviewer
+icon: ''
 description: Non-mutating review of scoped changes or existing code for demonstrable correctness and security defects, with severity, location, impact, and the smallest local repair or removal. Not for implementing fixes, style quotas, or speculative abstractions.
 thinkingLevel: high
 color: warning
