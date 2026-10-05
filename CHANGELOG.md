@@ -4,6 +4,19 @@ Generated from version tags and merged GitHub pull requests. Do not edit this fi
 
 ## 0.x — Pre-1.0 releases
 
+### [v0.10.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.10.0) — Minor release (2026-10-05)
+
+<!-- Release notes generated using configuration in .github/release.yml at v0.10.0 -->
+
+#### What's Changed
+##### Merged pull requests
+* feat: add full and minimal subagent status widget modes by @championswimmer in https://github.com/championswimmer/pi-subagent-manager/pull/12
+* fix: render subagent inspect messages with pi Markdown by @championswimmer in https://github.com/championswimmer/pi-subagent-manager/pull/13
+* Replace Down navigation with Left-arrow subagent browser entry by @championswimmer in https://github.com/championswimmer/pi-subagent-manager/pull/14
+
+
+**Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v0.9.0...v0.10.0
+
 ### [v0.9.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.9.0) — Minor release (2026-10-05)
 
 <!-- Release notes generated using configuration in .github/release.yml at v0.9.0 -->
