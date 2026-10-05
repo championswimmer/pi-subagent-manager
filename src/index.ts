@@ -80,7 +80,9 @@ export default function piSubagent(pi: ExtensionAPI): void {
         initialHistory: seedHistory ? history : undefined,
         generation: () => navigationGeneration,
         canOpen: () => manager !== undefined && context?.mode === "tui" &&
-          limits.subagentMode !== "off" && !navigation.isOpen,
+          limits.subagentMode !== "off" && !navigation.isOpen &&
+          manager.list().some((thread) => thread.path !== "/root" &&
+            (thread.state === "starting" || thread.state === "running")),
         openTree: () => manager && context
           ? navigation.open(context, manager.scope("/root"), undefined, limits.nerdFontIcons) : undefined,
         onError: (error) => context?.ui.notify(

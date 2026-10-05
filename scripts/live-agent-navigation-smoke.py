@@ -42,27 +42,30 @@ for mode in ('regular', 'fullscreen'):
     try:
       start = drain(5)
       if proc.poll() is not None: raise RuntimeError('Pi exited during startup: ' + start[-2000:])
-      # Physical Left in empty input, not a slash command, must open the tree.
-      send(b'\x1b[D'); tree = drain(1)
-      assert 'Esc main' in tree or 'watch' in tree.lower(), ('Left did not open tree', tree[-2000:])
+      # With no active subagents, physical Left must leave the main editor alone.
+      send(b'\x1b[D'); idle = drain(.7)
+      assert 'Esc main' not in idle, ('Idle Left opened tree', idle[-2000:])
+      send(b'/agents tree\r'); tree = drain(1)
+      assert 'Esc main' in tree or 'watch' in tree.lower(), ('Command did not open tree', tree[-2000:])
       # Root Enter returns to the main editor without any model call.
       send(b'\r'); drain(.3)
       send(b'unfinished draft'); drain(.3)
-      send(b'\x1b[1;5H\x1b[D'); draft_tree = drain(.7)
-      assert 'Esc main' in draft_tree or 'watch' in draft_tree.lower(), ('Draft Left did not open', draft_tree[-2000:])
+      send(b'\x1b[1;5H\x1b[D'); draft = drain(.7)
+      assert 'Esc main' not in draft, ('Idle draft Left opened tree', draft[-2000:])
+      send(b'\x03'); drain(.3)  # Clear the draft before invoking the explicit command.
+      send(b'/agents tree\r'); drain(.7)
       if mode == 'fullscreen':
         # Kitty Ctrl+Shift+F search shortcut: it must not stack above navigation.
         send(b'\x1b[102;6u'); search = drain(.3)
         assert 'Search ' not in search, ('Host search stacked', search[-2000:])
-      send(b'\x1b'); restored = drain(.7)
-      assert 'unfinished draft' in restored, ('Draft was not restored', restored[-2000:])
+      send(b'\x1b'); drain(.7)
       # Resize then re-enter; the host must not crash from oversized frames.
       fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', 18, 60, 0, 0)); os.kill(proc.pid, signal.SIGWINCH)
-      drain(.4); send(b'\x1b[D'); resized = drain(.7)
+      drain(.4); send(b'/agents tree\r'); resized = drain(.7)
       assert proc.poll() is None, 'Exited after resize'
       assert 'Esc main' in resized or 'watch' in resized.lower(), ('Resize did not render tree', resized[-1000:])
       send(b'\x1b'); drain(.2)
-      print(mode + ': Left entry, root Enter, draft restoration, resize, search suppression (fullscreen) PASS')
+      print(mode + ': idle Left ignored, explicit tree entry, root Enter, resize, search suppression (fullscreen) PASS')
     finally:
       os.killpg(proc.pid, signal.SIGTERM) if proc.poll() is None else None
       try: proc.wait(timeout=5)

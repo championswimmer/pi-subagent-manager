@@ -334,9 +334,20 @@ test("ends below agent activity with running count and browser entry", () => {
   for (const state of ["running", "completed"] as const) {
     const lines = plain(renderAgentTree([thread("/root/job", { state })], 80, theme));
     assert.equal(lines.length, 4);
-    assert.equal(lines.at(-1), `${state === "running" ? 1 : 0} running · Press ← to open subagent browser`);
+    assert.equal(lines.at(-1), state === "running"
+      ? "1 running · Press ← to open subagent browser" : "0 running");
     assert.match(lines.at(-2)!, /Working/);
     assert.doesNotMatch(lines.join("\n"), /Esc:|abort main|more agents/);
+  }
+});
+
+test("browser hint appears only for starting or running subagents in either widget mode", () => {
+  for (const render of [renderAgentTree, renderAgentSummary]) {
+    for (const state of ["starting", "running", "paused", "completed", "failed", "stopped"] as const) {
+      const lines = plain(render([thread("/root"), thread("/root/job", { state })], 100, theme));
+      assert.equal(lines.some((line) => line.includes("Press ←")),
+        state === "starting" || state === "running", state);
+    }
   }
 });
 
@@ -358,7 +369,7 @@ test("bounds the widget to twelve lines and counts every omitted real agent", ()
   );
   const six = renderAgentTree(many, 80, theme);
   assert.equal(six.length, 12);
-  assert.equal(plain(six).at(-1), "0 running · +1 more agents · Press ← to open subagent browser");
+  assert.equal(plain(six).at(-1), "0 running · +1 more agents");
   assert.equal(
     plain(six).some((line) => line.includes("Job 5")),
     false,
@@ -477,7 +488,7 @@ test("updateWidget pins the tree above the editor, clears when empty, and uses s
     }
   )({ requestRender() {} });
   assert.match(plain(widget.render(80)).join("\n"), /Agents[\s\S]*Done/);
-  assert.equal(plain(widget.render(80)).at(-1), "0 running · Press ← to open subagent browser");
+  assert.equal(plain(widget.render(80)).at(-1), "0 running");
   widget.dispose();
 
   updateWidget(ctx, []);
@@ -599,7 +610,9 @@ test("minimal summary handles empty and settled agents, metrics boundaries, and 
   const settled = [
     thread("/root/completed", { state: "completed", inputTokens: 100, outputTokens: 200 }),
   ];
-  assert.match(plain(renderAgentSummary(settled, 80, theme))[0]!, /^0 running, 1 completed\s+↑0 ↓0$/);
+  const settledLines = plain(renderAgentSummary(settled, 80, theme));
+  assert.equal(settledLines.length, 1);
+  assert.match(settledLines[0]!, /^0 running, 1 completed\s+↑0 ↓0$/);
 
   const threads = [
     thread("/root/a", { inputTokens: 1_000_000, outputTokens: 1_500_000 }),
@@ -688,7 +701,7 @@ test("full widget status strip resolves the current theme at render time", () =>
   const second = component.render(80);
   assert.deepEqual(plain(second), plain(first));
   assert.notEqual(second.at(-1), first.at(-1));
-  assert.equal(second.at(-1), current.fg("accent", "0 running") + current.fg("muted", " · Press ← to open subagent browser"));
+  assert.equal(second.at(-1), current.fg("accent", "0 running"));
   component.dispose();
 });
 

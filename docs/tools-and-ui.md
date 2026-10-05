@@ -68,13 +68,13 @@ The fullscreen watcher shows steer and agent messages in full, including the in-
 
 #### Left-arrow entry
 
-Press physical **Left (←)** at the beginning of the main draft (or in an empty input) to open the subagent browser. Elsewhere, Left retains normal cursor movement. Down is always native editing/history navigation. Autocomplete, jumps, paste and configured shortcuts take precedence. Navigating preserves the main draft/cursor and does not require the root to be idle.
+While any subagent is **starting or running**, press physical **Left (←)** at the beginning of the main draft (or in an empty input) to open the subagent browser. With no active subagents, or elsewhere in the draft, Left retains normal cursor movement. `/agents tree` remains available regardless of agent activity. Down is always native editing/history navigation. Autocomplete, jumps, paste and configured shortcuts take precedence. Navigating preserves the main draft/cursor and does not require the root to be idle.
 
 Left-arrow entry is enabled by default in the TUI; `/agents tree` remains available everywhere. Pi has one custom-editor slot: installation is skipped if another factory owns it or an existing draft is nonempty, since the host cannot transfer cursor/undo/expanded-paste state. Load order can still let a later editor replace ours. Initial startup uses Pi's history hydration; replacement installations seed history once. Session-tree rebuilds keep the existing editor instance.
 
 While navigation is open, the host fullscreen search shortcut is temporarily disabled through public keybindings to avoid stacking a second host overlay. The prior binding owner is restored only if no other extension replaced it. **Known host limitation:** if an unrelated extension stacks another overlay above navigation, Pi's custom-UI completion can close the newer overlay instead. Avoid concurrent extension-owned overlays; a host identity-targeted completion API is needed to remove this limitation. No private host access or unsupported overlay-lifecycle workaround is used.
 
-Run `python3 scripts/live-agent-navigation-smoke.py` after `npm install` for credential-free, offline POSIX PTY checks in regular/fullscreen mode (entry, root return, draft restoration, resize and host-search suppression). No model prompts are submitted. Broader manual acceptance covers concurrent live turns, autocomplete/paste/undo interactions, remapped shortcuts and rich custom content.
+Run `python3 scripts/live-agent-navigation-smoke.py` after `npm install` for credential-free, offline POSIX PTY checks in regular/fullscreen mode (idle Left gating, explicit command entry, root return, resize and host-search suppression). No model prompts are submitted. Broader manual acceptance covers concurrent live turns, autocomplete/paste/undo interactions, remapped shortcuts and rich custom content.
 
 ## Agents widget
 
@@ -83,7 +83,7 @@ The widget above the input editor has two display modes, selected with **Status 
 - **Full** (default): the existing compact tree, at most twelve lines.
 - **Minimal**: a summary line such as `3 running, 2 stopped, 1 failed, 1 paused    ↑12k ↓3k`, with semantic theme colors. Starting agents count as running; completed agents are counted when present. Token totals include only currently starting/running agents, not the main conversation or settled threads. Use `/agents tree` for details.
 
-Once the main turn has ended and no subagents are starting or running, either mode collapses to a single status-count line without the browser hint. The full tree remains available via `/agents tree` or **Left** at the start of the draft. A new main turn or active subagent restores the configured display mode.
+Once the main turn has ended and no subagents are starting or running, either mode collapses to a single status-count line without the browser hint. The full tree remains available via `/agents tree`; **Left** at the start of the draft opens it only while subagents are starting or running. A new main turn or active subagent restores the configured display mode.
 
 In full mode:
 
@@ -91,7 +91,7 @@ In full mode:
 - A second, indented line shows latest activity.
 - Active branches are shown first; the most recent agents within each state are preferred when previews overflow. Overflow is counted, not listed.
 - Time freezes while paused and resumes on continue.
-- A small status strip below the previews shows the running count (including starting agents) and **Press ← to open subagent browser**, including when agents overflow. Minimal mode also shows the hint. RPC output omits the keyboard hint.
+- A small status strip below the previews shows the running count (including starting agents) and **Press ← to open subagent browser**, including when agents overflow. Full and minimal modes show the hint only while subagents are starting or running. RPC output omits the keyboard hint.
 
 ### Interrupts and stopping agents
 
