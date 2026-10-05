@@ -15,11 +15,15 @@ import type { ThreadService, TranscriptSnapshot } from "../types.ts";
 import { dialogText, type DialogHost } from "./dialog.ts";
 import { agentTypeLabel } from "./ui.ts";
 
+/** Transcript detail level cycled by the t key: full → preview → compact. */
+export type TranscriptDetail = "full" | "preview" | "compact";
+const DETAIL_CYCLE: TranscriptDetail[] = ["full", "preview", "compact"];
+
 export interface AgentViewportState {
   scrollTop: number;
   follow: boolean;
   showInherited?: boolean;
-  showThinking?: boolean;
+  detail?: TranscriptDetail;
 }
 
 /** Fully cover main, including at very small sizes; only trusted renderers emit terminal sequences. */
@@ -60,7 +64,7 @@ export class LiveAgentView {
   private attachment = 0;
   private unsubscribe: (() => void) | undefined;
   private renderTimer: ReturnType<typeof setTimeout> | undefined;
-  private cache = new WeakMap<object, { width: number; thinking: boolean; lines: string[] }>();
+  private cache = new WeakMap<object, { width: number; detail: TranscriptDetail; lines: string[] }>();
   private scroll: ScrollView;
   private content: string[] = [];
   private restoreViewport = true;
@@ -235,7 +239,8 @@ export class LiveAgentView {
       this.viewport.showInherited = !this.viewport.showInherited;
       this.invalidate();
     } else if (data === "t") {
-      this.viewport.showThinking = !this.viewport.showThinking;
+      this.viewport.detail =
+        DETAIL_CYCLE[(DETAIL_CYCLE.indexOf(this.detail) + 1) % DETAIL_CYCLE.length];
       this.invalidate();
     } else if (matchesKey(data, Key.home)) this.scroll.scrollTo(0, { disableFollow: true });
     else if (matchesKey(data, Key.end) || data === "l") this.scroll.scrollToEnd();
@@ -247,6 +252,10 @@ export class LiveAgentView {
   private saveViewport(): void {
     this.viewport.scrollTop = this.scroll.scrollTop;
     this.viewport.follow = this.scroll.isFollowingEnd;
+  }
+
+  private get detail(): TranscriptDetail {
+    return this.viewport.detail ?? "preview";
   }
 
   private wrap(value: string, width: number): string[] {
@@ -302,26 +311,23 @@ export class LiveAgentView {
       if (!block) return this.wrap(json(value), width);
       if (block.type === "text") return this.markdown(String(block.text ?? ""), width);
       if (block.type === "image") return ["[Image — text-only observer]"];
-      if (block.type === "thinking")
-        return this.viewport.showThinking
-          ? this.markdown(String(block.thinking ?? "[redacted thinking]"), width, true)
-          : [this.theme.fg("dim", "[Thinking hidden · t show]")];
+      if (block.type === "thinking") {
+        if (this.detail === "compact")
+          return [this.theme.fg("dim", "[Thinking hidden · t cycles view]")];
+        // Thinking is model-authored Markdown; preview truncates the rendered lines, not the source.
+        const rendered = this.markdown(String(block.thinking ?? "[redacted thinking]"), width, true);
+        if (this.detail === "full" || rendered.length <= 3) return rendered;
+        return [...rendered.slice(0, 3), this.theme.fg("dim", "...")];
+      }
       if (block.type === "toolCall")
-        return [
-          this.theme.fg(
-            "accent",
-            dialogText(`Tool call: ${String(block.name)} (${String(block.id)})`),
-          ),
-          ...this.preview(json(block.arguments), width),
-        ];
+        return this.toolCall(String(block.name), block.arguments, width);
       return this.preview(json(block), width);
     });
   }
 
   private message(message: AgentMessage, width: number): string[] {
     const cached = this.cache.get(message);
-    if (cached && cached.width === width && cached.thinking === !!this.viewport.showThinking)
-      return cached.lines;
+    if (cached && cached.width === width && cached.detail === this.detail) return cached.lines;
     const data = message as unknown as Record<string, unknown>;
     const label =
       message.role === "toolResult"
@@ -340,8 +346,110 @@ export class LiveAgentView {
         : []),
       "",
     ];
-    this.cache.set(message, { width, thinking: !!this.viewport.showThinking, lines });
+    this.cache.set(message, { width, detail: this.detail, lines });
     return lines;
+  }
+
+  /**
+   * Pi-style tool call lines, mirroring the main session's built-in renderers (`$ command`,
+   * `read path:range`, `grep /pattern/ in path`, …) instead of bare JSON. All interpolated values
+   * are sanitized; unknown tools fall back to pretty-printed JSON. Shaped by the detail mode:
+   * compact keeps one truncated line, preview keeps three wrapped rows, full keeps everything
+   * (bounded by the preview byte cap for pathological payloads).
+   */
+  private toolCall(name: string, args: unknown, width: number): string[] {
+    const data = object(args);
+    const str = (key: string): string | undefined => {
+      const value = data?.[key];
+      return typeof value === "string" ? text(value) : undefined;
+    };
+    const num = (key: string): number | undefined => {
+      const value = data?.[key];
+      return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+    };
+    const title = (value: string) => this.theme.fg("accent", value);
+    const detail = (value: string) => this.theme.fg("muted", value);
+    const path = str("file_path") ?? str("path");
+    let lines: string[];
+    switch (name) {
+      case "bash":
+      case "powershell": {
+        const prompt = name === "bash" ? "$" : ">";
+        const command = (str("command") ?? "...").split("\n");
+        const timeout = num("timeout");
+        lines = [
+          `${title(`${prompt} ${command[0]}`)}${timeout ? detail(` (timeout ${timeout}s)`) : ""}`,
+          ...command.slice(1),
+        ];
+        break;
+      }
+      case "read": {
+        const offset = num("offset");
+        const limit = num("limit");
+        const range =
+          offset == null && limit == null
+            ? ""
+            : this.theme.fg(
+                "warning",
+                `:${offset ?? 1}${limit != null ? `-${(offset ?? 1) + limit - 1}` : ""}`,
+              );
+        lines = [`${title("read")} ${path ?? "?"}${range}`];
+        break;
+      }
+      case "edit":
+        lines = [`${title("edit")} ${path ?? "?"}`];
+        break;
+      case "write": {
+        lines = [`${title("write")} ${path ?? "?"}`];
+        const content = str("content");
+        if (content) {
+          const contentLines = content.split("\n");
+          while (contentLines.length && contentLines.at(-1) === "") contentLines.pop();
+          lines.push(...contentLines);
+        }
+        break;
+      }
+      case "grep": {
+        const pattern = str("pattern");
+        const glob = str("glob");
+        const limit = num("limit");
+        lines = [
+          `${title("grep")} ${this.theme.fg("accent", `/${pattern ?? ""}/`)}` +
+            `${path ? detail(` in ${path}`) : ""}${glob ? detail(` (${glob})`) : ""}` +
+            `${limit != null ? detail(` limit ${limit}`) : ""}`,
+        ];
+        break;
+      }
+      case "find": {
+        const pattern = str("pattern");
+        const limit = num("limit");
+        lines = [
+          `${title("find")} ${this.theme.fg("accent", pattern ?? "")}` +
+            `${path ? detail(` in ${path}`) : ""}${limit != null ? detail(` (limit ${limit})`) : ""}`,
+        ];
+        break;
+      }
+      case "ls": {
+        const limit = num("limit");
+        lines = [`${title("ls")} ${path ?? "."}${limit != null ? detail(` (limit ${limit})`) : ""}`];
+        break;
+      }
+      default:
+        lines = [title(dialogText(name)), ...json(args).split("\n")];
+    }
+    if (this.detail === "compact")
+      return [truncateToWidth(lines[0] ?? "", Math.max(1, width), "…", true)];
+    const wrapped = lines.flatMap((line) => wrapTextWithAnsi(line, Math.max(1, width)));
+    if (this.detail === "preview" && wrapped.length > 3)
+      return [...wrapped.slice(0, 3), this.theme.fg("dim", "...")];
+    const bounded: string[] = [];
+    let chars = 0;
+    for (const line of wrapped) {
+      if (chars > 32768) return [...bounded, this.theme.fg("dim", "...")];
+      bounded.push(line);
+      chars += line.length;
+    }
+    return bounded;
   }
 
   render(width: number): string[] {
@@ -386,16 +494,15 @@ export class LiveAgentView {
       );
       for (const tool of snapshot.tools) {
         if (committedResults.has(tool.toolCallId)) continue;
-        body.push(
-          this.theme.fg(
-            tool.isError ? "error" : "warning",
-            dialogText(
-              `Tool ${tool.toolName} — ${tool.state}${tool.isError ? " (error)" : ""}${tool.parentToolCallId ? " (nested)" : ""}`,
-            ),
+        const call = this.toolCall(tool.toolName, tool.args, columns);
+        call[0] = `${call[0]} ${this.theme.fg(
+          tool.isError ? "error" : "warning",
+          dialogText(
+            `— ${tool.state}${tool.isError ? " (error)" : ""}${tool.parentToolCallId ? " (nested)" : ""}`,
           ),
-          ...this.preview(json(tool.args), columns),
-        );
-        if (tool.result !== undefined)
+        )}`;
+        body.push(...call);
+        if (tool.result !== undefined && this.detail !== "compact")
           body.push(...this.preview(object(tool.result)?.content ?? tool.result, columns));
         body.push("");
       }
@@ -421,7 +528,7 @@ export class LiveAgentView {
     this.saveViewport();
     const footer = this.error
       ? "Ctrl+R Retry · Tab input/transcript · Esc tree · Ctrl+Q main"
-      : `${this.editing ? "Enter steer · Tab browse" : "Tab steer · Home/End scroll · c context · t thinking"} · Esc tree · Ctrl+Q main · ↑↓/PgUp/PgDn scroll · ${this.viewport.follow ? "following" : "scrolled"}`;
+      : `${this.editing ? "Enter steer · Tab browse" : `Tab steer · Home/End scroll · c context · t view:${this.detail}`} · Esc tree · Ctrl+Q main · ↑↓/PgUp/PgDn scroll · ${this.viewport.follow ? "following" : "scrolled"}`;
     const input = this.input.render(columns)[0]!;
     const status = this.theme.fg(
       this.steerStatus ? (this.steerFailed ? "error" : "muted") : this.error ? "error" : "muted",
