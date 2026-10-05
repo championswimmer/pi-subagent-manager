@@ -12,7 +12,8 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { CombinedAutocompleteProvider, rgbColor } from "@earendil-works/pi-tui";
 import { AGENT_COLORS } from "../src/prefs/config.ts";
 import piSubagent from "../src/index.ts";
-import { loadManagerSettings } from "../src/prefs/settings.ts";
+import { DEFAULT_MANAGER_SETTINGS, loadManagerSettings } from "../src/prefs/settings.ts";
+import { subagentPrompt } from "../src/orch/prompt.ts";
 import { IMPORT_REQUEST_PREFIX, importWasOffered, markImportOffered } from "../src/prefs/agent-import.ts";
 import { createDialogDriver } from "./helpers/dialogDriver.ts";
 
@@ -134,7 +135,7 @@ test("agents command defaults to settings and saved settings persist and reach t
       { prompt: "User request", systemPrompt: "Main" },
       ctx,
     );
-    assert.match(result.systemPrompt, /Maximum depth: 5 levels including L1/);
+    assert.equal(result.systemPrompt, `Main\n\n${subagentPrompt(settings)}`);
   });
 });
 
@@ -204,7 +205,7 @@ test("saving mode changes updates tools and prompt immediately", async () => {
         assert.equal(tool.exposure, mode === "off" ? "hidden" : "direct");
       const event = await hooks.get("before_agent_start")!({ systemPrompt: "Main", prompt: "Work" }, ctx);
       if (mode === "off") assert.equal(event, undefined);
-      else assert.match(event.systemPrompt, new RegExp(mode === "orchestration" ? "Delegate every user task" : "do ordinary tasks yourself"));
+      else assert.equal(event.systemPrompt, `Main\n\n${subagentPrompt({ ...DEFAULT_MANAGER_SETTINGS, subagentMode: mode })}`);
       assert.equal(loadManagerSettings({ cwd, agentDir: cwd, includeProject: false }).settings.subagentMode, mode);
     }
   });

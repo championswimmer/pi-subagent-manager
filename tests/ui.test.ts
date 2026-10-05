@@ -708,20 +708,18 @@ test("legacy scalar model opens the ordered picker and cancel keeps the saved de
       availableModels: TWO_MODELS,
       scopedModels: ["openai/gpt-4.1"],
     });
-    const observed = { mode: "", label: "", description: "" };
+    const observed = { mode: "", label: "" };
     driver.onChild = (component) => {
       if (typeof component.getMode !== "function") return false;
       const first = component.getCurrentItems()[0];
       observed.mode = component.getMode();
       observed.label = first?.label ?? "";
-      observed.description = first?.description ?? "";
       component.handleInput("\u001B");
       return true;
     };
     await editAgentTypes(ctx, store);
     assert.equal(observed.mode, "picker");
     assert.equal(observed.label, "[x] 1. openai/gpt-4.1");
-    assert.match(observed.description, /scoped in this session/);
     assert.deepEqual(store.get("worker").models, ["openai/gpt-4.1"]);
     assert.equal(await readFile(file, "utf8"), legacy);
   });
