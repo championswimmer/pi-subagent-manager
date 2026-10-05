@@ -17,6 +17,8 @@ import { test, type TestContext } from "node:test";
 import {
   DEFAULT_MANAGER_SETTINGS as DEFAULTS,
   loadManagerSettings,
+  loadManagerSaveScope,
+  saveManagerSaveScope,
   saveManagerSettings,
   SUBAGENT_MODES,
   MODEL_SELECTION_MODES,
@@ -83,6 +85,38 @@ function assertNoTempFiles(directory: string): void {
   if (!existsSync(directory)) return;
   for (const name of readdirSync(directory)) assert.ok(!name.endsWith(".tmp"), name);
 }
+
+test("save-scope preference persists separately from manager settings with trust fallback", (t) => {
+  const f = fixture(t);
+  const scope = (includeProject = true) => loadManagerSaveScope({ agentDir: f.agentDir, includeProject });
+  assert.equal(scope(), "project");
+  assert.equal(scope(false), "user");
+  saveManagerSaveScope(f.agentDir, "user");
+  assert.equal(scope(), "user");
+  assert.equal(existsSync(f.globalFile), false);
+  assert.deepEqual(load(f), { settings: DEFAULTS, diagnostics: [] });
+  saveManagerSaveScope(f.agentDir, "project");
+  assert.equal(scope(false), "user");
+  assert.equal(scope(), "project");
+  assertNoTempFiles(join(f.agentDir, "subagent-manager"));
+});
+
+test("invalid or unsafe save-scope state falls back; writes reject symlinks", (t) => {
+  const f = fixture(t);
+  const file = join(f.agentDir, "subagent-manager", "ui-state.json");
+  const scope = () => loadManagerSaveScope({ agentDir: f.agentDir, includeProject: true });
+  for (const value of ["{broken", null, [], { saveScope: "invalid" }]) {
+    writeJson(file, value);
+    assert.equal(scope(), "project");
+  }
+  rmSync(file);
+  const target = join(f.root, "target.json");
+  writeJson(target, { saveScope: "user" });
+  symlinkSync(target, file);
+  assert.equal(scope(), "project");
+  assert.throws(() => saveManagerSaveScope(f.agentDir, "user"), /symlink/);
+  assert.deepEqual(JSON.parse(readFileSync(target, "utf8")), { saveScope: "user" });
+});
 
 test("missing files return a fresh copy of defaults without diagnostics", (t) => {
   const f = fixture(t);

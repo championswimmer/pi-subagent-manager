@@ -8,6 +8,8 @@ import {
 } from "./dialog.ts";
 import {
   DEFAULT_MANAGER_SETTINGS,
+  loadManagerSaveScope,
+  saveManagerSaveScope,
   saveManagerSettings,
   type ManagerSettings,
   type ModelSelectionMode,
@@ -150,7 +152,10 @@ async function configureAgentsDialog(
   },
 ): Promise<void> {
   let draft = { ...options.settings };
-  let scope: "user" | "project" = ctx.isProjectTrusted() ? "project" : "user";
+  let scope = loadManagerSaveScope({
+    agentDir: options.agentDir,
+    includeProject: ctx.isProjectTrusted(),
+  });
   let selectedId: string | undefined;
   while (true) {
     const dirty = JSON.stringify(draft) !== JSON.stringify(options.settings);
@@ -196,7 +201,7 @@ async function configureAgentsDialog(
           id: "scope",
           label: "Save scope",
           value: scope === "user" ? "Global" : "Current Project",
-          help: "Global: save all values shown as your defaults for every project. Existing project settings still override them, including here.\nCurrent Project: save all values shown for this project only, overriding your global defaults here. Other projects are unchanged. Requires a trusted project.\nSwitching scope only changes where you save, not the values shown.",
+          help: "Global: save all values shown as your defaults for every project. Existing project settings still override them, including here.\nCurrent Project: save all values shown for this project only, overriding your global defaults here. Other projects are unchanged. Requires a trusted project.\nSwitching scope only changes where you save, not the values shown. Your choice is remembered across projects and restarts, even if you cancel.",
         },
         {
           id: "types",
@@ -281,7 +286,11 @@ async function configureAgentsDialog(
             "Project settings require a trusted project; saving globally.",
             "warning",
           );
-        else scope = scope === "user" ? "project" : "user";
+        else {
+          const nextScope = scope === "user" ? "project" : "user";
+          saveManagerSaveScope(options.agentDir, nextScope);
+          scope = nextScope;
+        }
       } else if (action === "defaults") draft = { ...DEFAULT_MANAGER_SETTINGS };
       else if (action === "types") {
         await editAgentTypes(ctx, options.store, draft.nerdFontIcons);

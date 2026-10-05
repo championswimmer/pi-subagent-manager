@@ -126,3 +126,8 @@ Lower it to keep the tree tidy. Raise it for long sessions with many agents. Whe
 ## Scope
 
 The dialog's scope field picks where to save: **global** or **trusted project**.
+Your selection is remembered across dialog reopenings, projects, and Pi restarts,
+even if you cancel. It is stored separately from manager settings in
+`<agentDir>/subagent-manager/ui-state.json`. Untrusted projects always use Global
+without overwriting your remembered choice. Existing project settings still
+override global defaults; switching scope does not change the values shown.

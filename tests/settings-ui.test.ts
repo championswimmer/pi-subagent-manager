@@ -21,14 +21,17 @@ type Menu = { title: string; rows: DialogRow[] };
 async function run(
   t: TestContext,
   actions: (string | undefined)[],
-  { settings = DEFAULT_MANAGER_SETTINGS, trusted = false, width = 80 } = {} as {
+  { settings = DEFAULT_MANAGER_SETTINGS, trusted = false, width = 80, root: existingRoot, agentDir: existingAgentDir } = {} as {
     settings?: ManagerSettings;
     trusted?: boolean;
     width?: number;
+    root?: string;
+    agentDir?: string;
   },
 ) {
-  const root = mkdtempSync(join(tmpdir(), "pi-settings-ui-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const root = existingRoot ?? mkdtempSync(join(tmpdir(), "pi-settings-ui-"));
+  if (!existingRoot) t.after(() => rmSync(root, { recursive: true, force: true }));
+  const agentDir = existingAgentDir ?? root;
   const notifications: string[] = [];
   const menus: Menu[] = [];
   const driver = createDialogDriver({
@@ -53,8 +56,8 @@ async function run(
   } as unknown as ExtensionCommandContext;
   let applied = 0;
   await configureAgents(ctx, {
-    store: new ConfigStore({ cwd: root, agentDir: root, includeProject: false }),
-    agentDir: root,
+    store: new ConfigStore({ cwd: root, agentDir, includeProject: false }),
+    agentDir,
     settings: { ...settings },
     apply: () => applied++,
   });
@@ -66,13 +69,14 @@ async function run(
   assert.ok(driver.stats.frameHeights.every((frame) => frame === height));
   const value = (menu: number, id: string) => menus[menu]?.rows.find((row) => row.id === id)?.value;
   return {
+    root,
     applied,
     notifications,
     menus,
     renders: driver.renders,
     value,
-    loaded: loadManagerSettings({ cwd: root, agentDir: root, includeProject: true }),
-    userFile: join(root, "subagent-manager", "settings.json"),
+    loaded: loadManagerSettings({ cwd: root, agentDir, includeProject: true }),
+    userFile: join(agentDir, "subagent-manager", "settings.json"),
     projectFile: join(root, ".pi", "agent", "subagent-manager", "settings.json"),
   };
 }
@@ -310,6 +314,42 @@ test("project scope requires trust; trusted projects save to the project file", 
   assert.equal(toggled.value(1, "scope"), "Global");
   assert.equal(existsSync(toggled.userFile), true);
   assert.equal(existsSync(toggled.projectFile), false);
+});
+
+test("Global save scope sticks across reopenings and projects without changing precedence", async (t) => {
+  const initial = await run(t, ["save"], {
+    trusted: true,
+    settings: { ...DEFAULT_MANAGER_SETTINGS, maxLevels: 7 },
+  });
+  const global = await run(t, ["scope", "maxLevels", "5", "save"], {
+    trusted: true,
+    root: initial.root,
+  });
+  assert.equal(global.value(1, "scope"), "Global");
+  assert.equal(JSON.parse(readFileSync(global.userFile, "utf8")).maxLevels, 5);
+  assert.equal(global.loaded.settings.maxLevels, 7); // Project override still wins.
+  assert.deepEqual(global.loaded.diagnostics, []);
+
+  const reopened = await run(t, ["cancel"], { trusted: true, root: initial.root });
+  assert.equal(reopened.value(0, "scope"), "Global");
+  const otherProject = await run(t, ["save"], { trusted: true, agentDir: initial.root });
+  assert.equal(otherProject.value(0, "scope"), "Global");
+  assert.equal(existsSync(otherProject.projectFile), false);
+});
+
+test("scope selection persists even on cancel; untrusted fallback does not overwrite it", async (t) => {
+  const global = await run(t, ["scope", "cancel"], { trusted: true });
+  assert.equal(existsSync(global.userFile), false);
+  assert.equal(existsSync(global.projectFile), false);
+  const project = await run(t, ["scope", "cancel"], { trusted: true, root: global.root });
+  assert.equal(project.value(0, "scope"), "Global");
+  assert.equal(project.value(1, "scope"), "Current Project");
+  const untrusted = await run(t, ["scope", "save"], { root: global.root });
+  assert.equal(untrusted.value(0, "scope"), "Global");
+  assert.ok(untrusted.notifications.some((message) => message.includes("trusted project")));
+  assert.equal(existsSync(untrusted.projectFile), false);
+  const trustedAgain = await run(t, ["cancel"], { trusted: true, root: global.root });
+  assert.equal(trustedAgain.value(0, "scope"), "Current Project");
 });
 
 test("Tool Filtering explains and saves every mode", async (t) => {

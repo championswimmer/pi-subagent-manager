@@ -174,7 +174,7 @@ function layer(base: string, segments: string[]): SettingsLayer {
   return { filePath: join(current, "settings.json"), directories };
 }
 
-function readLayer(entry: SettingsLayer): Partial<ManagerSettings> | undefined {
+function readLayerContent(entry: SettingsLayer): string | undefined {
   for (const directory of entry.directories) {
     const stat = assertNotSymlinkPath(directory);
     if (!stat) return undefined;
@@ -185,7 +185,47 @@ function readLayer(entry: SettingsLayer): Partial<ManagerSettings> | undefined {
   if (!stat) return undefined;
   if (!stat.isFile())
     throw new Error(`Settings must be a regular file: ${entry.filePath}`);
-  return parseSettings(readFileSync(entry.filePath, "utf8"));
+  return readFileSync(entry.filePath, "utf8");
+}
+
+function readLayer(entry: SettingsLayer): Partial<ManagerSettings> | undefined {
+  const content = readLayerContent(entry);
+  return content === undefined ? undefined : parseSettings(content);
+}
+
+export type ManagerSaveScope = "user" | "project";
+
+function uiStateLayer(agentDir: string): SettingsLayer {
+  const entry = layer(agentDir, ["subagent-manager"]);
+  return { ...entry, filePath: join(dirname(entry.filePath), "ui-state.json") };
+}
+
+/** UI preference only: never participates in manager-settings precedence. */
+export function loadManagerSaveScope(options: {
+  agentDir: string;
+  includeProject: boolean;
+}): ManagerSaveScope {
+  if (!options.includeProject) return "user";
+  try {
+    const content = readLayerContent(uiStateLayer(options.agentDir));
+    if (content !== undefined) {
+      const state: unknown = JSON.parse(content);
+      if (
+        state && typeof state === "object" && !Array.isArray(state) &&
+        "saveScope" in state && state.saveScope === "user"
+      ) return "user";
+    }
+  } catch {
+    // Missing, invalid or unsafe UI state must not prevent opening settings.
+  }
+  return "project";
+}
+
+export function saveManagerSaveScope(agentDir: string, scope: ManagerSaveScope): void {
+  if (scope !== "user" && scope !== "project") throw new Error("Invalid settings scope");
+  const entry = uiStateLayer(agentDir);
+  ensureScopeDirectories(entry.directories);
+  writeAtomically(entry, `${JSON.stringify({ saveScope: scope }, null, 2)}\n`);
 }
 
 function detail(error: unknown): string {
