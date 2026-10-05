@@ -11,6 +11,41 @@ An agent type is one Markdown file: YAML frontmatter on top, system prompt below
 
 Precedence: **project > user > bundled**. A file with the same `name` as a bundled agent replaces it.
 
+## Tweak settings or fork the agent?
+
+Two ways to customize a bundled agent. Pick one per agent — a scope (user or
+project) cannot hold both a `.md` and a `.yml` for the same name.
+
+| | Tweak settings (`<name>.yml`) | Fork agent (`<name>.md`) |
+|---|---|---|
+| What it is | Settings-only override merged on top of the bundled definition | Full copy that replaces the bundled definition |
+| System prompt | Stays bundled; you keep receiving prompt updates | Copied; you own it, bundled prompt updates no longer apply |
+| Editable | Settings (models, tools, thinking, color, icon, description) | Everything, including name and system prompt |
+| File | Plain YAML mapping, no frontmatter, no Markdown body | YAML frontmatter on top, system prompt below |
+
+`~/.pi/agent/subagent-manager/agents/coder.yml`:
+
+```yaml
+name: coder
+thinkingLevel: low
+tools:
+  allow:
+    - read
+    - grep
+    - agent_update
+    - agent_pause
+```
+
+Only listed fields override; everything else follows the base definition, so
+untouched settings keep tracking bundled updates. Set an optional field to
+`null` to clear it back to the base state (e.g. `icon: null`). `name`, when
+present, must match the filename. Overrides need a base agent to merge onto —
+a `.yml` without a matching bundled or forked definition is rejected.
+
+In `/agents types`, editing a bundled agent asks you to pick one mode first,
+and settings stay locked until you choose. Overrides cannot rename the agent
+or edit the system prompt — fork it instead.
+
 These are the only locations read. Other packages' `~/.pi/agent/agents` or `.pi/agents` are ignored — use [`/agents import`](importing-agents.md) for those.
 
 ## 2. Write the file

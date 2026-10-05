@@ -1032,6 +1032,7 @@ function fieldLabels(fields: {
   color?: string;
 }): string[] {
   return [
+    "Customization",
     `name: ${fields.name}`,
     `description: ${fields.description}`,
     `models: ${fields.models ?? INHERIT}`,
@@ -1394,4 +1395,95 @@ test("model suggestion edits save display names, reject duplicates, empty clears
     assert.equal(store.get("worker").description, "Still empty");
     assert.match(await persisted(), /modelSuggestions: \[\]/);
   });
+});
+
+async function bundledFixture() {
+  const root = await mkdtemp(join(tmpdir(), "pi-subagent-override-ui-"));
+  const agentDir = join(root, "global");
+  const bundledDir = join(root, "bundled");
+  await mkdir(userAgentsDir(agentDir), { recursive: true });
+  await mkdir(bundledDir, { recursive: true });
+  const body = "# Bundled prompt\n\nFollow the task.\n";
+  await writeFile(
+    join(bundledDir, "coder.md"),
+    serializeAgentType({
+      name: "coder",
+      description: "Bundled coder",
+      systemPrompt: body,
+      thinkingLevel: "high",
+    }),
+  );
+  const store = new ConfigStore({ cwd: root, agentDir, bundledDir, includeProject: false });
+  return { root, agentDir, bundledDir, store, body };
+}
+
+test("bundled tweak-settings saves a sparse .yml and locks prompt and name", async () => {
+  const fixture = await bundledFixture();
+  try {
+    const run = async (choices: (string | undefined)[], inputs: (string | undefined)[] = []) => {
+      const context = editorContext(fixture.root, choices, inputs);
+      await editAgentTypes(context.ctx, fixture.store);
+      return context;
+    };
+    const locked = await run(["coder", "override", "systemPrompt", "name", "Cancel", undefined]);
+    assert.equal(locked.editors.length, 0);
+    assert.match(locked.diagnostics.join("\n"), /bundled definition/);
+    assert.match(locked.diagnostics.join("\n"), /cannot rename/);
+    assert.deepEqual(await readdir(userAgentsDir(fixture.agentDir)), []);
+    assert.ok(
+      locked.menus.some((menu) => menu.title === "Customize coder"),
+      "mode picker appears before any setting can change",
+    );
+
+    await run(["coder", "override", "thinkingLevel", "low", "Save", "Global", undefined]);
+    assert.deepEqual(await readdir(userAgentsDir(fixture.agentDir)), ["coder.yml"]);
+    assert.equal(fixture.store.get("coder").thinkingLevel, "low");
+    assert.equal(fixture.store.get("coder").systemPrompt, fixture.body);
+    assert.equal(fixture.store.get("coder").customization?.kind, "override");
+    assert.equal(
+      await readFile(join(userAgentsDir(fixture.agentDir), "coder.yml"), "utf8"),
+      "name: coder\nthinkingLevel: low\n",
+    );
+    assert.equal(
+      await readFile(join(fixture.bundledDir, "coder.md"), "utf8"),
+      serializeAgentType({
+        name: "coder",
+        description: "Bundled coder",
+        systemPrompt: fixture.body,
+        thinkingLevel: "high",
+      }),
+    );
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("bundled fork copies the full definition including prompt edits", async () => {
+  const fixture = await bundledFixture();
+  try {
+    const prompt = "# Forked prompt\n\nMy own instructions.\n";
+    const context = editorContext(
+      fixture.root,
+      ["coder", "fork", "systemPrompt", "Save", "Global", undefined],
+      [prompt],
+    );
+    await editAgentTypes(context.ctx, fixture.store);
+    assert.deepEqual(await readdir(userAgentsDir(fixture.agentDir)), ["coder.md"]);
+    assert.equal(fixture.store.get("coder").systemPrompt, prompt);
+    assert.equal(fixture.store.get("coder").customization?.kind, "fork");
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("cancelling the customization picker leaves bundled definitions untouched", async () => {
+  const fixture = await bundledFixture();
+  try {
+    const context = editorContext(fixture.root, ["coder", undefined, undefined]);
+    await editAgentTypes(context.ctx, fixture.store);
+    assert.deepEqual(await readdir(userAgentsDir(fixture.agentDir)), []);
+    assert.equal(fixture.store.get("coder").source, "bundled");
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
 });
