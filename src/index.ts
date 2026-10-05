@@ -373,6 +373,10 @@ export default function piSubagent(pi: ExtensionAPI): void {
       rootSnapshot: () => buildSessionContext(requireContext().sessionManager.getBranch()).messages,
       getType: (name) => store.get(name),
       toolsFor: (path) => agentTools(requireManager, path, () => store.list()),
+      onEventError: (error, event) => {
+        const message = error instanceof Error ? error.message : String(error);
+        context?.ui.notify(`Subagent ${event.kind} notification failed: ${message}`, "warning");
+      },
       onEvent: (event) => {
         if (token !== generation) return;
         refreshWidget(requireContext());

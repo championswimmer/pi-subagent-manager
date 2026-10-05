@@ -7,6 +7,7 @@ import type {
   SavedThread,
   SavedThreadView,
   ThreadService,
+  ThreadEvent,
   ThreadView,
   TranscriptListener,
   TranscriptObservation,
@@ -357,7 +358,7 @@ export class ThreadManager {
       throw new Error("Progress message must contain 1–8000 characters");
     record.view.status = message;
     this.touch(record);
-    this.options.onEvent?.({
+    this.emit({
       kind: "update",
       thread: this.view(record),
       message,
@@ -519,7 +520,7 @@ export class ThreadManager {
         markStarted(); // Failed/cancelled initialization must also release callers waiting to steer.
         this.touch(record);
         if (!this.disposed && epoch === this.epoch)
-          this.options.onEvent?.({
+          this.emit({
             kind: "settled",
             thread: this.view(record),
             recipient: record.view.parent ?? record.view.owner,
@@ -639,10 +640,24 @@ export class ThreadManager {
       }
     }
   }
+  private emit(event: ThreadEvent): void {
+    try {
+      this.options.onEvent?.(event);
+    } catch (error) {
+      // Widgets/persistence/delivery run on the runner's event path. An exception
+      // here must not orphan a prompt promise or reject detached settlement.
+      try {
+        if (this.options.onEventError) this.options.onEventError(error, event);
+        else console.warn(`Subagent ${event.kind} notification failed: ${errorText(error)}`);
+      } catch {
+        /* A failing diagnostic sink must not turn a notification into a crash. */
+      }
+    }
+  }
   private touch(record: Record): void {
     record.view.updatedAt = Date.now();
     this.publishTranscript(record);
-    if (!this.disposed) this.options.onEvent?.({ kind: "change", thread: this.view(record) });
+    if (!this.disposed) this.emit({ kind: "change", thread: this.view(record) });
   }
   /** Fold driver-cumulative usage into persisted totals. Partials only refresh the live view. */
   private applyUsage(
@@ -656,7 +671,7 @@ export class ThreadManager {
       if (input === record.liveInputTokens && output === record.liveOutputTokens) return;
       record.liveInputTokens = input;
       record.liveOutputTokens = output;
-      if (!this.disposed) this.options.onEvent?.({ kind: "metrics", thread: this.view(record) });
+      if (!this.disposed) this.emit({ kind: "metrics", thread: this.view(record) });
       return;
     }
     record.view.inputTokens =
