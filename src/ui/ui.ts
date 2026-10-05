@@ -473,7 +473,7 @@ export function renderAgentTree(
     lines.push(agentLine(row, columns, theme, nerdFontIcons));
     lines.push(activityLine(row, columns, theme));
   }
-  lines.push(agentWidgetStatus(live, omitted, columns, theme, showBrowserHint));
+  lines.push(agentWidgetStatus(live, omitted, columns, theme, showBrowserHint && live > 0));
   return lines;
 }
 
@@ -521,7 +521,7 @@ export function renderAgentSummary(
   const right = theme.fg("muted", `↑${formatCount(input)} ↓${formatCount(output)}`);
   const columns = Math.max(0, width);
   const lines = [fitLine(left, right, columns)];
-  if (showBrowserHint)
+  if (showBrowserHint && counts.running > 0)
     lines.push(truncateToWidth(theme.fg("muted", AGENT_BROWSER_HINT), columns, ""));
   return lines;
 }

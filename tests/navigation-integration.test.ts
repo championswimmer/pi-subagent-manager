@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { mock } from "node:test";
 import { SessionManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
 import { setKeybindings, TuiMainScreen, type Terminal } from "@earendil-works/pi-tui";
 import piSubagent from "../src/index.ts";
 import { markImportOffered } from "../src/prefs/agent-import.ts";
+import { ThreadManager } from "../src/orch/manager.ts";
+import type { ThreadView } from "../src/types.ts";
 import { AgentNavigationEditor } from "../src/ui/agent-navigation-editor.ts";
 import { StatusDialog } from "../src/ui/status-ui.ts";
 import { createDialogDriver } from "./helpers/dialogDriver.ts";
@@ -30,6 +32,10 @@ class FakeTerminal implements Terminal {
   setProgress() {}
 }
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+const thread = (state: ThreadView["state"], path = "/root/worker"): ThreadView => ({
+  path, parent: "/root", owner: "/root", type: "worker", state,
+  task: "Work", status: state, createdAt: 1, updatedAt: 1,
+});
 
 async function fixture(
   run: (state: {
@@ -43,12 +49,14 @@ async function fixture(
   options: {
     mode?: "tui" | "rpc"; hasUI?: boolean; draft?: string;
     competingEditor?: boolean; reason?: "startup" | "resume";
+    threads?: ThreadView[];
   } = {},
 ) {
   const cwd = mkdtempSync(join(tmpdir(), "pi-agent-navigation-"));
   const oldDir = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = cwd;
   markImportOffered(cwd);
+  const list = mock.method(ThreadManager.prototype, "list", () => options.threads ?? []);
   const hooks = new Map<string, Function>();
   const sessionManager = SessionManager.inMemory(cwd);
   sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
@@ -104,6 +112,7 @@ async function fixture(
     await run({ editor: () => editor, installations: () => installations, command, ctx, hooks, driver });
   } finally {
     await hooks.get("session_shutdown")?.({}, ctx);
+    list.mock.restore();
     host.stop();
     if (oldDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldDir;
@@ -129,7 +138,7 @@ test("root installs the public editor and command/gesture use the same tree with
     main.setText("");
     main.handleInput("\x1b[A");
     assert.equal(main.getText(), "old prompt", "resumed session history is hydrated");
-  });
+  }, { threads: [thread("running")] });
 });
 
 test("startup lets the host hydrate prompt history exactly once", async () => {
@@ -156,7 +165,52 @@ test("session tree does not reinstall the editor and root shutdown cancels queue
     await hooks.get("session_shutdown")!({}, ctx);
     await settle();
     assert.equal(driver.stats.outerOpens, 0);
-  });
+  }, { threads: [thread("running")] });
+});
+
+test("Left opens only for live subagents, while the tree command always remains available", async () => {
+  const threads: ThreadView[] = [];
+  await fixture(async ({ editor, command, ctx, driver }) => {
+    const main = editor()!;
+    for (const text of ["", "unfinished draft"]) {
+      main.setText(text);
+      main.handleInput("\x1b[H");
+      const cursor = main.getCursor();
+      const idleCases = [
+        [], [thread("running", "/root")],
+        ...(["paused", "completed", "failed", "stopped"] as const).map((state) => [thread(state)]),
+      ];
+      for (const idle of idleCases) {
+        threads.splice(0, threads.length, ...idle);
+        const opens = driver.stats.outerOpens;
+        main.handleInput("\x1b[D");
+        await settle();
+        assert.equal(driver.stats.outerOpens, opens, JSON.stringify(idle));
+        assert.equal(main.getText(), text);
+        assert.deepEqual(main.getCursor(), cursor);
+        await command.handler("tree", ctx);
+        assert.equal(driver.stats.outerOpens, opens + 1, "explicit command ignores activity");
+      }
+      for (const state of ["starting", "running"] as const) {
+        for (const path of ["/root/worker", "/root/parent/child", "/independent"]) {
+          threads.splice(0, threads.length, thread("completed"), thread(state, path));
+          const opens = driver.stats.outerOpens;
+          main.handleInput("\x1b[D");
+          await settle();
+          assert.equal(driver.stats.outerOpens, opens + 1, `${path}: ${state}`);
+          assert.equal(main.getText(), text);
+          assert.deepEqual(main.getCursor(), cursor);
+        }
+      }
+    }
+    // A child can settle after dispatch but before the deferred open.
+    threads.splice(0, threads.length, thread("running"));
+    const opens = driver.stats.outerOpens;
+    main.handleInput("\x1b[D");
+    threads[0]!.state = "completed";
+    await settle();
+    assert.equal(driver.stats.outerOpens, opens);
+  }, { threads });
 });
 
 test("non-TUI contexts and existing editors leave the custom-editor slot untouched", async () => {
