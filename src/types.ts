@@ -190,6 +190,8 @@ export interface ManagerOptions {
   getType(name: string): AgentType;
   toolsFor(path: string): ToolDefinition[];
   onEvent?(event: ThreadEvent): void;
+  /** Notification failures are diagnostic only; they must never interrupt a runner. */
+  onEventError?(error: unknown, event: ThreadEvent): void;
   /** Maximum levels including the main conversation as L1; defaults to 3. */
   maxLevels?: number;
   /** @deprecated Internal legacy path-depth override; prefer maxLevels. */
