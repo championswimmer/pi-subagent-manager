@@ -24,6 +24,7 @@ import {
 import {
   AGENT_COLORS,
   ConfigStore,
+  diffAgentSettings,
   parseAgentType,
   serializeAgentType,
 } from "../prefs/config.ts";
@@ -986,7 +987,13 @@ function assertSaveDestination(
   type: AgentType,
   original: AgentType | undefined,
   scope: "user" | "project",
+  kind: AgentEditMode = "fork",
 ): void {
+  if (kind === "override" && original && type.name !== original.name) {
+    throw new Error(
+      "Settings overrides cannot rename the agent; fork it instead.",
+    );
+  }
   const entries = store.list();
   const sameName = entries.find((entry) => entry.name === type.name);
   if (sameName && (!original || type.name !== original.name)) {
@@ -994,7 +1001,7 @@ function assertSaveDestination(
       `Agent type ${type.name} already exists; choose a different name.`,
     );
   }
-  const destination = store.destination(type.name, scope, original);
+  const destination = store.destination(type.name, scope, original, kind);
   if (
     existsSync(destination) &&
     (!original?.filePath || resolve(original.filePath) !== destination)
@@ -1003,9 +1010,23 @@ function assertSaveDestination(
       `Refusing to overwrite existing definition ${destination}. Edit that definition instead.`,
     );
   }
+  // A scope cannot hold both a fork and an override for one name (fail-closed).
+  const otherKind: AgentEditMode = kind === "fork" ? "override" : "fork";
+  const otherDestination = store.destination(type.name, scope, undefined, otherKind);
+  if (
+    otherDestination !== destination &&
+    existsSync(otherDestination) &&
+    (!original?.filePath || resolve(original.filePath) !== otherDestination)
+  ) {
+    const kept = kind === "fork" ? ".md (full fork)" : ".yml (settings override)";
+    throw new Error(
+      `Agent type ${type.name} already has a ${otherKind === "fork" ? ".md fork" : ".yml override"} in this scope (${otherDestination}). Remove it before saving a ${kept}.`,
+    );
+  }
 }
 
 const EDIT_MENU_ACTIONS = [
+  "Customization",
   "name",
   "description",
   "models",
@@ -1024,9 +1045,12 @@ const EDIT_MENU_ACTIONS = [
   "Cancel",
 ] as const;
 
+type AgentEditMode = "fork" | "override";
+
 type EditMenuAction = (typeof EDIT_MENU_ACTIONS)[number];
 
 const EDIT_FIELD_LABELS: Record<EditMenuAction, string> = {
+  Customization: "Customization",
   name: "Name",
   description: "Description",
   models: "Models",
@@ -1046,6 +1070,8 @@ const EDIT_FIELD_LABELS: Record<EditMenuAction, string> = {
 };
 
 const EDIT_FIELD_HELP: Record<EditMenuAction, string> = {
+  Customization:
+    "Settings override tweaks bundled settings via <name>.yml and keeps receiving prompt updates. Fork copies everything into <name>.md and you own the prompt.",
   name: "Unique type identifier. Renaming retains the original file.",
   description: "Description shown when browsing and spawning agents.",
   models:
@@ -1102,6 +1128,48 @@ function modelSuggestionLabel(suggestions: string[] | undefined): string {
 
 function modelSuggestionPrefill(suggestions: string[] | undefined): string {
   return (suggestions ?? []).map((name) => sanitizeText(name)).join("\n");
+}
+
+function customizationMenuValue(
+  editMode: AgentEditMode | undefined,
+  isNew: boolean,
+): string {
+  if (isNew) return "New full definition (.md)";
+  if (editMode === "override") return "Settings override (.yml)";
+  if (editMode === "fork") return "Full copy (.md)";
+  return "Choose to unlock editing";
+}
+
+/** Bundled definitions are read-only until the user picks fork or override. */
+function isPureBundled(original: AgentType | undefined): boolean {
+  return !!original && !original.customization && original.source === "bundled";
+}
+
+async function chooseCustomizationMode(
+  ctx: ExtensionCommandContext,
+  agentName: string,
+  current?: AgentEditMode,
+): Promise<AgentEditMode | undefined> {
+  const value = await dialogMenu(
+    ctx,
+    `Customize ${sanitizeText(agentName)}`,
+    [
+      {
+        id: "override",
+        label: "Tweak settings",
+        value: `${agentName}.yml`,
+        help: "Override only settings (models, tools, thinking, color). The prompt stays bundled and keeps receiving updates. System prompt and name stay locked.",
+      },
+      {
+        id: "fork",
+        label: "Fork agent",
+        value: `${agentName}.md`,
+        help: "Copy the full definition including the system prompt. You own the prompt; bundled updates no longer apply. Everything is editable.",
+      },
+    ],
+    { selectedId: current },
+  );
+  return value === "override" || value === "fork" ? value : undefined;
 }
 
 function editMenuLabel(action: EditMenuAction, draft: AgentType): string {
@@ -1167,6 +1235,7 @@ async function editAgentTypesDialog(
     if (selection === undefined) return;
     const original =
       selection === "Create new type" ? undefined : store.get(selection);
+    const isNew = !original;
     let draft: AgentType = original
       ? structuredClone(original)
       : { name: "new-agent", description: "New agent", systemPrompt: "" };
@@ -1176,8 +1245,24 @@ async function editAgentTypesDialog(
       original?.source === "project" && store.canSaveProject()
         ? "project"
         : "user";
+    // Bundled definitions stay read-only until the user picks how to own them.
+    let editMode: AgentEditMode | undefined = isNew
+      ? "fork"
+      : (original?.customization?.kind ?? undefined);
+    if (!isNew && isPureBundled(original)) {
+      const mode = await chooseCustomizationMode(ctx, original.name);
+      if (!mode) continue;
+      editMode = mode;
+    }
     while (true) {
-      const dirty = !original || serializeAgentType(draft) !== originalContent;
+      const baseForDiff =
+        editMode === "override" && original
+          ? (store.getBase(original.name) ?? original)
+          : undefined;
+      const dirty =
+        editMode === "override" && baseForDiff
+          ? Object.keys(diffAgentSettings(baseForDiff, draft)).length > 1
+          : !original || serializeAgentType(draft) !== originalContent;
       const field = await dialogMenu(
         ctx,
         `Edit ${sanitizeText(draft.name)} (unsaved)`,
@@ -1189,23 +1274,29 @@ async function editAgentTypesDialog(
             label: EDIT_FIELD_LABELS[action],
             valueColor: action === "Save" && dirty ? "warning" as const : undefined,
             value:
-              action === "Save" && dirty
-                ? "(changes)"
-                : action === "Source"
-                  ? (original?.source ?? "New draft")
-                  : action === "Save scope"
-                    ? saveScope === "user"
-                      ? "Global"
-                      : "Trusted project"
-                    : action === "icon" && nerdFontIcons && draft.icon
-                      ? draft.icon
-                      : separator >= 0
-                        ? decorated.slice(separator + 2)
-                        : "",
+              action === "Customization"
+                ? customizationMenuValue(editMode, isNew)
+                : action === "Save" && dirty
+                  ? "(changes)"
+                  : action === "Source"
+                    ? (original?.customization
+                      ? `${original.customization.scope} ${original.customization.kind} over ${original.baseSource ?? "bundled"}`
+                      : (original?.source ?? "New draft"))
+                    : action === "Save scope"
+                      ? saveScope === "user"
+                        ? "Global"
+                        : "Trusted project"
+                      : action === "icon" && nerdFontIcons && draft.icon
+                        ? draft.icon
+                        : separator >= 0
+                          ? decorated.slice(separator + 2)
+                          : "",
             help:
               action === "Source"
-                ? (original?.filePath ??
-                  "Not saved yet. Bundled definitions are copied, never overwritten.")
+                ? (original?.customization
+                  ? `Settings file: ${original.customization.filePath}. Base prompt: ${original.baseFilePath ?? "(bundled)"}.`
+                  : (original?.filePath ??
+                    "Not saved yet. Bundled definitions are copied, never overwritten."))
                 : EDIT_FIELD_HELP[action],
           };
         }),
@@ -1218,12 +1309,74 @@ async function editAgentTypesDialog(
       selectedId = field;
       if (!field || field === "Cancel") break;
       try {
+        if (field === "Customization") {
+          if (isNew) {
+            ctx.ui.notify("New types are always full definitions (.md).", "info");
+            continue;
+          }
+          const mode = await chooseCustomizationMode(ctx, draft.name, editMode);
+          if (!mode) continue;
+          if (mode !== editMode && mode === "override" && original) {
+            // Overrides carry no prompt body; drop any prompt edits.
+            const base = store.getBase(original.name) ?? original;
+            draft.systemPrompt = base.systemPrompt;
+            ctx.ui.notify(
+              "Switched to settings override: prompt edits were dropped (the bundled prompt applies).",
+              "info",
+            );
+          }
+          editMode = mode;
+          continue;
+        }
+        if (!isNew && !editMode) {
+          ctx.ui.notify(
+            "Pick Customization first: tweak settings (.yml) or fork the agent (.md).",
+            "error",
+          );
+          continue;
+        }
+        if (
+          editMode === "override" &&
+          (field === "name" ||
+            field === "systemPrompt" ||
+            field === "Edit frontmatter YAML" ||
+            field === "External editor (entire Markdown)")
+        ) {
+          ctx.ui.notify(
+            field === "name"
+              ? "Settings overrides cannot rename the agent; fork it instead."
+              : "The system prompt lives with the bundled definition; fork the agent to edit it.",
+            "error",
+          );
+          continue;
+        }
         if (field === "Save") {
+          if (!editMode) continue;
           // Round-trip before saving: no partial or invalid configuration is accepted.
           const validated = parseAgentType(serializeAgentType(draft));
           const scope = await chooseSaveScope(ctx, store, saveScope);
           if (!scope) continue;
-          assertSaveDestination(store, validated, original, scope);
+          assertSaveDestination(store, validated, original, scope, editMode);
+          if (editMode === "override") {
+            if (
+              original?.customization?.kind === "fork" &&
+              original.customization.scope === scope
+            ) {
+              store.removeCustomization(original.name, scope);
+            }
+            const saved = store.saveOverride(draft.name, validated, scope, original);
+            ctx.ui.notify(
+              `Saved settings override ${sanitizeText(saved.filePath ?? saved.name)}. Prompt and unset fields follow the base definition.`,
+              "info",
+            );
+            break;
+          }
+          if (
+            original?.customization?.kind === "override" &&
+            original.customization.scope === scope
+          ) {
+            store.removeCustomization(original.name, scope);
+          }
           const saved = store.save(validated, scope, original);
           ctx.ui.notify(
             `Saved ${sanitizeText(saved.filePath ?? saved.name)}${original && original.name !== saved.name ? " (original file retained)" : ""}.`,

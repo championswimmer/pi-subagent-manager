@@ -20,6 +20,22 @@ export interface AgentType {
   systemPrompt: string;
   filePath?: string;
   source?: "bundled" | "user" | "project";
+  /**
+   * How this definition is customized relative to its base.
+   * - fork: a full `<name>.md` copy (owns the system prompt).
+   * - override: a settings-only `<name>.yml` merged on top of the base
+   *   (no Markdown body; unset fields follow the base).
+   * Absent for pure bundled definitions and brand-new drafts.
+   */
+  customization?: {
+    kind: "fork" | "override";
+    scope: "user" | "project";
+    filePath: string;
+  };
+  /** Source of the base definition under the customization, if any. */
+  baseSource?: "bundled" | "user" | "project";
+  /** File path of the base definition under the customization, if any. */
+  baseFilePath?: string;
 }
 export type ThreadState = "starting" | "running" | "paused" | "completed" | "failed" | "stopped";
 export interface ThreadView {

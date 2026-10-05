@@ -14,8 +14,12 @@ import { test, type TestContext } from "node:test";
 import {
   AGENT_COLORS,
   ConfigStore,
+  diffAgentSettings,
+  mergeAgentSettings,
+  parseAgentSettings,
   parseAgentType,
   selectTools,
+  serializeAgentSettings,
   serializeAgentType,
 } from "../src/prefs/config.js";
 import { THINKING_LEVELS, type AgentType } from "../src/types.js";
@@ -336,4 +340,128 @@ test("symlink definitions fail closed and symlink save destinations are rejected
   assert.throws(() => trusted.get("example"));
   assert.match(trusted.diagnostics.join("\n"), /Unsafe symlink path/);
   assert.throws(() => trusted.save(definition, "project"), /Unsafe symlink path/);
+});
+
+test("settings overrides parse, reject bodies, and round-trip sparse fields", () => {
+  assert.deepEqual(parseAgentSettings("thinkingLevel: high\n"), { thinkingLevel: "high" });
+  assert.deepEqual(parseAgentSettings("name: example\ncolor: accent\n", undefined, "example"), {
+    name: "example",
+    color: "accent",
+  });
+  assert.deepEqual(parseAgentSettings("icon: null\n"), { icon: null });
+  assert.deepEqual(parseAgentSettings("model: provider/model\n").models, ["provider/model"]);
+  const roundTripped = parseAgentSettings(
+    serializeAgentSettings({ name: "example", thinkingLevel: "low", icon: null }),
+  );
+  assert.deepEqual(roundTripped, { name: "example", thinkingLevel: "low", icon: null });
+  for (const content of [
+    "---\nname: example\n---\nBody\n",
+    "systemPrompt: hello\n",
+    "prompt: hello\n",
+    "unknown: true\n",
+    "name: other\n",
+    "thinkingLevel: extreme\n",
+    "color: red\n",
+    "description: ''\n",
+    "tools:\n  deny: [bash]\n",
+  ])
+    assert.throws(
+      () => parseAgentSettings(content, "example.yml", "example"),
+      /example\.yml:/,
+    );
+});
+
+test("merges keep unset fields on the base and null clears optional fields", () => {
+  const base: AgentType = {
+    ...definition,
+    thinkingLevel: "high",
+    color: "accent",
+    icon: "",
+    tools: { allow: ["read"] },
+  };
+  const merged = mergeAgentSettings(base, { thinkingLevel: "low" });
+  assert.equal(merged.thinkingLevel, "low");
+  assert.equal(merged.color, "accent");
+  assert.equal(merged.systemPrompt, base.systemPrompt);
+  const cleared = mergeAgentSettings(base, { color: null, icon: null, tools: null });
+  assert.equal(cleared.color, undefined);
+  assert.equal(cleared.icon, undefined);
+  assert.equal(cleared.tools, undefined);
+  assert.deepEqual(diffAgentSettings(base, { ...base, thinkingLevel: "low" }), {
+    name: "example",
+    thinkingLevel: "low",
+  });
+  assert.deepEqual(diffAgentSettings(base, base), { name: "example" });
+});
+
+test("user .yml merges over bundled, project .yml merges over user, forks win", (t) => {
+  const f = fixture(t);
+  write(f.bundledDir, "example.md", {
+    thinkingLevel: "high",
+    color: "accent",
+    systemPrompt: "Base prompt\n",
+  });
+  writeFileSync(join(f.user, "example.yml"), "thinkingLevel: low\n");
+  const store = new ConfigStore({ ...f, includeProject: true });
+  assert.deepEqual(store.diagnostics, []);
+  const merged = store.get("example");
+  assert.equal(merged.thinkingLevel, "low");
+  assert.equal(merged.color, "accent");
+  assert.equal(merged.systemPrompt, "Base prompt\n");
+  assert.equal(merged.source, "user");
+  assert.deepEqual(merged.customization, {
+    kind: "override",
+    scope: "user",
+    filePath: join(f.user, "example.yml"),
+  });
+  assert.equal(store.getBase("example")?.thinkingLevel, "high");
+  writeFileSync(join(f.project, "example.yml"), "color: success\n");
+  store.reload();
+  assert.equal(store.get("example").thinkingLevel, "low");
+  assert.equal(store.get("example").color, "success");
+  assert.equal(store.get("example").source, "project");
+  rmSync(join(f.project, "example.yml"));
+  write(f.project, "example.md", { description: "Project fork" });
+  store.reload();
+  assert.equal(store.get("example").description, "Project fork");
+  assert.equal(store.get("example").customization?.kind, "fork");
+});
+
+test("override conflicts fail closed without dropping other agents", (t) => {
+  const f = fixture(t);
+  write(f.bundledDir, "example.md", {});
+  write(f.bundledDir, "other.md", { name: "other" });
+  write(f.user, "example.md", { description: "Fork" });
+  writeFileSync(join(f.user, "example.yml"), "thinkingLevel: low\n");
+  writeFileSync(join(f.user, "orphan.yml"), "description: No base\n");
+  write(f.user, "good.md", { name: "good", description: "Good fork" });
+  const store = new ConfigStore({ ...f, includeProject: false });
+  assert.throws(() => store.get("example"), /Unknown or invalid/);
+  assert.throws(() => store.get("orphan"), /Unknown or invalid/);
+  assert.equal(store.get("good").description, "Good fork");
+  assert.match(store.diagnostics.join("\n"), /not both/);
+  assert.match(store.diagnostics.join("\n"), /no base agent/);
+});
+
+test("saveOverride writes sparse .yml and removeCustomization restores the base", (t) => {
+  const f = fixture(t);
+  write(f.bundledDir, "example.md", { thinkingLevel: "high", color: "accent" });
+  const store = new ConfigStore({ ...f, includeProject: false });
+  const saved = store.saveOverride(
+    "example",
+    { ...store.get("example"), thinkingLevel: "low" },
+    "user",
+    store.get("example"),
+  );
+  assert.equal(saved.thinkingLevel, "low");
+  assert.ok(saved.filePath?.endsWith("example.yml"));
+  assert.equal(readFileSync(saved.filePath!, "utf8"), "name: example\nthinkingLevel: low\n");
+  assert.equal(store.get("example").color, "accent");
+  assert.throws(
+    () => store.saveOverride("example", { ...saved, name: "renamed" }, "user", saved),
+    /cannot rename/,
+  );
+  store.removeCustomization("example", "user");
+  assert.equal(store.get("example").thinkingLevel, "high");
+  assert.equal(store.get("example").source, "bundled");
 });
