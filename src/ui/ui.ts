@@ -531,13 +531,16 @@ export function updateWidget(
   threads: ThreadView[],
   mode: WidgetMode = "full",
   nerdFontIcons = false,
+  rootTurnEnded = false,
 ): void {
   if (!ctx.hasUI) return;
   if (!threads.some((thread) => thread.path !== "/root")) {
     ctx.ui.setWidget("pi-subagent", undefined, AGENT_WIDGET_PLACEMENT);
     return;
   }
-  const render = mode === "minimal" ? renderAgentSummary : renderAgentTree;
+  // Retain the tree while either the main turn or any subagent is still active.
+  const settled = rootTurnEnded && !threads.some(isLive);
+  const render = mode === "minimal" || settled ? renderAgentSummary : renderAgentTree;
   // RPC hosts accept string widgets only; a component factory is ignored.
   if (ctx.mode === "rpc") {
     ctx.ui.setWidget(
@@ -557,7 +560,10 @@ export function updateWidget(
         timer.unref();
       }
       return {
-        render: (width) => render(snapshot, width, ctx.ui.theme, { nerdFontIcons }),
+        render: (width) => render(snapshot, width, ctx.ui.theme, {
+          showBrowserHint: !settled,
+          nerdFontIcons,
+        }),
         invalidate: () => {},
         dispose: () => {
           if (timer) clearInterval(timer);

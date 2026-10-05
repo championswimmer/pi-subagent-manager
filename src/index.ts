@@ -48,6 +48,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
     return loaded.diagnostics;
   };
   let generation = 0;
+  let rootTurnEnded = false;
   let navigation = new AgentNavigationController();
   let navigationEditor: AgentNavigationEditor | undefined;
   let navigationEditorFactory: Parameters<ExtensionContext["ui"]["setEditorComponent"]>[0];
@@ -113,12 +114,6 @@ export default function piSubagent(pi: ExtensionAPI): void {
       importInProgress = false;
     }
   };
-  // A migration can span clarification turns. Reload after each root turn, without converting files.
-  pi.on("agent_end", async () => {
-    if (limits.subagentMode === "off" || !migrationRequested) return;
-    store.reload();
-    if (store.diagnostics.length) context?.ui.notify(store.diagnostics.join("\n"), "warning");
-  });
   const requireManager = () => {
     if (!manager) throw new Error("Subagent threads are not initialized; start a Pi session first");
     return manager;
@@ -238,8 +233,20 @@ export default function piSubagent(pi: ExtensionAPI): void {
   const refreshWidget = (ctx: ExtensionContext) => {
     if (limits.subagentMode === "off") {
       if (ctx.hasUI) ctx.ui.setWidget("pi-subagent", undefined);
-    } else updateWidget(ctx, requireManager().list(), limits.widgetMode, limits.nerdFontIcons);
+    } else updateWidget(ctx, requireManager().list(), limits.widgetMode, limits.nerdFontIcons, rootTurnEnded);
   };
+  pi.on("agent_start", async (_event, ctx) => {
+    rootTurnEnded = false;
+    if (manager) refreshWidget(ctx);
+  });
+  pi.on("agent_end", async (_event, ctx) => {
+    rootTurnEnded = true;
+    if (manager) refreshWidget(ctx);
+    // A migration can span clarification turns. Reload after each root turn, without converting files.
+    if (limits.subagentMode === "off" || !migrationRequested) return;
+    store.reload();
+    if (store.diagnostics.length) context?.ui.notify(store.diagnostics.join("\n"), "warning");
+  });
   syncTools();
   pi.on("before_agent_start", async (event, ctx) => {
     const prompt = subagentPrompt(limits);
@@ -264,6 +271,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
     if (manager) await manager.shutdown();
     inheritedTools.reset();
     context = ctx;
+    rootTurnEnded = false;
     store = new ConfigStore({
       cwd: ctx.cwd,
       agentDir: getAgentDir(),

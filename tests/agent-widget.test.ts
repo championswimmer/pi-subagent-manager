@@ -504,6 +504,60 @@ test("updateWidget pins the tree above the editor, clears when empty, and uses s
   assert.equal(calls.length, 0);
 });
 
+test("widget collapses only after the root turn ends and every real agent is idle", () => {
+  let content: unknown;
+  const ctx = {
+    hasUI: true,
+    mode: "tui",
+    ui: {
+      theme,
+      setWidget: (_key: string, value: unknown) => { content = value; },
+    },
+  } as unknown as ExtensionContext;
+  const renderLast = () => {
+    if (Array.isArray(content)) return plain(content);
+    const component = (content as (tui: { requestRender(): void }) => {
+      render(width: number): string[];
+      dispose(): void;
+    })({ requestRender() {} });
+    const lines = plain(component.render(80));
+    component.dispose();
+    return lines;
+  };
+  const agents = [
+    thread("/root"), // Synthetic main thread must not count as a running subagent.
+    ...(["completed", "failed", "paused", "stopped"] as const).map((state) =>
+      thread(`/root/${state}`, { state }),
+    ),
+  ];
+  for (const transport of ["tui", "rpc"] as const) {
+    ctx.mode = transport;
+    updateWidget(ctx, agents, "full", false, false);
+    assert.match(renderLast().join("\n"), /Agents[\s\S]*\/root\/completed/);
+
+    for (const mode of ["full", "minimal"] as const) {
+      updateWidget(ctx, agents, mode, false, true);
+      const lines = renderLast();
+      assert.equal(lines.length, 1);
+      assert.match(lines[0]!, /^0 running, 1 stopped, 1 failed, 1 paused, 1 completed/);
+      assert.doesNotMatch(lines[0]!, /Agents|\/root|Press ←/);
+    }
+
+    for (const state of ["starting", "running"] as const) {
+      updateWidget(ctx, [...agents, thread("/independent", { state })], "full", false, true);
+      assert.match(renderLast().join("\n"), /Agents[\s\S]*\/independent/);
+    }
+    // The next change after the final child settles collapses the tree too.
+    updateWidget(ctx, agents, "full", false, true);
+    assert.equal(renderLast().length, 1);
+    // A new main turn restores the user's configured full preview.
+    updateWidget(ctx, agents, "full", false, false);
+    assert.match(renderLast().join("\n"), /Agents/);
+    updateWidget(ctx, [], "full", false, true);
+    assert.equal(content, undefined);
+  }
+});
+
 test("minimal summary counts unique real agents with semantic colors and active-only token sums", () => {
   const threads = [
     thread("/root", { inputTokens: 999_999, outputTokens: 999_999 }),

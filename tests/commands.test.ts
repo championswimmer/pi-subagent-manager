@@ -138,6 +138,37 @@ test("agents command defaults to settings and saved settings persist and reach t
   });
 });
 
+test("root turn lifecycle collapses the settled preview without losing the agent tree", async () => {
+  await withCommands(async ({ command, ctx, hooks, widgets, renders }) => {
+    seedThreads(ctx, ["/root/done"]);
+    await hooks.get("session_tree")!({}, ctx);
+    const preview = () => {
+      const component = (widgets.at(-1) as Function)({ requestRender() {} });
+      const lines = component.render(100) as string[];
+      component.dispose();
+      return lines;
+    };
+    assert.match(preview().join("\n"), /Agents[\s\S]*\/root\/done/);
+    await hooks.get("agent_start")!({}, ctx);
+    assert.match(preview().join("\n"), /Agents/);
+    await hooks.get("agent_end")!({}, ctx);
+    assert.equal(preview().length, 1);
+    assert.match(preview()[0]!, /0 running, 1 completed/);
+
+    await command.handler("tree", ctx);
+    assert.ok(renders.some((lines) => lines.join("\n").includes("/root/done")));
+    assert.equal(preview().length, 1);
+
+    await hooks.get("agent_start")!({}, ctx);
+    assert.match(preview().join("\n"), /Agents[\s\S]*\/root\/done/);
+    await hooks.get("agent_end")!({}, ctx);
+    assert.equal(preview().length, 1);
+    // A replacement session must not inherit the previous root turn's state.
+    await hooks.get("session_tree")!({}, ctx);
+    assert.match(preview().join("\n"), /Agents/);
+  });
+});
+
 test("off startup is silent: no onboarding, visible widget, or tool exposure", async () => {
   await withCommands(async ({ hooks, ctx, tools, renders, notifications, widgets, cwd }) => {
     assert.equal(importWasOffered(cwd), false);
