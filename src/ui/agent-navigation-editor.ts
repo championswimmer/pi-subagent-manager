@@ -16,6 +16,9 @@ export interface AgentNavigationEditorOptions {
   /** Must return the whole navigation interaction, so repeated Left cannot reopen it. */
   openTree(): void | Promise<void>;
   canOpen(): boolean;
+  /** Session-local widget collapse; never saves the configured display mode. */
+  collapseWidget?(): void | Promise<void>;
+  canCollapse?(): boolean;
   /** Root ownership token; changing it invalidates queued transitions. */
   generation(): unknown;
   onError?(error: unknown): void;
@@ -27,12 +30,12 @@ export interface AgentNavigationEditorOptions {
 }
 
 /**
- * Physical Left boundary adapter. It owns no session/history internals and never
+ * Physical arrow boundary adapter. It owns no session/history internals and never
  * changes the draft. Install once per root UI lifecycle, not for tree navigation.
  * Another custom editor occupies the same host slot; skip installation rather than stack.
  */
 export class AgentNavigationEditor extends CustomEditor {
-  private pending = false;
+  private pending: "left" | "right" | undefined;
   private disposed = false;
   private dispatchDepth = 0;
   private inputEpoch = 0;
@@ -59,20 +62,21 @@ export class AgentNavigationEditor extends CustomEditor {
     this.inputEpoch++;
   }
 
-  private ordinaryLeft(data: string): boolean {
-    if (!matchesKey(data, Key.left)) return false;
+  private ordinaryArrow(data: string, direction: "left" | "right"): boolean {
+    if (!matchesKey(data, direction === "left" ? Key.left : Key.right)) return false;
+    const action = direction === "left" ? "tui.editor.cursorLeft" : "tui.editor.cursorRight";
     // Editor uses the global TUI bindings; CustomEditor uses the injected app
     // manager. Both must agree, and a conflicting remap wins conservatively.
     for (const keys of [this.navigationKeys, getKeybindings()]) {
-      if (!keys.matches(data, "tui.editor.cursorLeft")) return false;
-      for (const action of Object.keys(keys.getResolvedBindings())) {
+      if (!keys.matches(data, action)) return false;
+      for (const other of Object.keys(keys.getResolvedBindings())) {
         if (
-          action !== "tui.editor.cursorLeft" &&
-          (action.startsWith("tui.editor.") ||
-            action.startsWith("tui.input.") ||
-            action.startsWith("tui.altScreen.") ||
-            action.startsWith("app.")) &&
-          keys.matches(data, action as Keybinding)
+          other !== action &&
+          (other.startsWith("tui.editor.") ||
+            other.startsWith("tui.input.") ||
+            other.startsWith("tui.altScreen.") ||
+            other.startsWith("app.")) &&
+          keys.matches(data, other as Keybinding)
         )
           return false;
       }
@@ -82,8 +86,9 @@ export class AgentNavigationEditor extends CustomEditor {
 
   override handleInput(data: string): void {
     const outer = this.dispatchDepth === 0;
-    const left = this.ordinaryLeft(data);
-    if (outer && !left) this.inputEpoch++;
+    const direction = this.ordinaryArrow(data, "left") ? "left"
+      : this.ordinaryArrow(data, "right") ? "right" : undefined;
+    if (outer && (!direction || (this.pending && this.pending !== direction))) this.inputEpoch++;
     const previousPaste = this.pastePending;
     const wasPaste = previousPaste || data.includes("\x1b[200~");
     // Update before dispatch: Pi recursively sends a suffix after the end
@@ -93,16 +98,20 @@ export class AgentNavigationEditor extends CustomEditor {
     const wasJump = this.jumpPending;
     const cursor = this.getCursor();
     const text = this.getText();
+    const lines = text.split("\n");
+    const atBoundary = direction === "left"
+      ? cursor.line === 0 && cursor.col === 0
+      : direction === "right" && cursor.line === lines.length - 1 &&
+        cursor.col === lines.at(-1)!.length;
     const eligible =
       outer &&
-      left &&
+      direction !== undefined &&
       this.focused &&
       !this.disposed &&
       !wasPaste &&
       !wasJump &&
       !this.isShowingAutocomplete() &&
-      cursor.line === 0 &&
-      cursor.col === 0;
+      atBoundary;
     const generation = eligible ? this.navigation.generation() : undefined;
     let changed = false;
     let consumed = false;
@@ -150,17 +159,21 @@ export class AgentNavigationEditor extends CustomEditor {
       after.line === cursor.line &&
       after.col === cursor.col
     ) {
-      this.queueOpen(text, cursor, generation);
+      this.queueNavigation(text, cursor, generation, direction!);
     }
   }
 
-  private queueOpen(
+  private queueNavigation(
     text: string,
     cursor: { line: number; col: number },
     generation: unknown,
+    direction: "left" | "right",
   ): void {
-    if (this.pending || !this.navigation.canOpen()) return;
-    this.pending = true;
+    const allowed = () => direction === "left"
+      ? this.navigation.canOpen()
+      : !!this.navigation.collapseWidget && (this.navigation.canCollapse?.() ?? false);
+    if (this.pending || !allowed()) return;
+    this.pending = direction;
     const epoch = this.inputEpoch;
     queueMicrotask(() => {
       const after = this.getCursor();
@@ -169,25 +182,26 @@ export class AgentNavigationEditor extends CustomEditor {
         !this.focused ||
         this.inputEpoch !== epoch ||
         this.navigation.generation() !== generation ||
-        !this.navigation.canOpen() ||
+        !allowed() ||
         this.isShowingAutocomplete() ||
         this.getText() !== text ||
         after.line !== cursor.line ||
         after.col !== cursor.col
       ) {
-        this.pending = false;
+        this.pending = undefined;
         return;
       }
       try {
         // Call within the checked microtask: an extra Promise.then would leave
         // a gap in which root ownership could change after validation.
-        void Promise.resolve(this.navigation.openTree())
+        void Promise.resolve(direction === "left"
+          ? this.navigation.openTree() : this.navigation.collapseWidget!())
           .catch((error: unknown) => this.navigation.onError?.(error))
           .finally(() => {
-            this.pending = false;
+            this.pending = undefined;
           });
       } catch (error) {
-        this.pending = false;
+        this.pending = undefined;
         this.navigation.onError?.(error);
       }
     });

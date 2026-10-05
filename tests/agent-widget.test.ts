@@ -355,7 +355,7 @@ test("ends below agent rows with running count and browser entry", () => {
     const lines = plain(renderAgentTree([thread("/root/job", { state })], 80, theme));
     assert.equal(lines.length, 3);
     assert.equal(lines.at(-1), state === "running"
-      ? "1 running · Press ← to open subagent browser" : "0 running");
+      ? "1 running · Press ← to open subagent browser · → collapse" : "0 running · → collapse");
     assert.match(lines.at(-2)!, /\/root\/job/);
     assert.doesNotMatch(lines.join("\n"), /Working/);
     assert.doesNotMatch(lines.join("\n"), /Esc:|abort main|more agents/);
@@ -366,8 +366,11 @@ test("browser hint appears only for starting or running subagents in either widg
   for (const render of [renderAgentTree, renderAgentSummary]) {
     for (const state of ["starting", "running", "paused", "completed", "failed", "stopped"] as const) {
       const lines = plain(render([thread("/root"), thread("/root/job", { state })], 100, theme));
-      assert.equal(lines.some((line) => line.includes("Press ←")),
+      assert.equal(lines.some((line) => line.includes("←")),
         state === "starting" || state === "running", state);
+      assert.equal(lines.some((line) => line.includes("→ collapse")), render === renderAgentTree);
+      const rpcLines = plain(render([thread("/root/job", { state })], 100, theme, { showBrowserHint: false }));
+      assert.doesNotMatch(rpcLines.join("\n"), /←|→ collapse/);
     }
   }
 });
@@ -390,7 +393,7 @@ test("bounds the widget to twelve lines and counts every omitted real agent", ()
   );
   const eleven = renderAgentTree(many, 80, theme);
   assert.equal(eleven.length, 12);
-  assert.equal(plain(eleven).at(-1), "0 running · +1 more agents");
+  assert.equal(plain(eleven).at(-1), "0 running · +1 more agents · → collapse");
   assert.equal(
     plain(eleven).some((line) => line.includes("Job 10")),
     false,
@@ -415,7 +418,7 @@ test("bounds the widget to twelve lines and counts every omitted real agent", ()
   const packed = renderAgentTree(nested, 90, theme);
   assert.equal(packed.length, 12);
   assert.match(plain(packed)[0]!, /12 live · 0 paused$/);
-  assert.equal(plain(packed).at(-1), "12 running · +2 more agents · Press ← to open subagent browser");
+  assert.equal(plain(packed).at(-1), "12 running · +2 more agents · Press ← to open subagent browser · → collapse");
   assert.ok(indexOf(packed, "Parent") < indexOf(packed, "Child 0"));
   assert.match(plain(packed).join("\n"), /Child 8/);
   assert.equal(
@@ -443,7 +446,7 @@ test("live branches cannot be hidden by settled descendants", () => {
   assert.match(plain(lines)[0]!, /2 live · 0 paused$/);
   assert.ok(indexOf(lines, "Active parent") < indexOf(lines, "Settled child 0"));
   assert.ok(indexOf(lines, "Other active branch") >= 0);
-  assert.equal(plain(lines).at(-1), "2 running · +1 more agents · Press ← to open subagent browser");
+  assert.equal(plain(lines).at(-1), "2 running · +1 more agents · Press ← to open subagent browser · → collapse");
 });
 
 test("browser strip counts unique real starting/running agents and clips safely", () => {
@@ -464,9 +467,9 @@ test("browser strip counts unique real starting/running agents and clips safely"
     assert.ok(lines.every((line) => visibleWidth(line) <= width), String(width));
     if (width >= 80) {
       const footer = lines.at(-1)!;
-      assert.equal(stripTerminalSequences(footer), "2 running · Press ← to open subagent browser");
+      assert.equal(stripTerminalSequences(footer), "2 running · Press ← to open subagent browser · → collapse");
       assert.ok(footer.includes(theme.fg("accent", "2 running")));
-      assert.ok(footer.includes(theme.fg("muted", " · Press ← to open subagent browser")));
+      assert.ok(footer.includes(theme.fg("muted", " · Press ← to open subagent browser · → collapse")));
     }
   }
   assert.deepEqual(threads, before);
@@ -509,7 +512,7 @@ test("updateWidget pins the tree above the editor, clears when empty, and uses s
     }
   )({ requestRender() {} });
   assert.match(plain(widget.render(80)).join("\n"), /Agents[\s\S]*Done/);
-  assert.equal(plain(widget.render(80)).at(-1), "0 running");
+  assert.equal(plain(widget.render(80)).at(-1), "0 running · → collapse");
   widget.dispose();
 
   updateWidget(ctx, []);
@@ -607,10 +610,10 @@ test("minimal summary counts unique real agents with semantic colors and active-
   ];
   const before = structuredClone(threads);
   const lines = renderAgentSummary(threads, 100, theme);
-  assert.equal(lines.length, 2);
-  assert.equal(plain(lines)[1], "Press ← to open subagent browser");
+  assert.equal(lines.length, 1);
+  assert.match(plain(lines)[0]!, /← browser/);
   const line = lines[0]!;
-  assert.match(plain(lines)[0]!, /^3 running, 2 stopped, 1 failed, 1 paused, 1 completed\s+↑1\.4k ↓39$/);
+  assert.match(plain(lines)[0]!, /^3 running, 2 stopped, 1 failed, 1 paused, 1 completed · ← browser\s+↑1\.4k ↓39$/);
   for (const [color, text] of [
     ["accent", "3 running"],
     ["muted", "2 stopped"],
@@ -644,11 +647,11 @@ test("minimal summary handles empty and settled agents, metrics boundaries, and 
       thread(`/root/paused${index}`, { state: "paused", inputTokens: 5_000, outputTokens: 6_000 }),
     ),
   ];
-  assert.match(plain(renderAgentSummary(threads, 100, theme))[0]!, /^3 running, 20 paused\s+↑1m ↓1.5m$/);
+  assert.match(plain(renderAgentSummary(threads, 100, theme))[0]!, /^3 running, 20 paused · ← browser\s+↑1m ↓1.5m$/);
   const counters = theme.fg("muted", "↑1m ↓1.5m");
   for (const width of [0, 1, 2, 4, 9, 10, 20, 40, 80, 100]) {
     const lines = renderAgentSummary(threads, width, theme);
-    assert.equal(lines.length, 2);
+    assert.equal(lines.length, 1);
     assert.ok(lines.every((line) => visibleWidth(line) <= width), String(width));
     const line = lines[0]!;
     assert.ok(visibleWidth(line) <= width, String(width));
@@ -723,7 +726,7 @@ test("full widget status strip resolves the current theme at render time", () =>
   const second = component.render(80);
   assert.deepEqual(plain(second), plain(first));
   assert.notEqual(second.at(-1), first.at(-1));
-  assert.equal(second.at(-1), current.fg("accent", "0 running"));
+  assert.equal(second.at(-1), current.fg("accent", "0 running") + current.fg("muted", " · → collapse"));
   component.dispose();
 });
 
@@ -756,7 +759,8 @@ test("minimal widget resolves live themes without allocating elapsed-time timers
   assert.deepEqual(plain(second), plain(first));
   assert.ok(second[0]!.includes(current.fg("accent", "1 running")));
   assert.ok(second[0]!.endsWith(current.fg("muted", "↑12 ↓3")));
-  assert.equal(second[1], current.fg("muted", "Press ← to open subagent browser"));
+  assert.equal(second.length, 1);
+  assert.ok(second[0]!.includes(current.fg("muted", " · ← browser")));
   assert.equal(interval.mock.callCount(), 0);
   component.dispose();
 });

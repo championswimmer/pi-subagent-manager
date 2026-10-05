@@ -51,6 +51,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
   };
   let generation = 0;
   let rootTurnEnded = false;
+  let widgetCollapsed = false;
   let summaryRunning = false;
   let suspendingSummaries = false;
   let summaryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -95,6 +96,13 @@ export default function piSubagent(pi: ExtensionAPI): void {
             (thread.state === "starting" || thread.state === "running")),
         openTree: () => manager && context
           ? navigation.open(context, manager.scope("/root"), undefined, limits.nerdFontIcons) : undefined,
+        canCollapse: () => manager !== undefined && context?.mode === "tui" &&
+          limits.subagentMode !== "off" && !navigation.isOpen && !widgetCollapsed &&
+          limits.widgetMode === "full" && manager.list().some((thread) => thread.path !== "/root"),
+        collapseWidget: () => {
+          widgetCollapsed = true;
+          if (context) refreshWidget(context);
+        },
         onError: (error) => context?.ui.notify(
           error instanceof Error ? error.message : String(error), "error"),
       });
@@ -304,7 +312,8 @@ export default function piSubagent(pi: ExtensionAPI): void {
   const refreshWidget = (ctx: ExtensionContext) => {
     if (limits.subagentMode === "off") {
       if (ctx.hasUI) ctx.ui.setWidget("pi-subagent", undefined);
-    } else updateWidget(ctx, requireManager().list(), limits.widgetMode, limits.nerdFontIcons, rootTurnEnded);
+    } else updateWidget(ctx, requireManager().list(), widgetCollapsed ? "minimal" : limits.widgetMode,
+      limits.nerdFontIcons, rootTurnEnded);
   };
   pi.on("agent_start", async (_event, ctx) => {
     rootTurnEnded = false;
@@ -344,6 +353,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
     inheritedTools.reset();
     context = ctx;
     rootTurnEnded = false;
+    if (installEditor) widgetCollapsed = false;
     store = new ConfigStore({
       cwd: ctx.cwd,
       agentDir: getAgentDir(),

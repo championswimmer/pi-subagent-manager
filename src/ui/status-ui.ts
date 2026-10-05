@@ -25,7 +25,9 @@ import {
 } from "./dialog.ts";
 import type { ThreadService } from "../types.ts";
 import { buildStatusTree, type StatusRow } from "./thread-tree.ts";
-import { agentTypeBadge, agentTypeLabel, showThreads, threadMetrics } from "./ui.ts";
+import {
+  AGENT_PROGRESS_INTERVAL, agentProgressIcon, agentTypeBadge, agentTypeLabel, showThreads, threadMetrics,
+} from "./ui.ts";
 import { LiveAgentView, fillViewport, type AgentViewportState } from "./live-agent-view.ts";
 
 export { buildStatusTree, type StatusRow };
@@ -91,6 +93,8 @@ export class StatusDialog {
   }
   private viewport = 1;
   private timer: ReturnType<typeof setInterval> | undefined;
+  private refreshDelay = 0;
+  private refreshing = false;
 
   constructor(
     private host: DialogHost,
@@ -111,22 +115,39 @@ export class StatusDialog {
 
   invalidate(): void {}
 
-  /** Arm the 1s refresh. Host disposal can leave the dialog promise pending. */
+  /** Poll retained status, accelerating the existing timer only for animated live agents. */
   startRefresh(): void {
     this.stopRefresh();
-    this.timer = setInterval(() => this.host.requestRender(), 1000);
-    if (typeof this.timer.unref === "function") this.timer.unref();
+    this.refreshing = true;
+    this.syncRefresh();
   }
 
   /** Stop the refresh. Safe to call more than once, including from dispose(). */
   dispose(): void {
+    this.refreshing = false;
     this.stopRefresh();
+  }
+
+  private syncRefresh(): void {
+    if (!this.refreshing) return;
+    const delay = this.nerdFontIcons && this.service.list().some((thread) =>
+      thread.path !== ROOT && (thread.state === "starting" || thread.state === "running"))
+      ? AGENT_PROGRESS_INTERVAL : 1000;
+    if (this.timer !== undefined && this.refreshDelay === delay) return;
+    this.stopRefresh();
+    this.refreshDelay = delay;
+    this.timer = setInterval(() => {
+      this.syncRefresh();
+      this.host.requestRender();
+    }, delay);
+    if (typeof this.timer.unref === "function") this.timer.unref();
   }
 
   private stopRefresh(): void {
     if (this.timer === undefined) return;
     clearInterval(this.timer);
     this.timer = undefined;
+    this.refreshDelay = 0;
   }
 
   /** Stop every live agent. Stopping a subtree covers its descendants, so only top-most live paths are sent. */
@@ -247,9 +268,11 @@ export class StatusDialog {
     const rest = [thread.path, thread.state, thread.status]
       .map((part) => dialogText(part))
       .join("  ");
+    const badge = agentTypeBadge(thread.type, thread.color, this.theme,
+      agentProgressIcon(thread, this.nerdFontIcons), this.nerdFontIcons);
     if (selected)
-      return `${this.theme.fg("accent", head)}${agentTypeBadge(thread.type, thread.color, this.theme, thread.icon, this.nerdFontIcons)} ${this.theme.fg("accent", rest)}`;
-    return `${head}${agentTypeBadge(thread.type, thread.color, this.theme, thread.icon, this.nerdFontIcons)} ${rest}`;
+      return `${this.theme.fg("accent", head)}${badge} ${this.theme.fg("accent", rest)}`;
+    return `${head}${badge} ${rest}`;
   }
 
   private detail(row: StatusRow | undefined): string[] {
@@ -263,6 +286,7 @@ export class StatusDialog {
   }
 
   render(width: number): string[] {
+    this.syncRefresh();
     const rows = this.rows();
     const height = this.navigation?.fullscreen
       ? Math.max(1, this.host.terminal?.rows ?? 24)
