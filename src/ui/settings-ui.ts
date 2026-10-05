@@ -13,6 +13,7 @@ import {
   type ModelSelectionMode,
   type SubagentMode,
   type ToolFilteringMode,
+  type WidgetMode,
 } from "../prefs/settings.ts";
 import { editAgentTypes } from "./ui.ts";
 
@@ -81,6 +82,24 @@ const TOOL_FILTERING_OPTIONS = [
 
 const TOOL_FILTERING_HELP =
   "Allowed (except blocked): only allow-listed tools, minus blocked tools; a missing or empty allow list means no tools.\nAll except blocked: ignore the allow list; block-listed tools remain blocked.\nAll: ignore both lists.\nSave and apply to affect agents when their sessions start.";
+
+const WIDGET_MODE_OPTIONS = [
+  {
+    id: "full",
+    label: "Full",
+    value: "Detailed agent status rows",
+    help: "Full: show the existing agent status widget above the input box, with per-agent details.",
+  },
+  {
+    id: "minimal",
+    label: "Minimal",
+    value: "One-line counts and running-agent tokens",
+    help: "Minimal: show status counts in one line above the input box.\nStarting agents count as running. Token totals include only active (starting/running) agents.",
+  },
+] as const;
+
+const WIDGET_MODE_HELP =
+  "Full: detailed agent status rows above the input box.\nMinimal: one-line status counts and cumulative input/output tokens for active (starting/running) agents.\nSave and apply to update the widget immediately.";
 
 const MODEL_SELECTION_OPTIONS = [
   {
@@ -162,6 +181,12 @@ async function configureAgentsDialog(
           help: MODEL_SELECTION_HELP,
         },
         {
+          id: "widgetMode",
+          label: "Status Widget",
+          value: WIDGET_MODE_OPTIONS.find((mode) => mode.id === draft.widgetMode)!.label,
+          help: WIDGET_MODE_HELP,
+        },
+        {
           id: "scope",
           label: "Save scope",
           value: scope === "user" ? "Global" : "Current Project",
@@ -236,6 +261,12 @@ async function configureAgentsDialog(
         });
         if (MODEL_SELECTION_OPTIONS.some((option) => option.id === mode))
           draft.modelSelection = mode as ModelSelectionMode;
+      } else if (action === "widgetMode") {
+        const mode = await dialogMenu(ctx, "Status Widget", [...WIDGET_MODE_OPTIONS], {
+          selectedId: draft.widgetMode,
+        });
+        if (WIDGET_MODE_OPTIONS.some((option) => option.id === mode))
+          draft.widgetMode = mode as WidgetMode;
       } else if (action === "scope") {
         if (!ctx.isProjectTrusted())
           ctx.ui.notify(

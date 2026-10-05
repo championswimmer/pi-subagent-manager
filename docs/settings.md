@@ -14,6 +14,7 @@ All keys are optional. Defaults:
 ```json
 {
   "subagentMode": "opportunistic",
+  "widgetMode": "full",
   "modelSelection": "pick-first-scoped",
   "toolFiltering": "allowed",
   "maxLevels": 3,
@@ -40,6 +41,17 @@ How much the main model is encouraged to delegate.
 
 - Orchestration is a prompt policy, not a tool restriction. Workers don't inherit the root-only rule.
 - Agent import needs `opportunistic` (it uses the main thread's file tools).
+
+## Status Widget (`widgetMode`)
+
+Controls the subagent status display above the input box. Choose **Status Widget** in `/agents` settings and save with **Ctrl+S**.
+
+| Option             | Display |
+| ------------------ | ------- |
+| `full` (default)   | The existing multi-line tree with agent details, activity and navigation hints. |
+| `minimal`          | One line of theme-colored status counts plus cumulative input `↑` / output `↓` tokens for agents currently starting or running. |
+
+Minimal mode groups starting agents with running agents and excludes the main conversation. Token totals exclude completed, stopped, failed and paused agents. The fullscreen tree remains available via `/agents tree` in either mode.
 
 ## Model Picking (`modelSelection`)
 

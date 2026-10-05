@@ -38,6 +38,7 @@ import {
   withDialogSession,
 } from "./dialog.ts";
 import { getModelPreferences } from "../prefs/models.ts";
+import type { WidgetMode } from "../prefs/settings.ts";
 import { buildStatusTree, type StatusRow } from "./thread-tree.ts";
 import {
   THINKING_LEVELS,
@@ -421,9 +422,7 @@ export function renderAgentTree(
     theme.fg("muted", `${live} live · ${paused} paused`),
     columns,
   );
-  const help = ["Esc: abort main, not subagents"];
-  // Reserve help even when every agent fits; overflow must not push it out.
-  const rowBudget = MAX_WIDGET_LINES - 1 - help.length;
+  const rowBudget = MAX_WIDGET_LINES - 1;
   let visible = takeWidgetRows(rows, rowBudget);
   let omitted = agents.length - visible.filter((row) => row.thread).length;
   if (omitted > 0) {
@@ -448,26 +447,69 @@ export function renderAgentTree(
       ),
     );
   }
-  lines.push(
-    ...help.map((line) => truncateToWidth(theme.fg("muted", line), columns, "")),
-  );
   return lines;
+}
+
+/** One-line counts for real agents; starting agents count as running, including tokens. */
+export function renderAgentSummary(
+  threads: ThreadView[],
+  width: number,
+  theme: Pick<Theme, "fg">,
+): string[] {
+  const agents = new Map<string, ThreadView>();
+  for (const thread of threads) {
+    if (thread?.path && thread.path !== WIDGET_ROOT && !agents.has(thread.path))
+      agents.set(thread.path, thread);
+  }
+  if (!agents.size) return [];
+
+  const counts: Record<Exclude<ThreadView["state"], "starting">, number> = {
+    running: 0,
+    stopped: 0,
+    failed: 0,
+    paused: 0,
+    completed: 0,
+  };
+  let input = 0;
+  let output = 0;
+  for (const thread of agents.values()) {
+    counts[thread.state === "starting" ? "running" : thread.state] += 1;
+    if (isLive(thread)) {
+      input += metricCount(thread.inputTokens);
+      output += metricCount(thread.outputTokens);
+    }
+  }
+  const statuses: [keyof typeof counts, ThemeColor][] = [
+    ["running", "accent"],
+    ["stopped", "muted"],
+    ["failed", "error"],
+    ["paused", "warning"],
+    ["completed", "success"],
+  ];
+  const left = statuses
+    .filter(([state]) => state === "running" || counts[state] > 0)
+    .map(([state, color]) => theme.fg(color, `${counts[state]} ${state}`))
+    .join(theme.fg("muted", ", "));
+  const right = theme.fg("muted", `↑${formatCount(input)} ↓${formatCount(output)}`);
+  return [fitLine(left, right, Math.max(0, width))];
 }
 
 export function updateWidget(
   ctx: ExtensionContext,
   threads: ThreadView[],
+  mode: WidgetMode = "full",
 ): void {
   if (!ctx.hasUI) return;
   if (!threads.some((thread) => thread.path !== "/root")) {
     ctx.ui.setWidget("pi-subagent", undefined, AGENT_WIDGET_PLACEMENT);
     return;
   }
+  const render = mode === "minimal" ? renderAgentSummary : renderAgentTree;
   // RPC hosts accept string widgets only; a component factory is ignored.
   if (ctx.mode === "rpc") {
     ctx.ui.setWidget(
       "pi-subagent",
-      renderAgentTree(threads, 80, ctx.ui.theme),
+      render(threads, 80, ctx.ui.theme),
       AGENT_WIDGET_PLACEMENT,
     );
     return;
@@ -477,12 +519,12 @@ export function updateWidget(
     "pi-subagent",
     (tui) => {
       let timer: ReturnType<typeof setInterval> | undefined;
-      if (snapshot.some(isLive)) {
+      if (mode === "full" && snapshot.some(isLive)) {
         timer = setInterval(() => tui.requestRender(), 1000);
         timer.unref();
       }
       return {
-        render: (width) => renderAgentTree(snapshot, width, ctx.ui.theme),
+        render: (width) => render(snapshot, width, ctx.ui.theme),
         invalidate: () => {},
         dispose: () => {
           if (timer) clearInterval(timer);

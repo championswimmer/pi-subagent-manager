@@ -239,7 +239,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
   const refreshWidget = (ctx: ExtensionContext) => {
     if (limits.subagentMode === "off") {
       if (ctx.hasUI) ctx.ui.setWidget("pi-subagent", undefined);
-    } else updateWidget(ctx, requireManager().list());
+    } else updateWidget(ctx, requireManager().list(), limits.widgetMode);
   };
   syncTools();
   pi.on("before_agent_start", async (event, ctx) => {
