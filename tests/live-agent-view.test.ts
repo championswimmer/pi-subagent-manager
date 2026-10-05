@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { getMarkdownTheme, initTheme, type Theme } from "@earendil-works/pi-coding-agent";
-import { Markdown, visibleWidth, stripTerminalSequences } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, Markdown, visibleWidth, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { LiveAgentView, type AgentViewportState } from "../src/ui/live-agent-view.ts";
 import type {
   ThreadService,
@@ -42,11 +42,13 @@ function launch(
   initial: TranscriptSnapshot = snapshot(),
   rows = 10,
   viewport: AgentViewportState = { scrollTop: 0, follow: true },
+  options: { path?: string; steer?: ThreadService["steer"] } = {},
 ) {
   let listener: TranscriptListener = () => {};
   let unsubscribed = 0;
   let renders = 0;
   const done: string[] = [];
+  const steers: Array<{ path: string; message: string }> = [];
   const service = {
     async observeTranscript(_path: string, receive: TranscriptListener) {
       listener = receive;
@@ -57,8 +59,9 @@ function launch(
         },
       };
     },
-    steer() {
-      throw new Error("watch must not steer");
+    async steer(path: string, message: string) {
+      steers.push({ path, message });
+      return options.steer ? options.steer(path, message) : initial.thread;
     },
     stop() {
       throw new Error("watch must not stop");
@@ -76,7 +79,7 @@ function launch(
     },
     theme,
     service,
-    "/root/a",
+    options.path ?? "/root/a",
     viewport,
     (value) => done.push(value),
   );
@@ -84,6 +87,7 @@ function launch(
     view,
     viewport,
     done,
+    steers,
     emit: (next: TranscriptSnapshot) => listener(next),
     get renders() {
       return renders;
@@ -94,7 +98,7 @@ function launch(
   };
 }
 
-test("live viewer shows assistant/tool streams, collapses inherited context, and never executes input", async () => {
+test("live viewer shows assistant/tool streams and browsing never sends input", async () => {
   const live = launch(
     snapshot({ messages: [message("parent context"), message("child task")], inheritedCount: 1 }),
     24,
@@ -132,16 +136,187 @@ test("live viewer shows assistant/tool streams, collapses inherited context, and
   assert.match(content, /Tool bash — running/);
   assert.match(content, /partial tool output/);
   assert.doesNotMatch(content, /private thinking/);
+  live.view.handleInput("\t"); // Focus transcript controls.
   live.view.handleInput("t");
   assert.match(live.view.render(120).join("\n"), /private thinking/);
   live.view.handleInput("some text");
   live.view.handleInput("\r");
   assert.deepEqual(live.done, []);
+  assert.deepEqual(live.steers, []);
   live.view.handleInput("\x1b");
   assert.deepEqual(live.done, ["back"]);
   live.view.dispose();
   live.view.dispose();
   assert.equal(live.unsubscribed, 1);
+});
+
+test("bottom input sends Enter to the inspected descendant through the steering service", async () => {
+  for (const state of ["running", "paused", "completed", "stopped", "failed"] as const) {
+    const path = "/root/team/worker";
+    const initial = snapshot();
+    initial.thread = { ...initial.thread!, path, parent: "/root/team", state };
+    const live = launch(initial, 10, undefined, { path });
+    await tick();
+    try {
+      live.view.handleInput("\r");
+      live.view.handleInput("   ");
+      live.view.handleInput("\r");
+      assert.deepEqual(live.steers, [], "empty and whitespace-only input do not steer");
+      live.view.handleInput("\x15"); // Ctrl+U clears whitespace.
+      for (const key of ["c", "t", "l", "r"]) live.view.handleInput(key);
+      live.view.handleInput(" focus on tests 界🙂");
+      const bottom = stripTerminalSequences(live.view.render(100).at(-1)!).trimEnd();
+      assert.equal(bottom, "Steer > ctlr focus on tests 界🙂");
+      assert.equal(live.viewport.showInherited, undefined);
+      assert.equal(live.viewport.showThinking, undefined);
+      assert.equal(live.viewport.follow, true);
+      assert.deepEqual(live.steers, [], "typing alone does not send");
+      live.view.handleInput("\r");
+      await tick();
+      assert.deepEqual(live.steers, [{ path, message: "ctlr focus on tests 界🙂" }]);
+      assert.equal(stripTerminalSequences(live.view.render(100).at(-1)!).trimEnd(), "Steer >");
+      assert.match(live.view.render(100).join("\n"), /Steering sent/);
+      assert.deepEqual(live.done, [], "sending leaves the viewer open");
+      live.view.handleInput("unsent draft");
+      live.view.handleInput("\x1b");
+      assert.deepEqual(live.done, ["back"]);
+      assert.equal(live.steers.length, 1, "leaving does not send the draft");
+    } finally {
+      live.view.dispose();
+    }
+  }
+});
+
+test("input cursor editing and Tab browsing preserve the draft and forward focus", async () => {
+  const live = launch(snapshot({ messages: [message("parent context")], inheritedCount: 1 }));
+  await tick();
+  try {
+    live.view.handleInput("cart");
+    live.view.handleInput("\x1b[D");
+    live.view.handleInput("\x7f"); // Delete r.
+    live.view.handleInput("\x1b[H");
+    live.view.handleInput("a ");
+    live.view.handleInput("\x1b[F");
+    live.view.handleInput("!");
+    assert.equal(live.viewport.follow, true, "Home/End edit instead of scrolling");
+    live.view.focused = false;
+    assert.ok(!live.view.render(100).at(-1)!.includes(CURSOR_MARKER));
+    live.view.focused = true;
+    assert.ok(live.view.render(100).at(-1)!.includes(CURSOR_MARKER));
+    live.view.handleInput("\t");
+    assert.ok(!live.view.render(100).at(-1)!.includes(CURSOR_MARKER));
+    live.view.handleInput("c");
+    live.view.handleInput("t");
+    live.view.handleInput("\r");
+    assert.equal(live.viewport.showInherited, true);
+    assert.equal(live.viewport.showThinking, true);
+    assert.deepEqual(live.steers, []);
+    live.view.handleInput("\t");
+    assert.ok(live.view.render(100).at(-1)!.includes(CURSOR_MARKER));
+    live.view.handleInput("\r");
+    await tick();
+    assert.deepEqual(live.steers, [{ path: "/root/a", message: "a cat!" }]);
+  } finally {
+    live.view.dispose();
+  }
+});
+
+test("pending steering blocks duplicate submissions and preserves edits made while sending", async () => {
+  let finish!: (value: NonNullable<TranscriptSnapshot["thread"]>) => void;
+  const live = launch(undefined, 10, undefined, {
+    steer: () => new Promise((resolve) => { finish = resolve; }),
+  });
+  await tick();
+  try {
+    live.view.handleInput("first");
+    live.view.handleInput("\r");
+    live.view.handleInput("\r");
+    assert.equal(live.steers.length, 1);
+    assert.match(live.view.render(100).join("\n"), /Sending steering/);
+    live.view.handleInput("\x15");
+    live.view.handleInput("next draft");
+    finish(snapshot().thread!);
+    await tick();
+    assert.match(stripTerminalSequences(live.view.render(100).at(-1)!), /next draft/);
+  } finally {
+    live.view.dispose();
+  }
+});
+
+test("failed steering keeps the draft for retry and sanitizes error feedback", async () => {
+  let attempts = 0;
+  const live = launch(undefined, 10, undefined, {
+    async steer() {
+      if (++attempts === 1) throw new Error("capacity \x1b[31mfull\x00");
+      return snapshot().thread!;
+    },
+  });
+  await tick();
+  try {
+    live.view.handleInput("try again");
+    live.view.handleInput("\r");
+    await tick();
+    const lines = live.view.render(100);
+    assert.match(lines.join("\n"), /Steering failed: capacity full/);
+    assert.doesNotMatch(lines[1]!, /\x1b\[31m|\x00/);
+    assert.match(stripTerminalSequences(lines.at(-1)!), /try again/);
+    live.view.handleInput("\r");
+    await tick();
+    assert.equal(live.steers.length, 2);
+    assert.match(live.view.render(100).join("\n"), /Steering sent/);
+    assert.equal(stripTerminalSequences(live.view.render(100).at(-1)!).trimEnd(), "Steer >");
+  } finally {
+    live.view.dispose();
+  }
+});
+
+test("bracketed paste cannot submit, navigate, or inject terminal controls", async () => {
+  const live = launch();
+  await tick();
+  try {
+    live.view.handleInput("\x1b[200~");
+    live.view.handleInput("c");
+    live.view.handleInput("\t");
+    live.view.handleInput("t");
+    live.view.handleInput("\r");
+    live.view.handleInput("\x1b");
+    live.view.handleInput("[31mred\x00\n界🙂");
+    live.view.handleInput("\x1b[20");
+    live.view.handleInput("1~");
+    assert.deepEqual(live.done, []);
+    assert.deepEqual(live.steers, []);
+    assert.equal(live.viewport.showInherited, undefined);
+    assert.equal(live.viewport.showThinking, undefined);
+    const bottom = live.view.render(100).at(-1)!;
+    assert.match(stripTerminalSequences(bottom), /c    tred 界🙂/);
+    assert.doesNotMatch(bottom, /\x1b\[31m|\x00/);
+    live.view.handleInput("\r");
+    await tick();
+    assert.deepEqual(live.steers, [{ path: "/root/a", message: "c    tred 界🙂" }]);
+  } finally {
+    live.view.dispose();
+  }
+});
+
+test("late steering settlement never repaints a disposed viewer", async () => {
+  for (const fail of [false, true]) {
+    let settle!: () => void;
+    const live = launch(undefined, 10, undefined, {
+      steer: () => new Promise((resolve, reject) => {
+        settle = () => fail ? reject(new Error("late failure")) : resolve(snapshot().thread!);
+      }),
+    });
+    await tick();
+    live.view.handleInput("follow up");
+    live.view.handleInput("\r");
+    live.view.dispose();
+    const renders = live.renders;
+    settle();
+    await tick();
+    assert.equal(live.renders, renders);
+    live.view.handleInput("\r");
+    assert.equal(live.steers.length, 1);
+  }
 });
 
 test("message Markdown matches pi's renderer, including syntax highlighting and resize", async () => {
@@ -225,6 +400,7 @@ test("streaming, inherited, custom and visible thinking text use Markdown too", 
     assert.ok(
       content.includes(getMarkdownTheme().highlightCode!("const partial =", "typescript")[0]!),
     );
+    live.view.handleInput("\t");
     live.view.handleInput("c");
     live.view.handleInput("t");
     content = live.view.render(100).join("\n");
@@ -418,6 +594,7 @@ test("tail following pauses on scroll and per-agent state restores across remoun
   restored.view.render(60);
   assert.equal(state.scrollTop, savedTop);
   assert.equal(state.follow, false);
+  restored.view.handleInput("\t");
   restored.view.handleInput("\x1b[F");
   assert.match(restored.view.render(60).join("\n"), /new tail/);
   assert.equal(state.follow, true);
@@ -491,7 +668,7 @@ test("retry ignores old callbacks and close cleans up late async attachment", as
   pending[0]!.reject(new Error("attachment failed"));
   await tick();
   assert.match(view.render(100).join("\n"), /Attachment error: attachment failed/);
-  view.handleInput("r");
+  view.handleInput("\x12"); // Ctrl+R retries without leaving the input.
   pending[1]!.resolve({
     snapshot: snapshot({ messages: [message("retried current")] }),
     unsubscribe() {
@@ -503,6 +680,7 @@ test("retry ignores old callbacks and close cleans up late async attachment", as
   assert.match(view.render(100).join("\n"), /retried current/);
   assert.doesNotMatch(view.render(100).join("\n"), /stale old stream/);
   callbacks[1]!(snapshot({ revision: 1, error: "retry again" }));
+  view.handleInput("\t");
   view.handleInput("r");
   assert.equal(unsubscribed, 1);
   view.dispose();

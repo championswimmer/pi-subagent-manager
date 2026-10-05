@@ -161,6 +161,7 @@ function treeTitle(lines: string[]) {
 function launchTree(list: () => ThreadView[], selectedPath?: string, rows = 16) {
   const mounted: Array<StatusDialog | LiveAgentView> = [];
   const selectTitles: string[] = [];
+  const steers: Array<{ path: string; message: string }> = [];
   let opens = 0;
   let renders = 0;
   let releaseSelect = (_value: string | undefined) => {};
@@ -201,6 +202,10 @@ function launchTree(list: () => ThreadView[], selectedPath?: string, rows = 16) 
     },
   });
   const threads = service(list);
+  threads.steer = async (path, message) => {
+    steers.push({ path, message });
+    return threads.get(path);
+  };
   threads.observeTranscript = async (path) => ({
     snapshot: {
       revision: 0,
@@ -216,6 +221,7 @@ function launchTree(list: () => ThreadView[], selectedPath?: string, rows = 16) 
   const done = showAgentTree(ctx, threads, selectedPath);
   return {
     mounted,
+    steers,
     selectTitles,
     selectReady,
     done,
@@ -606,6 +612,35 @@ test("showAgentTree uses one dialog session, shows live updates, and returns to 
   } finally {
     await tree.close();
     clock.restore();
+  }
+});
+
+test("tree inspection steers a nested agent in place and preserves tree navigation", async () => {
+  const path = "/root/team/worker";
+  const tree = launchTree(() => [
+    thread("/root/team", { parent: "/root" }),
+    thread(path, { parent: "/root/team", state: "paused" }),
+  ], path);
+  try {
+    const dialog = await until(() => tree.mounted[0], "tree");
+    assert.ok(showsPath(selectedLine(dialog.render(100)), path));
+    dialog.handleInput(ENTER);
+    const viewer = await until(() => tree.mounted[1], "viewer");
+    assert.ok(viewer instanceof LiveAgentView);
+    viewer.handleInput("continue with the failing tests");
+    viewer.handleInput(ENTER);
+    await until(() => plain(viewer.render(100)).includes("Steering sent") ? true : undefined, "steer completion");
+    assert.deepEqual(tree.steers, [{ path, message: "continue with the failing tests" }]);
+    assert.equal(tree.mounted.at(-1), viewer, "steering does not switch sessions or views");
+    assert.equal(tree.selectTitles.length, 0, "no extra prompt dialog is required");
+    viewer.handleInput(ESC);
+    const restored = await until(() => tree.mounted[2], "restored tree");
+    assert.ok(showsPath(selectedLine(restored.render(100)), path));
+    restored.handleInput(ESC);
+    await tree.done;
+    assert.equal(tree.opens, 1);
+  } finally {
+    await tree.close();
   }
 });
 

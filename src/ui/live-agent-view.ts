@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import {
+  Input,
   Key,
   Markdown,
   matchesKey,
@@ -51,7 +52,7 @@ function json(value: unknown): string {
   }
 }
 
-/** Read-only observer. Never invoke watched tools' custom renderers or pass through raw controls. */
+/** Live transcript and manual steering. Never invoke tools' custom renderers or pass through raw controls. */
 export class LiveAgentView {
   private snapshot: TranscriptSnapshot | undefined;
   private error: string | undefined;
@@ -63,6 +64,14 @@ export class LiveAgentView {
   private scroll: ScrollView;
   private content: string[] = [];
   private restoreViewport = true;
+  private input = new Input({ prompt: "Steer > " });
+  private editing = true;
+  private focusedState = true;
+  private pasting = false;
+  private pasteTail = "";
+  private sending = false;
+  private steerStatus: string | undefined;
+  private steerFailed = false;
 
   constructor(
     private host: DialogHost,
@@ -77,7 +86,55 @@ export class LiveAgentView {
       { render: () => this.content, invalidate() {} },
       { follow: "end", overscroll: "contain", scrollbar: "hidden" },
     );
+    this.input.focused = true;
+    this.input.onSubmit = (value) => void this.steer(value);
     void this.attach();
+  }
+
+  get focused(): boolean {
+    return this.focusedState;
+  }
+
+  set focused(value: boolean) {
+    this.focusedState = value;
+    this.input.focused = value && this.editing;
+  }
+
+  private async steer(value: string): Promise<void> {
+    const message = dialogText(value);
+    if (this.disposed || this.sending || !message.trim()) return;
+    this.sending = true;
+    this.steerFailed = false;
+    this.steerStatus = "Sending steering…";
+    this.host.requestRender();
+    try {
+      // Same root-scoped service as the Actions menu: queues a running turn or resumes a settled one.
+      await this.service.steer(this.path, message);
+      if (this.disposed) return;
+      if (this.input.getValue() === message) this.input.setValue("");
+      this.steerStatus = "Steering sent";
+    } catch (error) {
+      if (this.disposed) return;
+      this.steerFailed = true;
+      this.steerStatus = `Steering failed: ${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      this.sending = false;
+      if (!this.disposed) this.host.requestRender();
+    }
+  }
+
+  private editInput(data: string): void {
+    // Keep paste chunks (including embedded Esc, Tab and Enter) out of navigation shortcuts.
+    const pasteData = this.pasteTail + data;
+    if (pasteData.includes("\x1b[200~")) this.pasting = true;
+    if (pasteData.includes("\x1b[201~")) this.pasting = false;
+    this.pasteTail = this.pasting ? pasteData.slice(-5) : "";
+    const before = this.input.getValue();
+    this.input.handleInput(data);
+    const safe = dialogText(this.input.getValue());
+    if (safe !== this.input.getValue()) this.input.setValue(safe);
+    if (safe !== before && !this.sending) this.steerStatus = undefined;
+    this.host.requestRender();
   }
 
   private async attach(): Promise<void> {
@@ -132,6 +189,7 @@ export class LiveAgentView {
 
   invalidate(): void {
     this.cache = new WeakMap();
+    this.input.invalidate();
   }
 
   dispose(): void {
@@ -146,28 +204,42 @@ export class LiveAgentView {
 
   handleInput(data: string): void {
     if (this.disposed) return;
+    if (this.pasting || (this.editing && data.includes("\x1b[200~"))) {
+      this.editInput(data);
+      return;
+    }
     if (matchesKey(data, Key.escape)) return this.done("back");
     if (matchesKey(data, Key.ctrl("q")) || matchesKey(data, Key.ctrl("c")))
       return this.done("main");
-    if (data === "r" && this.error) {
+    if (matchesKey(data, Key.tab)) {
+      this.editing = !this.editing;
+      this.input.focused = this.focused && this.editing;
+      this.host.requestRender();
+      return;
+    }
+    if (this.error && (matchesKey(data, Key.ctrl("r")) || (!this.editing && data === "r"))) {
       void this.attach();
       return;
     }
-    if (data === "c") {
-      this.viewport.showInherited = !this.viewport.showInherited;
-      this.invalidate();
-    } else if (data === "t") {
-      this.viewport.showThinking = !this.viewport.showThinking;
-      this.invalidate();
-    } else if (matchesKey(data, Key.up)) this.scroll.scrollBy(-1);
+    // Transcript scrolling remains available while composing; Home/End edit the input.
+    if (matchesKey(data, Key.up)) this.scroll.scrollBy(-1);
     else if (matchesKey(data, Key.down)) this.scroll.scrollBy(1);
     else if (matchesKey(data, Key.pageUp))
       this.scroll.scrollBy(-Math.max(1, this.scroll.viewportHeight));
     else if (matchesKey(data, Key.pageDown))
       this.scroll.scrollBy(Math.max(1, this.scroll.viewportHeight));
-    else if (matchesKey(data, Key.home)) this.scroll.scrollTo(0, { disableFollow: true });
+    else if (this.editing) {
+      this.editInput(data);
+      return;
+    } else if (data === "c") {
+      this.viewport.showInherited = !this.viewport.showInherited;
+      this.invalidate();
+    } else if (data === "t") {
+      this.viewport.showThinking = !this.viewport.showThinking;
+      this.invalidate();
+    } else if (matchesKey(data, Key.home)) this.scroll.scrollTo(0, { disableFollow: true });
     else if (matchesKey(data, Key.end) || data === "l") this.scroll.scrollToEnd();
-    else return; // Read-only: text/Enter never routes into either agent's editor.
+    else return;
     this.saveViewport();
     this.host.requestRender();
   }
@@ -287,7 +359,7 @@ export class LiveAgentView {
     if (this.error)
       body.push(
         this.theme.fg("error", dialogText(`Attachment error: ${this.error}`)),
-        "r Retry · Esc Back · Ctrl+Q Back to main",
+        "Ctrl+R Retry · Esc Back · Ctrl+Q Back to main",
       );
     if (!snapshot) {
       if (!this.error) body.push("Attaching to retained live session…");
@@ -335,7 +407,7 @@ export class LiveAgentView {
         );
     }
     this.content = body;
-    const bodyHeight = Math.max(0, height - 3);
+    const bodyHeight = Math.max(0, height - 4);
     this.scroll.updateLayout(body.length, bodyHeight, () => this.scheduleRender());
     if (this.restoreViewport) {
       if (this.viewport.follow) this.scroll.scrollToEnd();
@@ -348,28 +420,28 @@ export class LiveAgentView {
     while (visible.length < bodyHeight) visible.push("");
     this.saveViewport();
     const footer = this.error
-      ? "r Retry · Esc Back · Ctrl+Q Back to main"
-      : `Esc tree · Ctrl+Q Back to main · ↑↓/PgUp/PgDn scroll · End latest · c context · t thinking · ${this.viewport.follow ? "following" : "scrolled"}`;
+      ? "Ctrl+R Retry · Tab input/transcript · Esc tree · Ctrl+Q main"
+      : `${this.editing ? "Enter steer · Tab browse" : "Tab steer · Home/End scroll · c context · t thinking"} · Esc tree · Ctrl+Q main · ↑↓/PgUp/PgDn scroll · ${this.viewport.follow ? "following" : "scrolled"}`;
+    const input = this.input.render(columns)[0]!;
+    const status = this.theme.fg(
+      this.steerStatus ? (this.steerFailed ? "error" : "muted") : this.error ? "error" : "muted",
+      dialogText(
+        this.steerStatus ??
+          (this.error
+            ? `Attachment error: ${this.error}`
+            : thread
+              ? `${thread.task} · ${thread.status}`
+              : "Live transcript · Enter to steer"),
+      ),
+    );
     const lines =
       height === 1
-        ? [header]
+        ? [input]
         : height === 2
-          ? [header, this.theme.fg("dim", footer)]
-          : [
-              header,
-              this.theme.fg(
-                this.error ? "error" : "muted",
-                dialogText(
-                  this.error
-                    ? `Attachment error: ${this.error}`
-                    : thread
-                      ? `${thread.task} · ${thread.status}`
-                      : "Read-only observer",
-                ),
-              ),
-              ...visible,
-              this.theme.fg("dim", footer),
-            ];
+          ? [header, input]
+          : height === 3
+            ? [header, this.theme.fg("dim", footer), input]
+            : [header, status, ...visible, this.theme.fg("dim", footer), input];
     return fillViewport(lines, width, height);
   }
 }
