@@ -78,6 +78,7 @@ async function withCommands(
     mode: "tui",
     isProjectTrusted: () => false,
     ui: {
+      theme: driver.theme,
       setWidget(_key: string, widget: unknown) { widgets.push(widget); },
       notify: (text: string) => notifications.push(text),
       custom: driver.custom,
@@ -282,5 +283,44 @@ test("CombinedAutocompleteProvider completes /agents then its subcommands", asyn
       await apply("/agents  tree /root/al", "tree /root/alpha"),
       "/agents tree /root/alpha",
     );
+  });
+});
+
+test("saving widget mode refreshes immediately and reload reads the persisted choice", async () => {
+  await withCommands(async ({ command, ctx, hooks, replies, cwd, widgets }) => {
+    seedThreads(ctx, ["/root/alpha", "/root/zeta"]);
+    await hooks.get("session_tree")!({}, ctx);
+    const renderWidget = () => {
+      const factory = widgets.at(-1) as (tui: { requestRender(): void }) => {
+        render(width: number): string[];
+        dispose(): void;
+      };
+      assert.equal(typeof factory, "function");
+      const widget = factory({ requestRender() {} });
+      try {
+        return widget.render(100);
+      } finally {
+        widget.dispose();
+      }
+    };
+    assert.ok(renderWidget().length > 1, "Full is the default");
+    for (const mode of ["minimal", "full"] as const) {
+      const before = widgets.length;
+      replies.push("widgetMode", mode, "save");
+      await command.handler("settings", ctx);
+      assert.ok(widgets.length > before, "Save and apply refreshes the widget");
+      const lines = renderWidget();
+      if (mode === "minimal") {
+        assert.equal(lines.length, 1);
+        assert.match(lines[0]!, /0 running.*2 completed.*↑0.*↓0/);
+      } else assert.ok(lines.length > 1);
+      assert.equal(loadManagerSettings({ cwd, agentDir: cwd, includeProject: false }).settings.widgetMode, mode);
+    }
+    const { settings } = loadManagerSettings({ cwd, agentDir: cwd, includeProject: false });
+    writeFileSync(join(cwd, "subagent-manager", "settings.json"), JSON.stringify({ ...settings, widgetMode: "minimal" }));
+    await command.handler("reload", ctx);
+    assert.equal(renderWidget().length, 1, "Reload applies a choice changed on disk");
+    await hooks.get("session_tree")!({}, ctx);
+    assert.equal(renderWidget().length, 1, "Session attachment reloads the choice");
   });
 });

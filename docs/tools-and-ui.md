@@ -77,7 +77,12 @@ Run `python3 scripts/live-agent-navigation-smoke.py` after `npm install` for cre
 
 ## Agents widget
 
-A compact tree above the input editor, at most twelve lines including two help lines.
+The widget above the input editor has two display modes, selected with **Status Widget** in `/agents` settings:
+
+- **Full** (default): the existing compact tree, at most twelve lines.
+- **Minimal**: one line such as `3 running, 2 stopped, 1 failed, 1 paused    ↑12k ↓3k`, with semantic theme colors. Starting agents count as running; completed agents are counted when present. Token totals include only currently starting/running agents, not the main conversation or settled threads. Use `/agents tree` for details.
+
+In full mode:
 
 - Each row: colored type pill, path, state, task, active time, input `↑` / output `↓` tokens.
 - A second, indented line shows latest activity.

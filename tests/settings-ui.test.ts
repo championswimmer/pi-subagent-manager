@@ -375,3 +375,65 @@ for (const width of [32, 80]) {
     assert.equal(result.value(2, "toolFiltering"), "All");
   });
 }
+
+test("Status Widget explains both choices and saves each mode", async (t) => {
+  for (const [mode, label] of [["full", "Full"], ["minimal", "Minimal"]]) {
+    const result = await run(t, ["widgetMode", mode, "save"]);
+    const field = result.menus[0]!.rows.find((row) => row.id === "widgetMode")!;
+    assert.equal(field.label, "Status Widget");
+    assert.equal(field.value, "Full");
+    assert.match(field.help ?? "", /above the input box/);
+    assert.match(field.help ?? "", /one-line status counts/);
+    assert.match(field.help ?? "", /cumulative input\/output tokens for active \(starting\/running\) agents/);
+    assert.match(field.help ?? "", /update the widget immediately/);
+    const chooser = result.menus[1]!;
+    assert.equal(chooser.title, "Status Widget");
+    assert.deepEqual(chooser.rows.map((row) => row.id), ["full", "minimal"]);
+    assert.deepEqual(chooser.rows.map((row) => row.label), ["Full", "Minimal"]);
+    assert.ok(chooser.rows.every((row) => row.value && row.help));
+    assert.equal(result.value(2, "widgetMode"), label);
+    assert.equal(result.applied, 1);
+    assert.equal(result.loaded.settings.widgetMode, mode);
+    assert.equal(result.loaded.diagnostics.length, 0);
+    assert.equal(JSON.parse(readFileSync(result.userFile, "utf8")).widgetMode, mode);
+  }
+});
+
+test("Status Widget cancellation leaves settings unchanged and defaults restore Full", async (t) => {
+  const canceled = await run(t, ["widgetMode", "minimal", "cancel"]);
+  assert.equal(canceled.value(2, "widgetMode"), "Minimal");
+  assert.match(canceled.menus[2]!.title, /unsaved/);
+  assert.equal(canceled.applied, 0);
+  assert.equal(existsSync(canceled.userFile), false);
+  assert.deepEqual(canceled.loaded.settings, DEFAULT_MANAGER_SETTINGS);
+
+  const escaped = await run(t, ["widgetMode", undefined, "save"]);
+  assert.equal(escaped.value(2, "widgetMode"), "Full");
+  assert.doesNotMatch(escaped.menus[2]!.title, /unsaved/);
+  assert.equal(escaped.loaded.settings.widgetMode, "full");
+
+  const restored = await run(t, ["defaults", "save"], {
+    settings: { ...DEFAULT_MANAGER_SETTINGS, widgetMode: "minimal" },
+  });
+  assert.equal(restored.value(1, "widgetMode"), "Full");
+  assert.equal(restored.loaded.settings.widgetMode, "full");
+});
+
+test("Status Widget saves to a trusted project", async (t) => {
+  const result = await run(t, ["widgetMode", "minimal", "save"], { trusted: true });
+  assert.equal(result.applied, 1);
+  assert.equal(JSON.parse(readFileSync(result.projectFile, "utf8")).widgetMode, "minimal");
+  assert.equal(existsSync(result.userFile), false);
+});
+
+for (const width of [32, 80]) {
+  test(`Status Widget screen and chooser render bordered frames at width ${width}`, async (t) => {
+    const result = await run(t, ["widgetMode", "minimal", "cancel"], { width });
+    assert.ok(result.renders.every((lines) =>
+      lines[0]!.includes("Status Widget") || lines[0]!.includes("Agents settings"),
+    ));
+    assert.ok(result.renders[1]!.join("\n").includes("Full"));
+    assert.ok(result.renders[1]!.join("\n").includes("Minimal"));
+    assert.equal(result.value(2, "widgetMode"), "Minimal");
+  });
+}

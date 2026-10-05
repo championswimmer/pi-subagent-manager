@@ -16,6 +16,9 @@ import { dirname, join, resolve } from "node:path";
 export const SUBAGENT_MODES = ["off", "opportunistic", "orchestration"] as const;
 export type SubagentMode = (typeof SUBAGENT_MODES)[number];
 
+export const WIDGET_MODES = ["full", "minimal"] as const;
+export type WidgetMode = (typeof WIDGET_MODES)[number];
+
 export const TOOL_FILTERING_MODES = ["allowed", "all-except-blocked", "all"] as const;
 export type ToolFilteringMode = (typeof TOOL_FILTERING_MODES)[number];
 
@@ -29,6 +32,7 @@ export type ModelSelectionMode = (typeof MODEL_SELECTION_MODES)[number];
 export interface ManagerSettings {
   subagentMode: SubagentMode;
   toolFiltering: ToolFilteringMode;
+  widgetMode: WidgetMode;
   maxLevels: number;
   maxConcurrent: number;
   maxThreads: number;
@@ -42,10 +46,11 @@ export const DEFAULT_MANAGER_SETTINGS: ManagerSettings = {
   modelSelection: "pick-first-scoped",
   subagentMode: "opportunistic",
   toolFiltering: "allowed",
+  widgetMode: "full",
 };
 
 const KEYS = [
-  "maxLevels", "maxConcurrent", "maxThreads", "modelSelection", "subagentMode", "toolFiltering",
+  "maxLevels", "maxConcurrent", "maxThreads", "modelSelection", "subagentMode", "toolFiltering", "widgetMode",
 ] as const;
 const MAX_LEVELS = 32;
 
@@ -84,6 +89,7 @@ function positiveSafeInteger(value: unknown): value is number {
 
 function requirement(key: (typeof KEYS)[number]): string {
   if (key === "subagentMode") return "subagentMode must be off, opportunistic or orchestration";
+  if (key === "widgetMode") return "widgetMode must be full or minimal";
   if (key === "toolFiltering") return "toolFiltering must be allowed, all-except-blocked or all";
   if (key === "modelSelection")
     return "modelSelection must be pick-first-available, pick-first-scoped or use-current";
@@ -125,6 +131,11 @@ function parseSettings(content: string): Partial<ManagerSettings> {
       if (!TOOL_FILTERING_MODES.includes(value as ToolFilteringMode))
         throw new Error(requirement(key));
       layer.toolFiltering = value as ToolFilteringMode;
+      continue;
+    }
+    if (key === "widgetMode") {
+      if (!WIDGET_MODES.includes(value as WidgetMode)) throw new Error(requirement(key));
+      layer.widgetMode = value as WidgetMode;
       continue;
     }
     if (key === "modelSelection") {

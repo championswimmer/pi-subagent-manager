@@ -4,7 +4,7 @@ import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { Theme, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { AGENT_COLORS } from "../src/prefs/config.ts";
 import { buildStatusTree, type StatusRow } from "../src/ui/status-ui.ts";
-import { renderAgentTree, updateWidget } from "../src/ui/ui.ts";
+import { renderAgentSummary, renderAgentTree, updateWidget } from "../src/ui/ui.ts";
 import type { ThreadView } from "../src/types.ts";
 
 function thread(path: string, patch: Partial<ThreadView> = {}): ThreadView {
@@ -27,16 +27,16 @@ function thread(path: string, patch: Partial<ThreadView> = {}): ThreadView {
   };
 }
 
-function testTheme(): Theme {
-  const foreground = "#eeeeee";
-  const background = "#111111";
+function testTheme(appearance: "dark" | "light" = "dark"): Theme {
+  const foreground = appearance === "dark" ? "#eeeeee" : "#111111";
+  const background = appearance === "dark" ? "#111111" : "#eeeeee";
   const colors = {
     ...Object.fromEntries(AGENT_COLORS.map((token) => [token, foreground])),
-    accent: "#60a5fa",
+    accent: appearance === "dark" ? "#60a5fa" : "#1e40af",
     success: "#166534",
     warning: "#facc15",
     error: "#b91c1c",
-    muted: "#9ca3af",
+    muted: appearance === "dark" ? "#9ca3af" : "#374151",
   } as ConstructorParameters<typeof Theme>[0];
   const backgrounds = Object.fromEntries(
     [
@@ -49,7 +49,7 @@ function testTheme(): Theme {
       "toolErrorBg",
     ].map((token) => [token, background]),
   ) as ConstructorParameters<typeof Theme>[1];
-  return new Theme(colors, backgrounds, "truecolor", { appearance: "dark" });
+  return new Theme(colors, backgrounds, "truecolor", { appearance });
 }
 
 const theme = testTheme();
@@ -318,11 +318,11 @@ test("sanitizes controls and clips unicode without dropping right counters", () 
   assert.match(wide.join("\n"), /missing parent/);
 });
 
-test("always shows navigation and interrupt help below the agents", () => {
+test("ends at agent activity without an interrupt help line", () => {
   for (const state of ["running", "completed"] as const) {
     const lines = plain(renderAgentTree([thread("/root/job", { state })], 80, theme));
-    assert.deepEqual(lines.slice(-1), ["Esc: abort main, not subagents"]);
-    assert.doesNotMatch(lines.join("\n"), /more agents/);
+    assert.equal(lines.length, 3);
+    assert.doesNotMatch(lines.join("\n"), /Esc:|abort main|more agents/);
   }
 });
 
@@ -337,20 +337,20 @@ test("bounds the widget to twelve lines and counts every omitted real agent", ()
   );
   // Each agent takes two lines; five fit exactly, otherwise one slot becomes the omitted count.
   const five = renderAgentTree(many.slice(0, 5), 80, theme);
-  assert.equal(five.length, 12);
+  assert.equal(five.length, 11);
   assert.equal(
     plain(five).some((line) => line.includes("more agents")),
     false,
   );
   const six = renderAgentTree(many, 80, theme);
-  assert.equal(six.length, 11);
-  assert.match(plain(six).at(-2)!, /^\+2 more agents$/);
+  assert.equal(six.length, 12);
+  assert.match(plain(six).at(-1)!, /^\+1 more agents$/);
   assert.equal(
-    plain(six).some((line) => line.includes("Job 4")),
+    plain(six).some((line) => line.includes("Job 5")),
     false,
   );
   const four = renderAgentTree(many.slice(0, 4), 80, theme);
-  assert.equal(four.length, 10);
+  assert.equal(four.length, 9);
   assert.equal(
     plain(four).some((line) => line.includes("more agents")),
     false,
@@ -367,13 +367,13 @@ test("bounds the widget to twelve lines and counts every omitted real agent", ()
     ),
   ];
   const packed = renderAgentTree(nested, 90, theme);
-  assert.equal(packed.length, 11);
+  assert.equal(packed.length, 12);
   assert.match(plain(packed)[0]!, /7 live · 0 paused$/);
-  assert.match(plain(packed).at(-2)!, /^\+3 more agents$/);
+  assert.match(plain(packed).at(-1)!, /^\+2 more agents$/);
   assert.ok(indexOf(packed, "Parent") < indexOf(packed, "Child 0"));
-  assert.match(plain(packed).join("\n"), /Child 2/);
+  assert.match(plain(packed).join("\n"), /Child 3/);
   assert.equal(
-    plain(packed).some((line) => line.includes("Child 3")),
+    plain(packed).some((line) => line.includes("Child 4")),
     false,
   );
 });
@@ -393,11 +393,11 @@ test("live branches cannot be hidden by settled descendants", () => {
     100,
     theme,
   );
-  assert.equal(lines.length, 11);
+  assert.equal(lines.length, 12);
   assert.match(plain(lines)[0]!, /2 live · 0 paused$/);
   assert.ok(indexOf(lines, "Active parent") < indexOf(lines, "Settled child 0"));
   assert.ok(indexOf(lines, "Other active branch") >= 0);
-  assert.match(plain(lines).at(-2)!, /^\+2 more agents/);
+  assert.match(plain(lines).at(-1)!, /^\+1 more agents/);
 });
 
 test("cycle rendering stays finite and keeps both agents with their parent row", () => {
@@ -459,4 +459,141 @@ test("updateWidget pins the tree above the editor, clears when empty, and uses s
   calls.length = 0;
   updateWidget(context("rpc", false), [thread("/hidden")]);
   assert.equal(calls.length, 0);
+});
+
+test("minimal summary counts unique real agents with semantic colors and active-only token sums", () => {
+  const threads = [
+    thread("/root", { inputTokens: 999_999, outputTokens: 999_999 }),
+    thread("/root/a", { inputTokens: 1_100, outputTokens: 12 }),
+    thread("/root/missing/b", { inputTokens: 100, outputTokens: 13 }),
+    thread("/independent", { state: "starting", inputTokens: 200, outputTokens: 14 }),
+    thread("/root/stopped1", { state: "stopped", inputTokens: 50_000, outputTokens: 50_000 }),
+    thread("/root/stopped2", { state: "stopped", inputTokens: 50_000, outputTokens: 50_000 }),
+    thread("/root/failed", { state: "failed", inputTokens: 50_000, outputTokens: 50_000 }),
+    thread("/root/paused", { state: "paused", inputTokens: 50_000, outputTokens: 50_000 }),
+    thread("/root/completed", { state: "completed", inputTokens: 50_000, outputTokens: 50_000 }),
+    // Match the full tree's first occurrence wins rule; neither duplicates nor missing parents count.
+    thread("/root/a", { inputTokens: 999_999, outputTokens: 999_999 }),
+  ];
+  const before = structuredClone(threads);
+  const lines = renderAgentSummary(threads, 100, theme);
+  assert.equal(lines.length, 1);
+  const line = lines[0]!;
+  assert.match(plain(lines)[0]!, /^3 running, 2 stopped, 1 failed, 1 paused, 1 completed\s+↑1\.4k ↓39$/);
+  for (const [color, text] of [
+    ["accent", "3 running"],
+    ["muted", "2 stopped"],
+    ["error", "1 failed"],
+    ["warning", "1 paused"],
+    ["success", "1 completed"],
+    ["muted", "↑1.4k ↓39"],
+  ] as const) {
+    assert.ok(line.includes(theme.fg(color, text)), `${color}: ${text}`);
+  }
+  assert.equal(visibleWidth(line), 100);
+  assert.doesNotMatch(plain(lines)[0]!, /Agents|missing parent|\/root|Esc:|starting/);
+  assert.deepEqual(threads, before);
+});
+
+test("minimal summary handles empty and settled agents, metrics boundaries, and narrow widths", () => {
+  assert.deepEqual(renderAgentSummary([], 80, theme), []);
+  assert.deepEqual(renderAgentSummary([thread("/root")], 80, theme), []);
+  const settled = [
+    thread("/root/completed", { state: "completed", inputTokens: 100, outputTokens: 200 }),
+  ];
+  assert.match(plain(renderAgentSummary(settled, 80, theme))[0]!, /^0 running, 1 completed\s+↑0 ↓0$/);
+
+  const threads = [
+    thread("/root/a", { inputTokens: 1_000_000, outputTokens: 1_500_000 }),
+    thread("/root/b", { inputTokens: Number.NaN, outputTokens: -1 }),
+    thread("/root/c", { inputTokens: Number.POSITIVE_INFINITY, outputTokens: 0.9 }),
+    ...Array.from({ length: 20 }, (_, index) =>
+      thread(`/root/paused${index}`, { state: "paused", inputTokens: 5_000, outputTokens: 6_000 }),
+    ),
+  ];
+  assert.match(plain(renderAgentSummary(threads, 100, theme))[0]!, /^3 running, 20 paused\s+↑1m ↓1.5m$/);
+  const counters = theme.fg("muted", "↑1m ↓1.5m");
+  for (const width of [0, 1, 2, 4, 9, 10, 20, 40, 80, 100]) {
+    const lines = renderAgentSummary(threads, width, theme);
+    assert.equal(lines.length, 1);
+    const line = lines[0]!;
+    assert.ok(visibleWidth(line) <= width, String(width));
+    assert.ok(!/[\x00-\x1f\x7f-\x9f]/.test(stripTerminalSequences(line)));
+    if (width >= visibleWidth(counters)) assert.ok(line.endsWith(counters), String(width));
+  }
+});
+
+test("updateWidget retains full default and switches minimal/full in TUI and RPC", () => {
+  const calls: { content: unknown; options: unknown }[] = [];
+  const ctx = {
+    hasUI: true,
+    mode: "tui",
+    ui: {
+      theme,
+      setWidget: (_key: string, content: unknown, options: unknown) => {
+        calls.push({ content, options });
+      },
+    },
+  } as unknown as ExtensionContext;
+  const threads = [thread("/root/job", { state: "completed", task: "Done" })];
+  const renderLast = () => {
+    const component = (calls.at(-1)!.content as (tui: { requestRender(): void }) => {
+      render(width: number): string[];
+      dispose(): void;
+    })({ requestRender() {} });
+    const lines = component.render(80);
+    component.dispose();
+    return lines;
+  };
+  updateWidget(ctx, threads);
+  const full = renderLast();
+  assert.deepEqual(full, renderAgentTree(threads, 80, theme));
+  updateWidget(ctx, threads, "minimal");
+  assert.deepEqual(renderLast(), renderAgentSummary(threads, 80, theme));
+  updateWidget(ctx, threads, "full");
+  assert.deepEqual(renderLast(), full);
+
+  ctx.mode = "rpc";
+  updateWidget(ctx, threads, "minimal");
+  assert.deepEqual(calls.at(-1)!.content, renderAgentSummary(threads, 80, theme));
+  updateWidget(ctx, threads, "full");
+  assert.deepEqual(calls.at(-1)!.content, full);
+  updateWidget(ctx, [], "minimal");
+  assert.equal(calls.at(-1)!.content, undefined);
+  updateWidget(ctx, [thread("/root")], "minimal");
+  assert.equal(calls.at(-1)!.content, undefined);
+  assert.ok(calls.every((call) => (call.options as { placement: string }).placement === "aboveEditor"));
+});
+
+test("minimal widget resolves live themes without allocating elapsed-time timers", (t) => {
+  let content: unknown;
+  let current = theme;
+  const interval = t.mock.method(globalThis, "setInterval", () => {
+    throw new Error("minimal mode has no elapsed time to repaint");
+  });
+  const ctx = {
+    hasUI: true,
+    mode: "tui",
+    ui: {
+      get theme() { return current; },
+      setWidget: (_key: string, value: unknown) => { content = value; },
+    },
+  } as unknown as ExtensionContext;
+  updateWidget(ctx, [thread("/root/job", { inputTokens: 12, outputTokens: 3 })], "minimal");
+  const component = (content as (tui: { requestRender(): void }) => {
+    render(width: number): string[];
+    invalidate(): void;
+    dispose(): void;
+  })({ requestRender() {} });
+  const first = component.render(80);
+  assert.ok(first[0]!.includes(current.fg("accent", "1 running")));
+  current = testTheme("light");
+  component.invalidate();
+  const second = component.render(80);
+  assert.notDeepEqual(second, first);
+  assert.deepEqual(plain(second), plain(first));
+  assert.ok(second[0]!.includes(current.fg("accent", "1 running")));
+  assert.ok(second[0]!.endsWith(current.fg("muted", "↑12 ↓3")));
+  assert.equal(interval.mock.callCount(), 0);
+  component.dispose();
 });

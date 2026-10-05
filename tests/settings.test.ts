@@ -21,9 +21,11 @@ import {
   SUBAGENT_MODES,
   MODEL_SELECTION_MODES,
   TOOL_FILTERING_MODES,
+  WIDGET_MODES,
   type ModelSelectionMode,
   type SubagentMode,
   type ToolFilteringMode,
+  type WidgetMode,
   type ManagerSettings,
 } from "../src/prefs/settings.ts";
 
@@ -63,7 +65,8 @@ const settings = (
   modelSelection: ModelSelectionMode = "pick-first-scoped",
   subagentMode: SubagentMode = "opportunistic",
   toolFiltering: ToolFilteringMode = "allowed",
-) => ({ maxLevels, maxConcurrent, maxThreads, modelSelection, subagentMode, toolFiltering });
+  widgetMode: WidgetMode = "full",
+) => ({ maxLevels, maxConcurrent, maxThreads, modelSelection, subagentMode, toolFiltering, widgetMode });
 
 const escape = (path: string) => new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
@@ -91,6 +94,7 @@ test("missing files return a fresh copy of defaults without diagnostics", (t) =>
       modelSelection: "pick-first-scoped",
       subagentMode: "opportunistic",
       toolFiltering: "allowed",
+      widgetMode: "full",
     },
     diagnostics: [],
   });
@@ -152,6 +156,10 @@ test("invalid layer content is rejected with a diagnostic naming the file", (t) 
     ...["automatic", "Allowed", true, null, 1, [], {}].map((toolFiltering): [string, RegExp] => [
       JSON.stringify({ toolFiltering }),
       /toolFiltering must be allowed, all-except-blocked or all/,
+    ]),
+    ...["automatic", "Full", true, null, 1, [], {}].map((widgetMode): [string, RegExp] => [
+      JSON.stringify({ widgetMode }),
+      /widgetMode must be full or minimal/,
     ]),
     ['{"maxLevels":2,"extra":1}', /Unknown settings key: extra/],
   ];
@@ -322,6 +330,7 @@ test("save writes canonical 0600 files, creates owned directories, and reloads w
   assert.equal(lstatSync(f.globalFile).mode & 0o777, 0o600, "overwrite restores 0600");
 
   const reordered = {
+    widgetMode: "full",
     subagentMode: "opportunistic",
     toolFiltering: "allowed",
     modelSelection: "pick-first-scoped",
@@ -392,6 +401,11 @@ test("invalid save input never creates or mutates files", (t) => {
       },
       /toolFiltering must be allowed, all-except-blocked or all/,
     ],
+    ...["automatic", "Full", false, null, 1, [], {}].map((widgetMode): [unknown, RegExp] => [
+      { ...settings(1, 1, 1), widgetMode },
+      /widgetMode must be full or minimal/,
+    ]),
+    [{ ...settings(1, 1, 1), widgetMode: undefined }, /widgetMode must be full or minimal/],
     [{ ...settings(1, 1, 1), extra: 1 }, /Unknown settings key: extra/],
     [null, /must be a JSON object/],
     [[], /must be a JSON object/],
@@ -494,4 +508,34 @@ test("invalid model selection rejects its entire layer and does not fall back to
   assert.equal(result.diagnostics.length, 1);
   assert.match(result.diagnostics[0], escape(f.projectFile));
   assert.match(result.diagnostics[0], /modelSelection must be pick-first-available, pick-first-scoped or use-current/);
+});
+
+test("both widget modes save and load with trusted-project precedence", (t) => {
+  const f = fixture(t);
+  for (const mode of WIDGET_MODES) {
+    const user = { ...DEFAULTS, widgetMode: mode };
+    save(f, "user", user);
+    assert.deepEqual(load(f, false), { settings: user, diagnostics: [] });
+    assert.equal(JSON.parse(readFileSync(f.globalFile, "utf8")).widgetMode, mode);
+    for (const projectMode of WIDGET_MODES) {
+      const project = { ...user, widgetMode: projectMode };
+      save(f, "project", project);
+      assert.deepEqual(load(f), { settings: project, diagnostics: [] });
+      assert.equal(JSON.parse(readFileSync(f.projectFile, "utf8")).widgetMode, projectMode);
+      assert.equal(load(f, false).settings.widgetMode, mode);
+    }
+  }
+});
+
+test("legacy settings without widgetMode keep full mode; invalid mode ignores its entire layer", (t) => {
+  const f = fixture(t);
+  writeJson(f.globalFile, { maxLevels: 5 });
+  assert.equal(load(f).settings.widgetMode, "full");
+  writeJson(f.globalFile, { widgetMode: "minimal", maxLevels: 5 });
+  writeJson(f.projectFile, { widgetMode: "invalid", maxLevels: 2 });
+  const result = load(f);
+  assert.deepEqual(result.settings, { ...DEFAULTS, widgetMode: "minimal", maxLevels: 5 });
+  assert.equal(result.diagnostics.length, 1);
+  assert.match(result.diagnostics[0], escape(f.projectFile));
+  assert.match(result.diagnostics[0], /widgetMode must be full or minimal/);
 });

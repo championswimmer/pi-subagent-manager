@@ -72,7 +72,7 @@ They inherit your current model until you set preferences. Details: [docs/defaul
 | `/agents import` | Import agents from other subagent extensions           |
 | `/agents reload` | Reload definitions and settings                        |
 
-A compact live **Agents** tree also sits above the input box. In the fullscreen tree, **Enter** watches an agent, **Escape** returns, and **i** opens existing thread actions. Optional exhausted-Down editor entry is experimental: set `PI_SUBAGENT_NAVIGATION_EDITOR=1`. See [live navigation](docs/tools-and-ui.md#live-agent-navigation-read-only) for controls and compatibility.
+A live **Agents** widget sits above the input box. Choose **Full** (the existing tree) or **Minimal** (one line of colored status counts and running-agent token totals) under **Status Widget** in `/agents` settings. In the fullscreen tree, **Enter** watches an agent, **Escape** returns, and **i** opens existing thread actions. Optional exhausted-Down editor entry is experimental: set `PI_SUBAGENT_NAVIGATION_EDITOR=1`. See [live navigation](docs/tools-and-ui.md#live-agent-navigation-read-only) for controls and compatibility.
 
 ## Docs
 
