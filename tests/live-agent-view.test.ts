@@ -117,7 +117,10 @@ test("live viewer shows assistant/tool streams and browsing never sends input", 
         role: "assistant",
         content: [
           { type: "text", text: "partial assistant" },
-          { type: "thinking", thinking: "private thinking" },
+          {
+            type: "thinking",
+            thinking: "- private thinking 0\n- private thinking 1\n- private thinking 2\n- private thinking 3",
+          },
         ],
       } as AgentMessage,
       tools: [
@@ -133,12 +136,17 @@ test("live viewer shows assistant/tool streams and browsing never sends input", 
   );
   content = live.view.render(120).join("\n");
   assert.match(content, /partial assistant/);
-  assert.match(content, /Tool bash — running/);
+  assert.match(content, /\$ build — running/);
   assert.match(content, /partial tool output/);
-  assert.doesNotMatch(content, /private thinking/);
+  // Preview detail shows the first three rendered thinking rows.
+  assert.match(content, /private thinking 0/);
+  assert.match(content, /private thinking 2/);
+  assert.doesNotMatch(content, /private thinking 3/);
   live.view.handleInput("\t"); // Focus transcript controls.
-  live.view.handleInput("t");
-  assert.match(live.view.render(120).join("\n"), /private thinking/);
+  live.view.handleInput("t"); // Compact detail hides thinking entirely.
+  assert.doesNotMatch(live.view.render(120).join("\n"), /private thinking/);
+  live.view.handleInput("t"); // Full detail shows every thinking row.
+  assert.match(live.view.render(120).join("\n"), /private thinking 3/);
   live.view.handleInput("some text");
   live.view.handleInput("\r");
   assert.deepEqual(live.done, []);
@@ -168,7 +176,7 @@ test("bottom input sends Enter to the inspected descendant through the steering 
       const bottom = stripTerminalSequences(live.view.render(100).at(-1)!).trimEnd();
       assert.equal(bottom, "Steer > ctlr focus on tests 界🙂");
       assert.equal(live.viewport.showInherited, undefined);
-      assert.equal(live.viewport.showThinking, undefined);
+      assert.equal(live.viewport.detail, undefined);
       assert.equal(live.viewport.follow, true);
       assert.deepEqual(live.steers, [], "typing alone does not send");
       live.view.handleInput("\r");
@@ -209,7 +217,7 @@ test("input cursor editing and Tab browsing preserve the draft and forward focus
     live.view.handleInput("t");
     live.view.handleInput("\r");
     assert.equal(live.viewport.showInherited, true);
-    assert.equal(live.viewport.showThinking, true);
+    assert.equal(live.viewport.detail, "compact");
     assert.deepEqual(live.steers, []);
     live.view.handleInput("\t");
     assert.ok(live.view.render(100).at(-1)!.includes(CURSOR_MARKER));
@@ -286,7 +294,7 @@ test("bracketed paste cannot submit, navigate, or inject terminal controls", asy
     assert.deepEqual(live.done, []);
     assert.deepEqual(live.steers, []);
     assert.equal(live.viewport.showInherited, undefined);
-    assert.equal(live.viewport.showThinking, undefined);
+    assert.equal(live.viewport.detail, undefined);
     const bottom = live.view.render(100).at(-1)!;
     assert.match(stripTerminalSequences(bottom), /c    tred 界🙂/);
     assert.doesNotMatch(bottom, /\x1b\[31m|\x00/);
@@ -395,16 +403,22 @@ test("streaming, inherited, custom and visible thinking text use Markdown too", 
     let content = live.view.render(100).join("\n");
     assert.ok(content.includes(getMarkdownTheme().bold("stream bold")));
     assert.ok(content.includes(getMarkdownTheme().bold("update bold")));
-    assert.doesNotMatch(content, /inherited bold|thinking bold|\*\*/);
+    assert.doesNotMatch(content, /inherited bold|\*\*/);
+    // Preview detail renders thinking Markdown (short thinking fits within three rows).
+    assert.match(stripTerminalSequences(content), /thinking bold/);
+    assert.doesNotMatch(content, /\*\*/);
     // Pi deliberately retains styled fence borders, even while a fence is incomplete.
     assert.ok(
       content.includes(getMarkdownTheme().highlightCode!("const partial =", "typescript")[0]!),
     );
     live.view.handleInput("\t");
     live.view.handleInput("c");
-    live.view.handleInput("t");
+    live.view.handleInput("t"); // Compact detail: inherited shown, thinking hidden.
     content = live.view.render(100).join("\n");
     assert.ok(content.includes(getMarkdownTheme().bold("inherited bold")));
+    assert.doesNotMatch(stripTerminalSequences(content), /thinking bold/);
+    live.view.handleInput("t"); // Full detail: thinking shown again.
+    content = live.view.render(100).join("\n");
     assert.match(stripTerminalSequences(content), /thinking bold/);
     assert.doesNotMatch(content, /\*\*/);
 
@@ -497,18 +511,68 @@ test("tool calls and results show only three preview rows while messages stay co
   const content = live.view.render(120).join("\n");
   for (const prefix of ["steer", "agent", "update", "stream"])
     for (let index = 0; index < 6; index++) assert.ok(content.includes(`${prefix} ${index}`));
-  assert.match(content, /Tool call: read/);
-  assert.match(content, /"path": "file.ts"/);
+  assert.match(content, /read file\.ts:1-100/);
   assert.match(content, /Tool result: read/);
-  assert.match(content, /Tool bash — completed \(error\) \(nested\)/);
-  assert.match(content, /"command": "build"/);
+  assert.match(content, /\$ build — completed \(error\) \(nested\)/);
   for (const prefix of ["output", "running output"]) {
     for (let index = 0; index < 3; index++) assert.ok(content.includes(`${prefix} ${index}`));
     assert.ok(!content.includes(`${prefix} 3`));
   }
   assert.doesNotMatch(content, /hiddenArgument|duplicate result/);
-  assert.equal(content.split("\n").filter((line) => line.trim() === "...").length, 4);
+  // Only the two result previews overflow three rows; pi-style call lines never print JSON.
+  assert.equal(content.split("\n").filter((line) => line.trim() === "...").length, 2);
   live.view.dispose();
+});
+
+test("t cycles preview, compact and full detail for tool calls and thinking", async () => {
+  const live = launch(
+    snapshot({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "- thought 0\n- thought 1\n- thought 2\n- thought 3" },
+            {
+              type: "toolCall",
+              id: "t1",
+              name: "bash",
+              arguments: { command: "build\necho done\nnpm test\nfinal step", timeout: 30 },
+            },
+          ],
+        } as AgentMessage,
+      ],
+    }),
+    24,
+  );
+  await tick();
+  try {
+    // Default preview: three wrapped rows of the call and of the rendered thinking.
+    let content = live.view.render(80).join("\n");
+    assert.match(content, /\$ build/);
+    assert.match(content, /npm test/);
+    assert.doesNotMatch(content, /final step/);
+    assert.match(content, /thought 0/);
+    assert.doesNotMatch(content, /thought 3/);
+    live.view.handleInput("\t");
+    assert.match(live.view.render(80).join("\n"), /t view:preview/);
+    live.view.handleInput("t"); // Compact: one call line, thinking fully hidden.
+    content = live.view.render(80).join("\n");
+    assert.match(content, /\$ build \(timeout 30s\)/);
+    assert.doesNotMatch(content, /echo done|thought 0/);
+    assert.match(content, /Thinking hidden/);
+    assert.match(content, /t view:compact/);
+    live.view.handleInput("t"); // Full: every command and thinking row.
+    content = live.view.render(80).join("\n");
+    assert.match(content, /final step/);
+    assert.match(content, /thought 3/);
+    assert.match(content, /t view:full/);
+    live.view.handleInput("t"); // Cycle wraps back to preview.
+    content = live.view.render(80).join("\n");
+    assert.doesNotMatch(content, /final step|thought 3/);
+    assert.match(content, /t view:preview/);
+  } finally {
+    live.view.dispose();
+  }
 });
 
 test("previews count wrapped rows, keep short results intact, and sanitize tool output", async () => {
