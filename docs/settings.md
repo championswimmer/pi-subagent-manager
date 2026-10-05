@@ -50,7 +50,7 @@ Controls the subagent status display above the input box. Choose **Status Widget
 
 | Option             | Display |
 | ------------------ | ------- |
-| `full` (default)   | The existing multi-line tree with agent details, activity and navigation hints. |
+| `full` (default)   | A compact tree with one row per agent, task/state, metrics and navigation hints. |
 | `minimal`          | One line of theme-colored status counts plus cumulative input `↑` / output `↓` tokens for agents currently starting or running. |
 
 Minimal mode groups starting agents with running agents and excludes the main conversation. Token totals exclude completed, stopped, failed and paused agents. The fullscreen tree remains available via `/agents tree` in either mode.

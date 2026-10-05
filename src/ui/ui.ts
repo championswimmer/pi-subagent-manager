@@ -333,12 +333,6 @@ function branchPriorityComparator(
     (a < b ? -1 : a > b ? 1 : 0);
 }
 
-function activityIndent(prefix: string): string {
-  if (prefix.endsWith("├─ ")) return prefix.slice(0, -3) + "│  ";
-  if (prefix.endsWith("└─ ")) return prefix.slice(0, -3) + "   ";
-  return " ".repeat(prefix.length + 3);
-}
-
 function agentStateColor(
   state: ThreadView["state"],
 ): "error" | "warning" | "accent" {
@@ -358,19 +352,6 @@ function agentLine(
   const thread = row.thread!;
   const left = `${row.prefix}${agentTypeBadge(thread.type, thread.color, theme, thread.icon, nerdFontIcons)} ${agentPath(thread.path, thread.color, theme)} ${theme.fg(agentStateColor(thread.state), `[${sanitizeText(thread.state)}]`)} ${sanitizeText(thread.task)}`;
   return fitLine(left, theme.fg("muted", threadMetrics(thread)), width);
-}
-
-function activityLine(
-  row: StatusRow,
-  width: number,
-  theme: AgentBadgeTheme,
-): string {
-  const thread = row.thread!;
-  return truncateToWidth(
-    `${activityIndent(row.prefix)}${theme.fg("muted", sanitizeText(thread.status || thread.task))}`,
-    width,
-    "",
-  );
 }
 
 function placeholderLine(
@@ -398,7 +379,7 @@ function takeWidgetRows(rows: StatusRow[], budget: number): StatusRow[] {
     stack.push(index);
   }
   const rowCost = (row: StatusRow) =>
-    row.path === WIDGET_ROOT ? 0 : row.thread ? 2 : 1;
+    row.path === WIDGET_ROOT ? 0 : 1;
   const candidates = rows
     .map((row, index) => ({ row, index }))
     .filter(({ row }) => row.thread && row.path !== WIDGET_ROOT)
@@ -471,7 +452,6 @@ export function renderAgentTree(
       continue;
     }
     lines.push(agentLine(row, columns, theme, nerdFontIcons));
-    lines.push(activityLine(row, columns, theme));
   }
   lines.push(agentWidgetStatus(live, omitted, columns, theme, showBrowserHint && live > 0));
   return lines;

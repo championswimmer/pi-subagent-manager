@@ -71,15 +71,15 @@ function indexOf(lines: string[], text: string): number {
 }
 
 test("overflow previews select the most recent agents within a state", () => {
-  const threads = Array.from({ length: 9 }, (_, index) =>
+  const threads = Array.from({ length: 14 }, (_, index) =>
     thread(`/root/job-${index}`, { createdAt: index, task: `TASK_${index}` }),
   );
   const lines = plain(renderAgentTree(threads, 120, theme));
-  for (let index = 4; index < 9; index++)
+  for (let index = 4; index < 14; index++)
     assert.ok(lines.some((line) => line.includes(`TASK_${index}`)));
   for (let index = 0; index < 4; index++)
-    assert.ok(!lines.some((line) => line.includes(`TASK_${index}`)));
-  assert.match(lines.at(-1)!, /9 running.*\+4 more agents.*Press ←/);
+    assert.ok(!lines.some((line) => new RegExp(`\\bTASK_${index}\\b`).test(line)));
+  assert.match(lines.at(-1)!, /14 running.*\+4 more agents.*Press ←/);
 });
 
 test("status tree honors a sibling comparator but cycle repair stays lexical", () => {
@@ -134,8 +134,7 @@ test("agent tree heading, hierarchy, declared parents, and root exclusion", () =
   assert.ok(indexOf(nested, "Grand") < indexOf(nested, "Sibling"));
   assert.match(lineOf(nested, "Child"), /^│  └─ /);
   assert.match(lineOf(nested, "Grand"), /^│     └─ /);
-  const parentActivity = text[text.indexOf(lineOf(nested, "Parent")) + 1]!;
-  assert.match(parentActivity, /^│/);
+  assert.equal(nested.length, 6);
 
   const declared = renderAgentTree(
     [
@@ -247,7 +246,7 @@ test("active branches sort before paused before settled, including promoted ance
   assert.ok(indexOf(roots, "Boot") < indexOf(roots, "Indie"));
 });
 
-test("shows task, elapsed tokens, and indented latest activity", (t) => {
+test("shows task and elapsed tokens in one row per agent without status text", (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
   try {
     const lines = renderAgentTree(
@@ -281,16 +280,37 @@ test("shows task, elapsed tokens, and indented latest activity", (t) => {
     assert.match(job, /Investigate/);
     assert.equal(job.includes("Reading"), false);
     assert.ok(job.endsWith("7s ↑1.2k ↓34"), job);
-    const activity = text[text.indexOf(job) + 1]!;
-    assert.match(activity, /Reading src\/ui\.ts/);
-    assert.ok(activity.startsWith("│  ") || activity.startsWith("   "));
+    assert.equal(lines.length, 4);
+    assert.doesNotMatch(text.join("\n"), /Reading src\/ui\.ts/);
     const hold = lineOf(lines, "/root/hold");
     assert.match(hold, /Wait/);
     assert.ok(hold.endsWith("9s ↑10 ↓3"), hold);
-    assert.match(text[text.indexOf(hold) + 1]!, /Wait/);
+    assert.equal(text.filter((line) => line.includes("Wait")).length, 1);
   } finally {
     t.mock.timers.reset();
   }
+});
+
+test("omits lifecycle and activity lines for every state without changing retained status", () => {
+  const statuses = {
+    starting: "Starting",
+    running: "Working",
+    paused: "Awaiting further input",
+    completed: "Completed; session retained",
+    stopped: "Stopped; session retained",
+    failed: "Failure details",
+  } as const;
+  const threads = Object.entries(statuses).map(([state, status]) =>
+    thread(`/root/${state}`, { state: state as ThreadView["state"], status }),
+  );
+  const snapshot = structuredClone(threads);
+  const lines = plain(renderAgentTree(threads, 120, theme));
+  assert.equal(lines.length, threads.length + 2);
+  for (const agent of threads) {
+    assert.match(lineOf(lines, agent.path), new RegExp(`\\[${agent.state}\\]`));
+    assert.ok(!lines.some((line) => line.includes(agent.status)), agent.status);
+  }
+  assert.deepEqual(threads, snapshot);
 });
 
 test("sanitizes controls and clips unicode without dropping right counters", () => {
@@ -330,13 +350,14 @@ test("sanitizes controls and clips unicode without dropping right counters", () 
   assert.match(wide.join("\n"), /missing parent/);
 });
 
-test("ends below agent activity with running count and browser entry", () => {
+test("ends below agent rows with running count and browser entry", () => {
   for (const state of ["running", "completed"] as const) {
     const lines = plain(renderAgentTree([thread("/root/job", { state })], 80, theme));
-    assert.equal(lines.length, 4);
+    assert.equal(lines.length, 3);
     assert.equal(lines.at(-1), state === "running"
       ? "1 running · Press ← to open subagent browser" : "0 running");
-    assert.match(lines.at(-2)!, /Working/);
+    assert.match(lines.at(-2)!, /\/root\/job/);
+    assert.doesNotMatch(lines.join("\n"), /Working/);
     assert.doesNotMatch(lines.join("\n"), /Esc:|abort main|more agents/);
   }
 });
@@ -352,30 +373,30 @@ test("browser hint appears only for starting or running subagents in either widg
 });
 
 test("bounds the widget to twelve lines and counts every omitted real agent", () => {
-  const many = Array.from({ length: 6 }, (_, index) =>
-    thread(`/root/m${index}`, {
+  const many = Array.from({ length: 11 }, (_, index) =>
+    thread(`/root/m${String(index).padStart(2, "0")}`, {
       parent: "/root",
       state: "completed",
       task: `Job ${index}`,
       status: `status ${index}`,
     }),
   );
-  // Five two-line previews fit between the heading and reserved status strip.
-  const five = renderAgentTree(many.slice(0, 5), 80, theme);
-  assert.equal(five.length, 12);
+  // Ten one-line previews fit between the heading and reserved status strip.
+  const ten = renderAgentTree(many.slice(0, 10), 80, theme);
+  assert.equal(ten.length, 12);
   assert.equal(
-    plain(five).some((line) => line.includes("more agents")),
+    plain(ten).some((line) => line.includes("more agents")),
     false,
   );
-  const six = renderAgentTree(many, 80, theme);
-  assert.equal(six.length, 12);
-  assert.equal(plain(six).at(-1), "0 running · +1 more agents");
+  const eleven = renderAgentTree(many, 80, theme);
+  assert.equal(eleven.length, 12);
+  assert.equal(plain(eleven).at(-1), "0 running · +1 more agents");
   assert.equal(
-    plain(six).some((line) => line.includes("Job 5")),
+    plain(eleven).some((line) => line.includes("Job 10")),
     false,
   );
   const four = renderAgentTree(many.slice(0, 4), 80, theme);
-  assert.equal(four.length, 10);
+  assert.equal(four.length, 6);
   assert.equal(
     plain(four).some((line) => line.includes("more agents")),
     false,
@@ -383,8 +404,8 @@ test("bounds the widget to twelve lines and counts every omitted real agent", ()
 
   const nested = [
     thread("/root/p", { parent: "/root", state: "running", task: "Parent" }),
-    ...Array.from({ length: 6 }, (_, index) =>
-      thread(`/root/p/c${index}`, {
+    ...Array.from({ length: 11 }, (_, index) =>
+      thread(`/root/p/c${String(index).padStart(2, "0")}`, {
         parent: "/root/p",
         state: "running",
         task: `Child ${index}`,
@@ -393,12 +414,12 @@ test("bounds the widget to twelve lines and counts every omitted real agent", ()
   ];
   const packed = renderAgentTree(nested, 90, theme);
   assert.equal(packed.length, 12);
-  assert.match(plain(packed)[0]!, /7 live · 0 paused$/);
-  assert.equal(plain(packed).at(-1), "7 running · +2 more agents · Press ← to open subagent browser");
+  assert.match(plain(packed)[0]!, /12 live · 0 paused$/);
+  assert.equal(plain(packed).at(-1), "12 running · +2 more agents · Press ← to open subagent browser");
   assert.ok(indexOf(packed, "Parent") < indexOf(packed, "Child 0"));
-  assert.match(plain(packed).join("\n"), /Child 3/);
+  assert.match(plain(packed).join("\n"), /Child 8/);
   assert.equal(
-    plain(packed).some((line) => line.includes("Child 4")),
+    plain(packed).some((line) => line.includes("Child 9")),
     false,
   );
 });
@@ -407,7 +428,7 @@ test("live branches cannot be hidden by settled descendants", () => {
   const lines = renderAgentTree(
     [
       thread("/root/a", { task: "Active parent" }),
-      ...Array.from({ length: 4 }, (_, index) =>
+      ...Array.from({ length: 9 }, (_, index) =>
         thread(`/root/a/done${index}`, {
           state: "completed",
           task: `Settled child ${index}`,
@@ -443,9 +464,9 @@ test("browser strip counts unique real starting/running agents and clips safely"
     assert.ok(lines.every((line) => visibleWidth(line) <= width), String(width));
     if (width >= 80) {
       const footer = lines.at(-1)!;
-      assert.equal(stripTerminalSequences(footer), "2 running · +2 more agents · Press ← to open subagent browser");
+      assert.equal(stripTerminalSequences(footer), "2 running · Press ← to open subagent browser");
       assert.ok(footer.includes(theme.fg("accent", "2 running")));
-      assert.ok(footer.includes(theme.fg("muted", " · +2 more agents · Press ← to open subagent browser")));
+      assert.ok(footer.includes(theme.fg("muted", " · Press ← to open subagent browser")));
     }
   }
   assert.deepEqual(threads, before);
@@ -506,7 +527,8 @@ test("updateWidget pins the tree above the editor, clears when empty, and uses s
   const rpcLines = calls[0]!.content as string[];
   assert.ok(Array.isArray(rpcLines) && rpcLines.length <= 12);
   assert.ok(rpcLines.every((line) => visibleWidth(line) <= 80));
-  assert.match(plain(rpcLines).join("\n"), /Agents[\s\S]*Digging/);
+  assert.match(plain(rpcLines).join("\n"), /Agents[\s\S]*Investigate/);
+  assert.doesNotMatch(plain(rpcLines).join("\n"), /Digging/);
   assert.equal(plain(rpcLines).at(-1), "1 running");
   assert.doesNotMatch(plain(rpcLines).join("\n"), /Press ←/);
 
