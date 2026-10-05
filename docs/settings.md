@@ -16,6 +16,7 @@ All keys are optional. Defaults:
   "subagentMode": "opportunistic",
   "widgetMode": "full",
   "nerdFontIcons": false,
+  "finalRecap": false,
   "modelSelection": "pick-first-scoped",
   "toolFiltering": "allowed",
   "maxLevels": 3,
@@ -61,6 +62,14 @@ Experimental features are tagged **[labs]** in settings. **[labs] Nerd Font icon
 When enabled, an agent type’s optional `icon` appears before its readable name in the full widget, thread browsers, live watcher header, and type picker. Types without icons remain text-only; turning it off restores text-only labels without removing configured icons. The minimal widget remains an aggregate count, with no per-agent icons. Saved settings apply immediately to newly rendered widgets and dialogs.
 
 All six bundled agents have [role-specific icons](default-agents.md#nerd-font-icons). Add or change an icon with **[labs] Icon** in `/agents types`, or the optional `icon` frontmatter field in [your own agent](custom-agents.md#icons-labs). Retained threads keep the icon from their saved agent definition.
+
+## [labs] Final Recap (`finalRecap`)
+
+**[labs] Final Recap** is an experimental on/off toggle, **off by default**. Enable it in `/agents` and save with **Ctrl+S**, or set `"finalRecap": true` in your settings file.
+
+When detached agents finish or fail and the main agent is idle, their results are sent back to the main agent for an automatic summary. The summary is a main-thread response, so child notifications do not become the final visible message. Progress updates do not trigger summaries, and active main-agent work is not interrupted. **Subagent Mode Off** suppresses automatic summaries even if this setting is enabled.
+
+**Enabling Final Recap may cause extra model turns and uses more tokens and context.** Leave it off if you prefer to inspect results manually in `/agents tree` or request a summary yourself.
 
 ## Model Picking (`modelSelection`)
 

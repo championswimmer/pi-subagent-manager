@@ -69,7 +69,8 @@ const settings = (
   toolFiltering: ToolFilteringMode = "allowed",
   widgetMode: WidgetMode = "full",
   nerdFontIcons = false,
-) => ({ maxLevels, maxConcurrent, maxThreads, modelSelection, subagentMode, toolFiltering, widgetMode, nerdFontIcons });
+  finalRecap = false,
+) => ({ maxLevels, maxConcurrent, maxThreads, modelSelection, subagentMode, toolFiltering, widgetMode, nerdFontIcons, finalRecap });
 
 const escape = (path: string) => new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
@@ -131,6 +132,7 @@ test("missing files return a fresh copy of defaults without diagnostics", (t) =>
       toolFiltering: "allowed",
       widgetMode: "full",
       nerdFontIcons: false,
+      finalRecap: false,
     },
     diagnostics: [],
   });
@@ -368,6 +370,7 @@ test("save writes canonical 0600 files, creates owned directories, and reloads w
   const reordered = {
     widgetMode: "full",
     nerdFontIcons: false,
+    finalRecap: false,
     subagentMode: "opportunistic",
     toolFiltering: "allowed",
     modelSelection: "pick-first-scoped",
@@ -575,4 +578,39 @@ test("legacy settings without widgetMode keep full mode; invalid mode ignores it
   assert.equal(result.diagnostics.length, 1);
   assert.match(result.diagnostics[0], escape(f.projectFile));
   assert.match(result.diagnostics[0], /widgetMode must be full or minimal/);
+});
+
+test("Final Recap defaults off, layers by key, and saves in both scopes", (t) => {
+  const f = fixture(t);
+  assert.equal(load(f).settings.finalRecap, false);
+  writeJson(f.globalFile, { maxLevels: 5 });
+  assert.equal(load(f).settings.finalRecap, false, "legacy files keep the default");
+  save(f, "user", { ...DEFAULTS, finalRecap: true, nerdFontIcons: true });
+  assert.equal(JSON.parse(readFileSync(f.globalFile, "utf8")).finalRecap, true);
+  writeJson(f.projectFile, { maxLevels: 4 });
+  assert.equal(load(f).settings.finalRecap, true, "missing project key inherits global");
+  writeJson(f.projectFile, { finalRecap: false });
+  assert.deepEqual(load(f), { settings: { ...DEFAULTS, nerdFontIcons: true }, diagnostics: [] });
+  assert.equal(load(f, false).settings.finalRecap, true, "untrusted project does not override global");
+  save(f, "project", { ...DEFAULTS, finalRecap: true });
+  assert.equal(JSON.parse(readFileSync(f.projectFile, "utf8")).finalRecap, true);
+  assert.equal(load(f).settings.finalRecap, true);
+  save(f, "project", { ...DEFAULTS, finalRecap: false });
+  assert.equal(load(f).settings.finalRecap, false);
+});
+
+test("Final Recap rejects non-booleans atomically when loading and saving", (t) => {
+  const f = fixture(t);
+  save(f, "user", { ...DEFAULTS, finalRecap: true, maxLevels: 5 });
+  const before = readFileSync(f.globalFile, "utf8");
+  for (const invalid of ["true", "false", 0, 1, null, [], {}]) {
+    writeJson(f.projectFile, { finalRecap: invalid, maxLevels: 2 });
+    const result = load(f);
+    assert.deepEqual(result.settings, { ...DEFAULTS, finalRecap: true, maxLevels: 5 });
+    assert.equal(result.diagnostics.length, 1);
+    assert.match(result.diagnostics[0], escape(f.projectFile));
+    assert.match(result.diagnostics[0], /finalRecap must be a boolean/);
+    rejects(() => save(f, "user", { ...DEFAULTS, finalRecap: invalid }), /finalRecap must be a boolean/);
+    assert.equal(readFileSync(f.globalFile, "utf8"), before);
+  }
 });

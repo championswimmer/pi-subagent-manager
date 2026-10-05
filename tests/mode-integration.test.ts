@@ -29,6 +29,91 @@ const answer = (text: string): AssistantMessage => ({
 });
 const worker = "---\nname: worker\ndescription: Execute work\n---\nExecute your assigned task.\n";
 
+for (const earlyChildren of [2, 1, 0]) {
+  test(`root answer stays last visible with ${earlyChildren} of two children finishing before it`, { timeout: 15000 }, async () => {
+    let finishRoot!: (message: AssistantMessage) => void;
+    const rootResult = new Promise<AssistantMessage>((resolve) => { finishRoot = resolve; });
+    const finishes: Array<(message: AssistantMessage) => void> = [];
+    const childResults = [0, 1].map((i) => new Promise<AssistantMessage>((resolve) => { finishes[i] = resolve; }));
+    let rootCalls = 0;
+    await withOfflineHarness({
+      agentFiles: { worker: "---\nname: worker\ndescription: Execute work\ntools:\n  allow: [agent_update]\n---\nExecute your assigned task.\n" },
+      onRequest(request) {
+        if (request.path) {
+          const i = Number(request.path.at(-1));
+          if (request.pathCall === 1) return {
+            ...answer(""), stopReason: "toolUse",
+            content: [{ type: "toolCall", id: `progress-${i}`, name: "agent_update", arguments: {
+              message: `Worker ${i} progressing`,
+            } }],
+          };
+          return childResults[i]!;
+        }
+        rootCalls++;
+        if (rootCalls === 1) return {
+          ...answer(""), stopReason: "toolUse",
+          content: [0, 1].map((i) => ({ type: "toolCall" as const, id: `spawn-${i}`, name: "agent_spawn", arguments: {
+            path: `worker-${i}`, type: "worker", task: `Run parallel task ${i}`, wait: false,
+          } })),
+        };
+        if (rootCalls === 2) return rootResult;
+        assert.match(request.messagesText, /Worker 0 result/);
+        assert.match(request.messagesText, /Worker 1 result/);
+        assert.match(request.messagesText, /Worker 0 progressing/);
+        assert.match(request.messagesText, /Worker 1 progressing/);
+        return answer("Follow-up root answer");
+      },
+    }, async ({ cwd, errors, open, close, requests }) => {
+      const session = await open(SessionManager.create(cwd));
+      const prompt = session.prompt("Delegate two parallel tasks");
+      const mailbox = () => session.sessionManager.getEntries().filter((entry) =>
+        entry.type === "custom" && entry.customType === "pi-subagent:root-mailbox:v1");
+      const notifications = () => session.sessionManager.getEntries().filter((entry) =>
+        entry.type === "custom_message" && entry.customType === "pi-subagent:update");
+      const assertLastVisible = (manager: SessionManager, text: string) => {
+        // Match Pi's display policy both for live messages and transcript restoration.
+        const visible = manager.getBranch().filter((entry) =>
+          entry.type === "message" || (entry.type === "custom_message" && entry.display));
+        const last = visible.at(-1);
+        assert.ok(last?.type === "message" && last.message.role === "assistant",
+          "a child notification must not become the last visible message");
+        assert.deepEqual(last.message.content, [{ type: "text", text }]);
+      };
+      try {
+        await waitFor(() => requests.filter((r) => r.path && r.pathCall === 2).length === 2
+          && requests.some((r) => !r.path && r.pathCall === 2), "both children and root running");
+        assert.equal(mailbox().length, 2, "both progress updates retained");
+        for (let i = 0; i < earlyChildren; i++) finishes[i]!(answer(`Worker ${i} result`));
+        await waitFor(() => mailbox().length === 2 + earlyChildren, "early completions retained");
+        assert.equal(notifications().length, 0, "no messages queued into the streaming turn");
+        finishRoot(answer("Final root answer"));
+        await prompt;
+        for (let i = earlyChildren; i < 2; i++) finishes[i]!(answer(`Worker ${i} result`));
+        await waitFor(() => notifications().length === 4, "all progress and completions delivered");
+        assertLastVisible(session.sessionManager, "Final root answer");
+        assert.ok(notifications().every((entry) => entry.type === "custom_message" && !entry.display));
+        assert.equal(requests.filter((r) => !r.path).length, 2, "notifications never start a root turn");
+        const sessionFile = session.sessionManager.getSessionFile()!;
+        await close(session);
+        const restored = await open(SessionManager.open(sessionFile));
+        assertLastVisible(restored.sessionManager, "Final root answer");
+        const reload = restored.extensionRunner.getCommand("agents")!;
+        await reload.handler("reload", restored.extensionRunner.createCommandContext());
+        assert.equal(restored.sessionManager.getEntries().filter((entry) =>
+          entry.type === "custom_message" && entry.customType === "pi-subagent:update").length, 4,
+          "reload and reopen do not duplicate delivered notifications");
+        await restored.prompt("Use the retained child results");
+        assertLastVisible(restored.sessionManager, "Follow-up root answer");
+        assert.deepEqual(errors, []);
+      } finally {
+        finishes.forEach((finish, i) => finish(answer(`Worker ${i} result`)));
+        finishRoot(answer("Final root answer"));
+        await prompt;
+      }
+    });
+  });
+}
+
 test("real SDK off hides all agent tools, including discovery, and leaves the prompt untouched", { timeout: 15000 }, async () => {
   await withOfflineHarness({
     agentFiles: { worker },

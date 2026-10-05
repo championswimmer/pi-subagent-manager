@@ -76,6 +76,8 @@ A live **Agents** widget sits above the input box. Choose **Full** (the existing
 
 Experimental features are marked **[labs]** in settings. Enable **[labs] Nerd Font icons** in `/agents` to show role-specific icons beside agent names (off by default; requires a Nerd Font in your terminal). Custom agent types can set an optional `icon` or use **[labs] Icon** in `/agents types`. See [icon setup](docs/settings.md#labs-nerd-font-icons-nerdfonticons).
 
+Enable **[labs] Final Recap** in `/agents` to automatically ask the idle main agent to summarize detached-agent results, keeping the final response in the main thread. It is off by default and suppressed by Subagent Mode Off. **Enabling it may cause extra model turns and uses more tokens and context.** See [Final Recap](docs/settings.md#labs-final-recap-finalrecap).
+
 ## Docs
 
 - [Your own agent](docs/custom-agents.md) — walkthrough for writing an agent type
