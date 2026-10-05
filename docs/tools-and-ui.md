@@ -56,13 +56,14 @@ Then `agent_wait` or `agent_status` on `/root/controller-security-research`.
 
 Refreshes every second and keeps your selection, collapse state and scroll position.
 
-### Live agent navigation (read-only)
+### Live agent navigation
 
-The fullscreen watcher shows steer and agent messages in full, including the in-progress assistant reply. Tool calls, results, and other metadata show their name/status and only the first three wrapped lines of each arguments/output preview, followed by `...` when more is hidden. Use **i → Transcript** from the tree for retained tool details. Thinking is initially hidden (**t** toggles it). It never sends a prompt, switches sessions, or changes model/tool/resource ownership. Inherited context is initially collapsed (**c** toggles it). Unsupported/custom content and images use safe text placeholders rather than native rich rendering. Legacy sessions without reliable inherited-prefix metadata show their whole transcript.
+The fullscreen watcher shows steer and agent messages in full, including the in-progress assistant reply. Tool calls, results, and other metadata show their name/status and only the first three wrapped lines of each arguments/output preview, followed by `...` when more is hidden. Use **i → Transcript** from the tree for retained tool details. Thinking is initially hidden (**t** toggles it with transcript controls focused). Inherited context is initially collapsed (**c** toggles it with transcript controls focused). Watching alone never starts a turn, switches sessions, or changes model/tool/resource ownership. Unsupported/custom content and images use safe text placeholders rather than native rich rendering. Legacy sessions without reliable inherited-prefix metadata show their whole transcript.
 
-- **Up/Down, PageUp/PageDown, Home** scroll and pause following.
-- **End** or **l** resumes following the live tail. Scroll/follow state is remembered per agent.
-- **r** retries an unavailable observation without starting a turn. Starting threads are watchable; stopped/completed threads remain readable.
+- The bottom **Steer** input is focused initially. Type and press **Enter** to send to the inspected agent, including nested descendants, through the same service as `agent_steer`: running agents receive queued input; paused/completed/stopped agents resume their retained session. Empty input is ignored. Sending leaves the viewer open; failures are shown and preserve the draft for retry.
+- **Tab** switches between steering input and transcript controls. While typing, **c/t/l/r** are ordinary text and **Home/End** move the input cursor. Pasting never submits by itself.
+- **Up/Down, PageUp/PageDown** scroll and pause following in either mode. With transcript controls focused, **Home** scrolls to the start; **End** or **l** resumes following the live tail. Scroll/follow state is remembered per agent.
+- **Ctrl+R** (or **r** with transcript controls focused) retries an unavailable observation without starting a turn. Starting threads are watchable; stopped/completed threads remain readable.
 - Frames are sanitized, viewport-bounded and coalesced during bursts. Exit, root replacement and shutdown release observers/timers. Streaming deltas never enter persisted thread events.
 
 #### Left-arrow entry
