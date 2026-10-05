@@ -4,6 +4,17 @@ Generated from version tags and merged GitHub pull requests. Do not edit this fi
 
 ## 0.x — Pre-1.0 releases
 
+### [v0.11.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.11.0) — Minor release (2026-10-05)
+
+<!-- Release notes generated using configuration in .github/release.yml at v0.11.0 -->
+
+#### What's Changed
+##### Merged pull requests
+* feat: add [labs] Nerd Font icons for agent types by @championswimmer in https://github.com/championswimmer/pi-subagent-manager/pull/15
+
+
+**Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v0.10.0...v0.11.0
+
 ### [v0.10.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.10.0) — Minor release (2026-10-05)
 
 <!-- Release notes generated using configuration in .github/release.yml at v0.10.0 -->
