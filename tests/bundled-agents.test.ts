@@ -55,6 +55,9 @@ function availableTools(): string[] {
     },
     "/root",
     () => [],
+    () => {
+      throw new Error("Tool enumeration must not resolve models");
+    },
   ).map((tool) => tool.name);
   return [...builtins, ...controls];
 }

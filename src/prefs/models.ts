@@ -36,6 +36,21 @@ export function modelIdentity(model: { provider: string; id: string }): string {
   return `${model.provider}/${model.id}`;
 }
 
+export class ModelPreferenceError extends Error {
+  constructor(
+    message: string,
+    readonly scopedModelFiltering: boolean,
+  ) {
+    super(message);
+  }
+
+  get summary(): string {
+    return this.scopedModelFiltering
+      ? "No preferred model is available in /scoped-models; update the scope or this type's models."
+      : "No preferred model is available; check provider credentials or this type's models.";
+  }
+}
+
 export function selectPreferredModel(
   type: { name: string; models?: unknown; model?: unknown },
   eligibleModels: readonly { model: { provider: string; id: string } }[],
@@ -50,11 +65,13 @@ export function selectPreferredModel(
   const preferenceList = `[${preferences.join(", ")}]`;
   const availableList = available.length === 0 ? "(none)" : `[${available.join(", ")}]`;
   if (!scopedModelFiltering) {
-    throw new Error(
+    throw new ModelPreferenceError(
       `Agent type ${JSON.stringify(type.name)} prefers models ${preferenceList}, but none are available. Available models: ${availableList}. Update this agent type's models list.`,
+      false,
     );
   }
-  throw new Error(
+  throw new ModelPreferenceError(
     `Agent type ${JSON.stringify(type.name)} prefers scoped models ${preferenceList}, but none are available in /scoped-models. Available scoped models: ${availableList}. Update /scoped-models or this agent type's models list.`,
+    true,
   );
 }

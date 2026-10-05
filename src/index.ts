@@ -289,7 +289,22 @@ export default function piSubagent(pi: ExtensionAPI): void {
     }
   };
 
-  const rootTools = agentTools(requireManager, "/root", () => store.list());
+  const makeDriverFactory = () =>
+    createDriverFactory(
+      requireContext,
+      () => limits.modelSelection,
+      () => limits.toolFiltering,
+      () => inheritedTools.snapshot(),
+    );
+  let driverFactory = makeDriverFactory();
+  const toolsFor = (path: string) =>
+    agentTools(
+      requireManager,
+      path,
+      () => store.list(),
+      (type) => driverFactory.resolveAgentSettings(type, path),
+    );
+  const rootTools = toolsFor("/root");
   let toolsEnabled: boolean | undefined;
   const syncTools = () => {
     const enabled = limits.subagentMode !== "off";
@@ -362,17 +377,13 @@ export default function piSubagent(pi: ExtensionAPI): void {
     persistenceSignature = "";
     const settingsDiagnostics = loadLimits(ctx);
     syncTools();
+    driverFactory = makeDriverFactory();
     const instance = new ThreadManager({
       ...limits,
-      createDriver: createDriverFactory(
-        requireContext,
-        () => limits.modelSelection,
-        () => limits.toolFiltering,
-        () => inheritedTools.snapshot(),
-      ),
+      createDriver: driverFactory,
       rootSnapshot: () => buildSessionContext(requireContext().sessionManager.getBranch()).messages,
       getType: (name) => store.get(name),
-      toolsFor: (path) => agentTools(requireManager, path, () => store.list()),
+      toolsFor,
       onEvent: (event) => {
         if (token !== generation) return;
         refreshWidget(requireContext());

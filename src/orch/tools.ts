@@ -1,8 +1,8 @@
 import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { getModelPreferences } from "../prefs/models.ts";
 import type { ThreadManager } from "./manager.ts";
-import type { AgentType, ThreadView } from "../types.ts";
+import { ModelPreferenceError } from "../prefs/models.ts";
+import type { AgentType, ResolvedAgentSettings, ThreadView } from "../types.ts";
 
 const path = Type.String({ description: "Absolute agent path, or name relative to the caller" });
 const text = Type.String({ minLength: 1 });
@@ -23,6 +23,7 @@ export function agentTools(
   getManager: () => ThreadManager,
   caller: string,
   getTypes: () => AgentType[],
+  resolveSettings: (type: AgentType) => ResolvedAgentSettings,
 ): ToolDefinition[] {
   const threads = () => getManager().scope(caller);
   const make = (
@@ -40,22 +41,43 @@ export function agentTools(
   return [
     make(
       "agent_types",
-      "List current agent types and their task descriptions. Reflects configuration reloads; call this before choosing a type. modelSuggestions are advisory display names, not model pins.",
+      "List agent names, descriptions, resolved models and thinking levels for new children of this caller. Reflects current configuration; call before choosing a type. Other parent paths may inherit different settings.",
       Type.Object({}),
-      () =>
-        result(
-          getTypes().map(
-            ({ name, description, thinkingLevel, color, icon, modelSuggestions, ...type }) => ({
+      () => {
+        const entries = getTypes().map((type) => {
+          const { name, description } = type;
+          try {
+            return { name, description, ...resolveSettings(type) };
+          } catch (error) {
+            return {
               name,
               description,
-              models: getModelPreferences(type),
-              modelSuggestions: modelSuggestions === undefined ? undefined : [...modelSuggestions],
-              thinkingLevel,
-              color,
-              icon,
-            }),
-          ),
-        ),
+              error:
+                error instanceof ModelPreferenceError
+                  ? error.summary
+                  : error instanceof Error
+                    ? error.message
+                    : String(error),
+            };
+          }
+        });
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text:
+                entries
+                  .map((entry) =>
+                    "error" in entry
+                      ? `${entry.name} (unavailable): ${entry.description}\n  ${entry.error}`
+                      : `${entry.name} (${entry.model}, thinking: ${entry.thinkingLevel}): ${entry.description}`,
+                  )
+                  .join("\n") || "No agent types available.",
+            },
+          ],
+          details: entries,
+        };
+      },
     ),
     make(
       "agent_spawn",
