@@ -311,16 +311,17 @@ test("saving widget mode refreshes immediately and reload reads the persisted ch
       assert.ok(widgets.length > before, "Save and apply refreshes the widget");
       const lines = renderWidget();
       if (mode === "minimal") {
-        assert.equal(lines.length, 1);
+        assert.equal(lines.length, 2);
         assert.match(lines[0]!, /0 running.*2 completed.*↑0.*↓0/);
+        assert.match(lines[1]!, /Press ← to open subagent browser/);
       } else assert.ok(lines.length > 1);
       assert.equal(loadManagerSettings({ cwd, agentDir: cwd, includeProject: false }).settings.widgetMode, mode);
     }
     const { settings } = loadManagerSettings({ cwd, agentDir: cwd, includeProject: false });
     writeFileSync(join(cwd, "subagent-manager", "settings.json"), JSON.stringify({ ...settings, widgetMode: "minimal" }));
     await command.handler("reload", ctx);
-    assert.equal(renderWidget().length, 1, "Reload applies a choice changed on disk");
+    assert.equal(renderWidget().length, 2, "Reload applies a choice changed on disk");
     await hooks.get("session_tree")!({}, ctx);
-    assert.equal(renderWidget().length, 1, "Session attachment reloads the choice");
+    assert.equal(renderWidget().length, 2, "Session attachment reloads the choice");
   });
 });

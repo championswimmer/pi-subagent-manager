@@ -1,435 +1,261 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-// Pi exports this constructor only as a type; exercise its installed public
-// implementation directly in tests (production receives it from the factory).
+// Production receives this public implementation from the editor factory.
 import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
 import {
-  setKeybindings,
-  TuiMainScreen,
-  type EditorTheme,
-  type KeybindingsConfig,
-  type Terminal,
+  setKeybindings, TuiMainScreen, type EditorTheme, type KeybindingsConfig, type Terminal,
 } from "@earendil-works/pi-tui";
-import {
-  AgentNavigationEditor,
-  type AgentNavigationEditorOptions,
-} from "../src/ui/agent-navigation-editor.ts";
+import { AgentNavigationEditor, type AgentNavigationEditorOptions } from "../src/ui/agent-navigation-editor.ts";
 
 const UP = "\x1b[A";
 const DOWN = "\x1b[B";
 const LEFT = "\x1b[D";
+const HOME = "\x1b[H";
 const END = "\x1b[F";
 const theme: EditorTheme = {
   borderColor: (text) => text,
   selectList: {
-    selectedPrefix: (text) => text,
-    selectedText: (text) => text,
-    description: (text) => text,
-    scrollInfo: (text) => text,
-    noMatch: (text) => text,
+    selectedPrefix: (text) => text, selectedText: (text) => text,
+    description: (text) => text, scrollInfo: (text) => text, noMatch: (text) => text,
   },
 };
 class FakeTerminal implements Terminal {
-  columns = 80;
-  rows = 24;
-  kittyProtocolActive = false;
-  start() {}
-  stop() {}
-  async drainInput() {}
-  write() {}
-  moveBy() {}
-  hideCursor() {}
-  showCursor() {}
-  clearLine() {}
-  clearFromCursor() {}
-  clearScreen() {}
-  setTitle() {}
-  setProgress() {}
+  columns = 80; rows = 24; kittyProtocolActive = false;
+  start() {} stop() {} async drainInput() {} write() {} moveBy() {}
+  hideCursor() {} showCursor() {} clearLine() {} clearFromCursor() {}
+  clearScreen() {} setTitle() {} setProgress() {}
 }
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
-function setup(
-  bindings: KeybindingsConfig = {},
-  options: Partial<AgentNavigationEditorOptions> = {},
-) {
+function setup(bindings: KeybindingsConfig = {}, options: Partial<AgentNavigationEditorOptions> = {}) {
   const keys = new KeybindingsManager(bindings);
   setKeybindings(keys);
   let opens = 0;
   const editor = new AgentNavigationEditor(new TuiMainScreen(new FakeTerminal()), theme, keys, {
-    openTree: () => {
-      opens++;
-    },
-    canOpen: () => true,
-    generation: () => 1,
-    ...options,
+    openTree: () => { opens++; }, canOpen: () => true, generation: () => 1, ...options,
   });
   editor.focused = true;
   editor.render(80);
   return { editor, keys, opens: () => opens };
 }
 
-test("empty/no-history and nonempty already-at-end drafts open only after dispatch", async () => {
+test("Left opens at the beginning of the draft after stock dispatch, preserving text and cursor", async () => {
   for (const draft of ["", "keep this draft", "one\ntwo"]) {
     const { editor, opens } = setup();
     editor.setText(draft);
-    const cursor = editor.getCursor();
-    editor.handleInput(DOWN);
+    editor.handleInput(UP);
+    editor.handleInput(HOME);
+    assert.deepEqual(editor.getCursor(), { line: 0, col: 0 });
+    editor.handleInput(LEFT);
     assert.equal(opens(), 0);
     await settle();
     assert.equal(opens(), 1);
     assert.equal(editor.getText(), draft);
-    assert.deepEqual(editor.getCursor(), cursor);
+    assert.deepEqual(editor.getCursor(), { line: 0, col: 0 });
   }
 });
 
-test("ordinary Up/Down history and identical-text draft restoration never open", async () => {
-  for (const draft of ["", "newest", "draft"]) {
+test("Left moves normally inside single, multiline, and wrapped drafts; reaching start does not open", async () => {
+  for (const draft of ["abc", "one\ntwo", "a long line that wraps onto several visual rows"]) {
     const { editor, opens } = setup();
-    editor.addToHistory("oldest");
-    editor.addToHistory("newest");
     editor.setText(draft);
-    // Nonempty draft at end: first Up moves caret to start, then browses.
-    if (draft) editor.handleInput(UP);
-    editor.handleInput(UP);
-    assert.equal(editor.getText(), "newest");
-    editor.handleInput(UP);
-    assert.equal(editor.getText(), "oldest");
-    editor.handleInput(DOWN);
-    assert.equal(editor.getText(), "newest");
-    editor.handleInput(DOWN);
-    assert.equal(editor.getText(), draft);
+    editor.render(12);
+    for (let i = 0; i < draft.length; i++) editor.handleInput(LEFT);
     await settle();
     assert.equal(opens(), 0);
-    if (draft) {
-      editor.handleInput(DOWN); // restored nonempty draft still has stock caret movement
-      await settle();
-      assert.equal(opens(), 0);
-    }
-    editor.handleInput(DOWN);
+    assert.deepEqual(editor.getCursor(), { line: 0, col: 0 });
+    editor.handleInput(LEFT);
     await settle();
     assert.equal(opens(), 1);
   }
 });
 
-test("nonempty restored draft caret movement wins before the boundary", async () => {
+test("Down never opens: empty, end-of-draft, exhausted history, and ordinary history remain stock", async () => {
   const { editor, opens } = setup();
-  editor.addToHistory("history");
-  editor.setText("draft");
-  editor.handleInput(UP); // draft cursor at start
-  editor.handleInput(UP); // history
-  editor.handleInput(DOWN); // restore at start
-  assert.deepEqual(editor.getCursor(), { line: 0, col: 0 });
-  editor.handleInput(DOWN); // stock movement to line end
-  await settle();
-  assert.equal(opens(), 0);
-  assert.deepEqual(editor.getCursor(), { line: 0, col: 5 });
+  editor.handleInput(DOWN);
+  editor.setText("one\ntwo");
+  editor.handleInput(DOWN);
+  editor.setText("");
+  editor.addToHistory("oldest");
+  editor.addToHistory("newest");
+  editor.handleInput(UP);
+  assert.equal(editor.getText(), "newest");
+  editor.handleInput(UP);
+  assert.equal(editor.getText(), "oldest");
+  editor.handleInput(DOWN);
+  assert.equal(editor.getText(), "newest");
+  editor.handleInput(DOWN);
+  assert.equal(editor.getText(), "");
+  editor.handleInput(DOWN);
   editor.handleInput(DOWN);
   await settle();
-  assert.equal(opens(), 1);
+  assert.equal(opens(), 0);
 });
 
-test("multiline and wrapped-line Down moves the stock caret without navigation", async () => {
-  for (const draft of ["one\nsecond line", "a long line that wraps onto several visual rows"]) {
-    const { editor, opens } = setup();
-    editor.setText(draft);
-    editor.render(12);
-    for (let i = 0; i < draft.length + 3; i++) editor.handleInput(LEFT);
-    const before = editor.getCursor();
-    editor.handleInput(DOWN);
-    assert.notDeepEqual(editor.getCursor(), before);
-    await settle();
-    assert.equal(opens(), 0);
-    // Only the final logical/visual endpoint can trigger the workflow.
-    editor.setText(draft);
-    editor.render(12);
-    editor.handleInput(DOWN);
-    await settle();
-    assert.equal(opens(), 1);
-  }
-});
-
-test("physical Down only: remaps, conflicts, dedicated history-next, and alternatives stay stock", async () => {
+test("only physical unmodified Left opens, and configured conflicts retain precedence", async () => {
   for (const bindings of [
-    { "tui.editor.cursorDown": "ctrl+n" },
-    { "tui.editor.historyNext": "down" },
-    { "tui.editor.deleteCharForward": "down" },
-    { "tui.editor.jumpForward": "down" },
-    { "app.clear": "down" },
-    { "tui.altScreen.lineDown": "down" },
+    { "tui.editor.cursorLeft": "ctrl+b" }, { "tui.editor.historyNext": "left" },
+    { "tui.editor.deleteCharForward": "left" }, { "tui.editor.jumpForward": "left" },
+    { "app.clear": "left" }, { "tui.altScreen.lineDown": "left" },
   ] satisfies KeybindingsConfig[]) {
     const { editor, opens } = setup(bindings);
-    editor.handleInput(DOWN);
+    editor.handleInput(LEFT);
     await settle();
     assert.equal(opens(), 0, JSON.stringify(bindings));
   }
-  const { editor, opens } = setup({
-    "tui.editor.cursorDown": ["down", "ctrl+n"],
-    "tui.editor.historyNext": "ctrl+j",
-  });
-  editor.handleInput("\x0e");
-  editor.handleInput("\x0a");
+  const { editor, opens } = setup();
+  for (const input of ["\x02", "\x1b[1;5D", "\x1b[1;3D", "\x1b[1;2D"]) editor.handleInput(input);
   await settle();
   assert.equal(opens(), 0);
-  editor.handleInput(DOWN);
+  editor.handleInput(LEFT);
   await settle();
   assert.equal(opens(), 1);
 });
 
-test("extension shortcuts and application actions retain precedence with no false boundary", async () => {
+test("extension shortcuts and application actions dispatch once and prevent navigation", async () => {
   const { editor, opens } = setup();
   let shortcuts = 0;
-  const shortcut = (data: string) => {
-    shortcuts++;
-    return data === DOWN;
-  };
+  const shortcut = (data: string) => { shortcuts++; return data === LEFT; };
   editor.onExtensionShortcut = shortcut;
-  editor.handleInput(DOWN);
-  assert.equal(shortcuts, 1); // never dispatch extension handler twice
-  assert.equal(editor.onExtensionShortcut, shortcut);
+  editor.handleInput(LEFT);
   await settle();
+  assert.equal(shortcuts, 1);
+  assert.equal(editor.onExtensionShortcut, shortcut);
   assert.equal(opens(), 0);
-  const second = setup({ "app.model.select": "down" });
+  const second = setup({ "app.model.select": "left" });
   let actions = 0;
-  second.editor.onAction("app.model.select", () => {
-    actions++;
-  });
-  second.editor.handleInput(DOWN);
+  second.editor.onAction("app.model.select", () => { actions++; });
+  second.editor.handleInput(LEFT);
   await settle();
   assert.equal(actions, 1);
   assert.equal(second.opens(), 0);
 });
 
-test("host change callback forwards identical restoration and is restored on errors", async () => {
+test("jump cancellation and bracketed paste, including recursive suffixes, never open", async () => {
   const { editor, opens } = setup();
-  editor.addToHistory("same");
-  editor.setText("same");
-  let changes = 0;
-  const change = () => {
-    changes++;
-  };
-  editor.onChange = change;
-  editor.handleInput(UP);
-  editor.handleInput(UP);
-  editor.handleInput(DOWN);
-  assert.equal(changes, 2);
-  assert.equal(editor.onChange, change);
+  editor.handleInput("\x1d");
+  editor.handleInput(LEFT);
   await settle();
   assert.equal(opens(), 0);
-  const failingShortcut = () => {
-    throw new Error("shortcut failure");
-  };
-  editor.onExtensionShortcut = failingShortcut;
-  assert.throws(() => editor.handleInput(DOWN), /shortcut failure/);
-  assert.equal(editor.onExtensionShortcut, failingShortcut);
-  assert.equal(editor.onChange, change);
-  assert.equal(opens(), 0);
-});
-
-test("pending jump suppresses a no-op Down without accessing private editor state", async () => {
-  const { editor, opens } = setup();
-  editor.handleInput("\x1d"); // ctrl+] awaits a character
-  editor.handleInput(DOWN); // stock cancellation/no-op does not navigate
-  await settle();
-  assert.equal(opens(), 0);
-  editor.handleInput(DOWN);
-  await settle();
-  assert.equal(opens(), 1);
-});
-
-test("bracketed paste, including recursively dispatched suffix Down, never navigates", async () => {
-  const { editor, opens } = setup();
   editor.handleInput("\x1b[200~");
-  editor.handleInput(DOWN);
+  editor.handleInput(LEFT);
+  editor.handleInput("\x1b[201~" + LEFT);
   await settle();
   assert.equal(opens(), 0);
-  editor.handleInput("\x1b[201~" + DOWN);
+  editor.setText("");
+  editor.handleInput("\x1b[200~\x1b[201~\x1d");
+  editor.handleInput(LEFT);
   await settle();
   assert.equal(opens(), 0);
-  assert.equal(editor.getText(), "[B"); // stock paste sanitizer removes the ESC control byte
-  editor.handleInput(DOWN);
+  editor.handleInput(LEFT);
   await settle();
   assert.equal(opens(), 1);
 });
 
-test("active autocomplete owns Down, even if selection has no visible change", async () => {
+test("active autocomplete owns input", async () => {
   const { editor, opens } = setup();
   editor.setAutocompleteProvider({
-    async getSuggestions() {
-      return {
-        items: [
-          { value: "one", label: "one" },
-          { value: "two", label: "two" },
-        ],
-        prefix: "",
-      };
-    },
-    applyCompletion(lines, cursorLine, cursorCol) {
-      return { lines, cursorLine, cursorCol };
-    },
+    async getSuggestions() { return { items: [{ value: "one", label: "one" }, { value: "two", label: "two" }], prefix: "" }; },
+    applyCompletion(lines, cursorLine, cursorCol) { return { lines, cursorLine, cursorCol }; },
   });
   editor.handleInput("\t");
   await settle();
   assert.equal(editor.isShowingAutocomplete(), true);
-  editor.handleInput(DOWN);
+  editor.handleInput(LEFT);
   await settle();
   assert.equal(opens(), 0);
-  editor.handleInput("\x1b");
 });
 
-test("queued transition coalesces repeated keys and remains owned until interaction finishes", async () => {
+test("repeated Left coalesces until the entire browser interaction finishes", async () => {
   let opens = 0;
   let close!: () => void;
-  const open = new Promise<void>((resolve) => {
-    close = resolve;
-  });
-  const { editor } = setup(
-    {},
-    {
-      openTree: () => {
-        opens++;
-        return open;
-      },
-    },
-  );
-  editor.handleInput(DOWN);
-  editor.handleInput(DOWN);
-  editor.handleInput(DOWN);
+  const open = new Promise<void>((resolve) => { close = resolve; });
+  const { editor } = setup({}, { openTree: () => { opens++; return open; } });
+  for (let i = 0; i < 3; i++) editor.handleInput(LEFT);
   await settle();
   assert.equal(opens, 1);
-  editor.handleInput(DOWN);
+  editor.handleInput(LEFT);
   await settle();
   assert.equal(opens, 1);
   close();
   await settle();
 });
 
-test("queued transitions revalidate generation, focus, ownership, draft/cursor, and disposal", async () => {
-  for (const change of [
-    "generation",
-    "focus",
-    "ownership",
-    "draft",
-    "cursor",
-    "dispose",
-    "input",
-  ]) {
+test("queued transitions revalidate generation, focus, ownership, draft, cursor, disposal, and input", async () => {
+  for (const change of ["generation", "focus", "ownership", "draft", "cursor", "dispose", "input"]) {
     let generation = 1;
     let allowed = true;
     const { editor, opens } = setup({}, { generation: () => generation, canOpen: () => allowed });
     editor.setText("draft");
-    editor.handleInput(DOWN);
+    editor.handleInput(HOME);
+    editor.handleInput(LEFT);
     if (change === "generation") generation++;
     if (change === "focus") editor.focused = false;
     if (change === "ownership") allowed = false;
     if (change === "draft") editor.setText("different");
-    if (change === "cursor") editor.handleInput(LEFT);
+    if (change === "cursor") editor.handleInput(END);
     if (change === "dispose") editor.dispose();
-    if (change === "input") editor.handleInput(END); // same cursor but different input invalidates queue
+    if (change === "input") editor.handleInput(HOME);
     await settle();
     assert.equal(opens(), 0, change);
   }
 });
 
-test("navigation failures are reported and release ownership", async () => {
+test("navigation failures report errors and release ownership", async () => {
   let errors = 0;
   let opens = 0;
-  const { editor } = setup(
-    {},
-    {
-      openTree: async () => {
-        opens++;
-        throw new Error("failed to mount");
-      },
-      onError: () => {
-        errors++;
-      },
-    },
-  );
-  editor.handleInput(DOWN);
+  const { editor } = setup({}, {
+    openTree: async () => { opens++; throw new Error("failed to mount"); },
+    onError: () => { errors++; },
+  });
+  editor.handleInput(LEFT);
   await settle();
   assert.equal(errors, 1);
-  editor.handleInput(DOWN);
+  editor.handleInput(LEFT);
   await settle();
   assert.equal(opens, 2);
 });
 
-test("startup uses host history hydration; reload and replacement use explicit public hydration", () => {
+test("startup history hydration and replacement history preserve intentional repeated prompts", () => {
   for (const startup of [true, false]) {
     const { editor } = setup({}, startup ? {} : { initialHistory: ["oldest", "newest"] });
-    if (startup) {
-      editor.addToHistory("oldest");
-      editor.addToHistory("newest");
-    }
-    editor.handleInput(UP);
-    assert.equal(editor.getText(), "newest");
+    if (startup) { editor.addToHistory("oldest"); editor.addToHistory("newest"); }
+    editor.addToHistory("oldest");
     editor.handleInput(UP);
     assert.equal(editor.getText(), "oldest");
     editor.handleInput(UP);
-    assert.equal(editor.getText(), "oldest");
-    editor.handleInput(DOWN);
     assert.equal(editor.getText(), "newest");
-    editor.handleInput(DOWN);
-    assert.equal(editor.getText(), "");
   }
 });
 
-test("openTree runs in the validated microtask, before subsequent ownership changes", async () => {
+test("openTree runs in the validated microtask", async () => {
   let generation = 1;
   let openedGeneration: number | undefined;
-  const { editor } = setup(
-    {},
-    {
-      generation: () => generation,
-      openTree: () => {
-        openedGeneration = generation;
-      },
-    },
-  );
-  editor.handleInput(DOWN);
-  queueMicrotask(() => {
-    generation = 2;
+  const { editor } = setup({}, {
+    generation: () => generation, openTree: () => { openedGeneration = generation; },
   });
+  editor.handleInput(LEFT);
+  queueMicrotask(() => { generation = 2; });
   await settle();
   assert.equal(openedGeneration, 1);
 });
 
-test("global TUI binding conflicts also disable the injected app manager gesture", async () => {
+test("global keybinding conflicts disable navigation", async () => {
   const { editor, opens } = setup();
-  const globalKeys = new KeybindingsManager({ "tui.editor.deleteCharForward": "down" });
-  setKeybindings(globalKeys);
-  editor.handleInput(DOWN);
+  setKeybindings(new KeybindingsManager({ "tui.editor.deleteCharForward": "left" }));
+  editor.handleInput(LEFT);
   await settle();
   assert.equal(opens(), 0);
 });
 
-test("callbacks replaced by a host handler are retained rather than clobbered in finally", () => {
+test("host callbacks survive stock dispatch, replacement, and errors", () => {
   const { editor } = setup();
   const replacement = () => {};
-  editor.onChange = () => {
-    editor.onChange = replacement;
-  };
-  editor.setText("draft");
-  editor.onChange = () => {
-    editor.onChange = replacement;
-  };
+  editor.onChange = () => { editor.onChange = replacement; };
   editor.handleInput("x");
   assert.equal(editor.onChange, replacement);
-});
-
-test("history hydration never suppresses intentional repeated prompts, even before first input", () => {
-  const { editor } = setup({}, { initialHistory: ["oldest", "newest"] });
-  editor.addToHistory("oldest");
-  editor.setText("");
-  editor.handleInput(UP);
-  assert.equal(editor.getText(), "oldest");
-});
-
-test("jump hotkey recursively dispatched after paste remains guarded on the next Down", async () => {
-  const { editor, opens } = setup();
-  editor.handleInput("\x1b[200~text\x1b[201~\x1d");
-  editor.handleInput(DOWN);
-  await settle();
-  assert.equal(opens(), 0);
-  editor.handleInput(DOWN);
-  await settle();
-  assert.equal(opens(), 1);
+  const failingShortcut = () => { throw new Error("shortcut failure"); };
+  editor.onExtensionShortcut = failingShortcut;
+  assert.throws(() => editor.handleInput(LEFT), /shortcut failure/);
+  assert.equal(editor.onExtensionShortcut, failingShortcut);
+  assert.equal(editor.onChange, replacement);
 });

@@ -24,7 +24,7 @@ for mode in ('regular', 'fullscreen'):
     open(home + '/subagent-manager/.import-offered', 'w').close()
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 30, 100, 0, 0))
-    env = dict(os.environ, PI_CODING_AGENT_DIR=home, PI_SUBAGENT_NAVIGATION_EDITOR='1', TERM='xterm-256color', PI_OFFLINE='1')
+    env = dict(os.environ, PI_CODING_AGENT_DIR=home, TERM='xterm-256color', PI_OFFLINE='1')
     args = ['node', repo + '/node_modules/@earendil-works/pi-coding-agent/dist/cli.js', '--no-session', '--no-extensions', '--no-skills', '--no-prompt-templates', '--no-themes', '--no-context-files', '--no-approve', '--offline', '--provider', 'openai', '--model', 'gpt-4o-mini', '--api-key', 'unused-pty-smoke-key', '--tui-mode', mode, '-e', repo + '/src/index.ts']
     proc = subprocess.Popen(args, cwd=home, env=env, stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
     os.close(slave)
@@ -42,14 +42,14 @@ for mode in ('regular', 'fullscreen'):
     try:
       start = drain(5)
       if proc.poll() is not None: raise RuntimeError('Pi exited during startup: ' + start[-2000:])
-      # Exhausted physical Down, not a slash command, must open the tree.
-      send(b'\x1b[B'); tree = drain(1)
-      assert 'Back main' in tree or 'watch' in tree.lower(), ('Down did not open tree', tree[-2000:])
+      # Physical Left in empty input, not a slash command, must open the tree.
+      send(b'\x1b[D'); tree = drain(1)
+      assert 'Esc main' in tree or 'watch' in tree.lower(), ('Left did not open tree', tree[-2000:])
       # Root Enter returns to the main editor without any model call.
       send(b'\r'); drain(.3)
       send(b'unfinished draft'); drain(.3)
-      send(b'\x1b[B'); draft_tree = drain(.7)
-      assert 'Back main' in draft_tree or 'watch' in draft_tree.lower(), ('Draft Down did not open', draft_tree[-2000:])
+      send(b'\x1b[1;5H\x1b[D'); draft_tree = drain(.7)
+      assert 'Esc main' in draft_tree or 'watch' in draft_tree.lower(), ('Draft Left did not open', draft_tree[-2000:])
       if mode == 'fullscreen':
         # Kitty Ctrl+Shift+F search shortcut: it must not stack above navigation.
         send(b'\x1b[102;6u'); search = drain(.3)
@@ -58,11 +58,11 @@ for mode in ('regular', 'fullscreen'):
       assert 'unfinished draft' in restored, ('Draft was not restored', restored[-2000:])
       # Resize then re-enter; the host must not crash from oversized frames.
       fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', 18, 60, 0, 0)); os.kill(proc.pid, signal.SIGWINCH)
-      drain(.4); send(b'\x1b[B'); resized = drain(.7)
+      drain(.4); send(b'\x1b[D'); resized = drain(.7)
       assert proc.poll() is None, 'Exited after resize'
-      assert 'Back main' in resized or 'watch' in resized.lower(), ('Resize did not render tree', resized[-1000:])
+      assert 'Esc main' in resized or 'watch' in resized.lower(), ('Resize did not render tree', resized[-1000:])
       send(b'\x1b'); drain(.2)
-      print(mode + ': Down entry, root Enter, draft restoration, resize, search suppression (fullscreen) PASS')
+      print(mode + ': Left entry, root Enter, draft restoration, resize, search suppression (fullscreen) PASS')
     finally:
       os.killpg(proc.pid, signal.SIGTERM) if proc.poll() is None else None
       try: proc.wait(timeout=5)

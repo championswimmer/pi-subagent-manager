@@ -61,9 +61,8 @@ export default function piSubagent(pi: ExtensionAPI): void {
     }
   };
   const installNavigationEditor = (ctx: ExtensionContext, seedHistory: boolean) => {
-    // Pi has one custom-editor slot: integrations owning it can opt out explicitly.
-    if (!ctx.hasUI || ctx.mode !== "tui" || !ctx.ui.setEditorComponent ||
-      process.env.PI_SUBAGENT_NAVIGATION_EDITOR !== "1") return;
+    // Pi has one custom-editor slot: do not replace another integration.
+    if (!ctx.hasUI || ctx.mode !== "tui" || !ctx.ui.setEditorComponent) return;
     const existingFactory = ctx.ui.getEditorComponent?.();
     if (existingFactory && existingFactory !== navigationEditorFactory) return;
     // The host only transfers raw text, not cursor/undo/expanded-paste state.

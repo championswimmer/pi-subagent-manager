@@ -41,15 +41,13 @@ async function fixture(
     driver: ReturnType<typeof createDialogDriver>;
   }) => Promise<void>,
   options: {
-    mode?: "tui" | "rpc"; editorFlag?: string; hasUI?: boolean; draft?: string;
+    mode?: "tui" | "rpc"; hasUI?: boolean; draft?: string;
     competingEditor?: boolean; reason?: "startup" | "resume";
   } = {},
 ) {
   const cwd = mkdtempSync(join(tmpdir(), "pi-agent-navigation-"));
   const oldDir = process.env.PI_CODING_AGENT_DIR;
-  const oldFlag = process.env.PI_SUBAGENT_NAVIGATION_EDITOR;
   process.env.PI_CODING_AGENT_DIR = cwd;
-  process.env.PI_SUBAGENT_NAVIGATION_EDITOR = options.editorFlag ?? "1";
   markImportOffered(cwd);
   const hooks = new Map<string, Function>();
   const sessionManager = SessionManager.inMemory(cwd);
@@ -109,8 +107,6 @@ async function fixture(
     host.stop();
     if (oldDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = oldDir;
-    if (oldFlag === undefined) delete process.env.PI_SUBAGENT_NAVIGATION_EDITOR;
-    else process.env.PI_SUBAGENT_NAVIGATION_EDITOR = oldFlag;
     rmSync(cwd, { recursive: true, force: true });
   }
 }
@@ -119,8 +115,10 @@ test("root installs the public editor and command/gesture use the same tree with
   await fixture(async ({ editor, command, ctx, driver }) => {
     const main = editor()!;
     main.setText("unfinished\ndraft");
+    main.handleInput("\x1b[A");
+    main.handleInput("\x1b[H");
     const cursor = main.getCursor();
-    main.handleInput("\x1b[B");
+    main.handleInput("\x1b[D");
     await settle();
     assert.equal(driver.stats.outerOpens, 1);
     assert.equal(driver.stats.outerCompletions, 1);
@@ -153,23 +151,24 @@ test("session tree does not reinstall the editor and root shutdown cancels queue
     assert.equal(installations(), 1);
     assert.equal(editor(), main);
     assert.equal(main.getText(), "preserved draft");
-    main.handleInput("\x1b[B");
+    main.handleInput("\x1b[H");
+    main.handleInput("\x1b[D");
     await hooks.get("session_shutdown")!({}, ctx);
     await settle();
     assert.equal(driver.stats.outerOpens, 0);
   });
 });
 
-test("editor opt-out and non-TUI contexts leave the custom-editor slot untouched", async () => {
+test("non-TUI contexts and existing editors leave the custom-editor slot untouched", async () => {
   for (const options of [
-    { editorFlag: "0" }, { editorFlag: "" }, { mode: "rpc" as const }, { hasUI: false },
+    { mode: "rpc" as const }, { hasUI: false },
     { draft: "existing draft" }, { competingEditor: true },
   ]) {
     await fixture(async ({ installations, command, ctx, driver }) => {
       assert.equal(installations(), 0);
       if (options.mode === undefined && options.hasUI !== false) {
         await command.handler("tree", ctx);
-        assert.equal(driver.stats.outerOpens, 1, "opt-out retains command navigation");
+        assert.equal(driver.stats.outerOpens, 1, "existing editors retain command navigation");
       }
     }, options);
   }
