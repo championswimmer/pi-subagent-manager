@@ -19,9 +19,22 @@ test("orchestration delegates all execution and restricts only the root", () => 
   const prompt = subagentPrompt({ ...DEFAULT_MANAGER_SETTINGS, subagentMode: "orchestration" })!;
   assert.match(prompt, /\/root only coordinates/);
   assert.match(prompt, /Delegate every user task.*even small or sequential tasks/);
-  assert.match(prompt, /Do not inspect\/edit files, run commands, research, or execute task work yourself/);
+  assert.match(
+    prompt,
+    /Do not inspect\/edit files, run commands, research, or execute task work yourself/,
+  );
   assert.match(prompt, /only to \/root; subagents execute the work/);
   assert.doesNotMatch(prompt, /do ordinary tasks yourself/);
+});
+
+test("enabled prompts explain fork and fresh paths and when to avoid inherited context", () => {
+  for (const subagentMode of ["opportunistic", "orchestration"] as const) {
+    const prompt = subagentPrompt({ ...DEFAULT_MANAGER_SETTINGS, subagentMode })!;
+    assert.match(prompt, /agent_spawn path: \/root\/task forks the lexical parent's conversation/);
+    assert.match(prompt, /\/task starts fresh with no inherited history/);
+    assert.match(prompt, /Use fresh agents for adversarial review or clean-slate research/);
+    assert.match(prompt, /self-contained task without the current thread's conclusions/);
+  }
 });
 
 test("enabled prompts give concise tool usage and live limits without an agent catalog", () => {

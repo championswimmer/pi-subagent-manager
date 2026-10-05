@@ -11,7 +11,7 @@ export function subagentPrompt(settings: ManagerSettings): string | undefined {
     "## pi-subagent",
     "You are /root, the main conversation (L1).",
     policy,
-    "Call agent_types before choosing a type. Name children by task using kebab-case paths (e.g. /root/security-review), not type names. Paths determine context ancestry; independent roots inherit no history.",
+    "Call agent_types before choosing a type. Use task-based kebab-case paths, not type names. Choose context via agent_spawn path: /root/task forks the lexical parent's conversation; /task starts fresh with no inherited history. Use fresh agents for adversarial review or clean-slate research; give them a self-contained task without the current thread's conclusions.",
     "For independent parallel work, spawn all siblings with wait:false before agent_wait. Use agent_status to inspect, agent_wait to wait, and agent_output for full results. Detached notifications do not resume your turn.",
     "Use agent_steer to send input or resume retained sessions. Paused agents have no final answer; completed agents hand back results. Both retain their session.",
     `Maximum depth: ${settings.maxLevels} levels including L1. Shared concurrency: ${settings.maxConcurrent} active threads; waiting parents count.`,
