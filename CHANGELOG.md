@@ -4,6 +4,20 @@ Generated from version tags and merged GitHub pull requests. Do not edit this fi
 
 ## 0.x — Pre-1.0 releases
 
+### [v0.15.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.15.0) — Minor release (2026-10-07)
+
+<!-- Release notes generated using configuration in .github/release.yml at v0.15.0 -->
+
+#### What's Changed
+##### Merged pull requests
+* fix: prevent notification failures from crashing subagent runners by @championswimmer in https://github.com/championswimmer/pi-subagent-manager/pull/27
+* Preserve agent icons and add Labs loader families by @championswimmer in https://github.com/championswimmer/pi-subagent-manager/pull/28
+* feat: add Reset to bundled for forked/overridden agents by @championswimmer in https://github.com/championswimmer/pi-subagent-manager/pull/29
+* feat: subagent transcript padding, themed tool bands, newest-first agent tree by @championswimmer in https://github.com/championswimmer/pi-subagent-manager/pull/30
+
+
+**Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v0.14.0...v0.15.0
+
 ### [v0.14.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.14.0) — Minor release (2026-10-05)
 
 <!-- Release notes generated using configuration in .github/release.yml at v0.14.0 -->
