@@ -9,7 +9,8 @@ The allow/block tool picker lists session tools flat, except MCP tools named `mc
 | Tool           | Purpose                                              |
 | -------------- | ---------------------------------------------------- |
 | `agent_types`  | Names, descriptions, resolved models and thinking    |
-| `agent_spawn`  | Start `{path, type, task, wait?}`. Waits by default. |
+| `agent_spawn`  | Start `{path, type, task, wait?, timeoutMs?}`. Waits by default. |
+| `agent_extend_timeout` | Re-arm a running child's timeout `{path, timeoutMs}` |
 | `agent_wait`   | Wait for settlement; optional `timeoutMs`            |
 | `agent_steer`  | Send `{path, message}`; queues input or resumes      |
 | `agent_status` | Inspect one path or list visible threads             |
@@ -34,7 +35,9 @@ are omitted. Spawning under another parent path can change inherited settings.
 
 Then `agent_wait` or `agent_status` on `/root/controller-security-research`.
 
-Child progress and completion notifications are retained in the main agent's context without adding visible chat messages. By default they do not start another turn, keeping the main agent's final response last in the conversation even when detached children finish later. The opt-in **[labs] Final Recap** setting asks an idle main agent to summarize newly completed or failed asynchronous agents; results arriving during a summary are handled after that summary finishes. Progress updates and foreground results do not trigger summaries. Enabling it uses more tokens and context. Use the Agents widget, `/agents tree`, or `agent_output` to inspect child status and answers.
+Child progress and completion notifications are retained in the main agent's context without adding visible chat messages. When a detached (`wait: false`) agent completes, fails or is stopped, the main agent receives a message event that starts a new turn if it is idle (or right after its current turn settles), so it never has to poll. Progress updates and foreground results do not start a turn. The opt-in **[labs] Final Recap** setting changes this: completion messages for async agents are recorded without waking the main agent, and once **all outstanding async agents have reported**, one recap turn summarizes them. Enabling it uses more tokens and context. Use the Agents widget, `/agents tree`, or `agent_output` to inspect child status and answers.
+
+`agent_spawn` accepts an optional `timeoutMs` (30000–300000, i.e. 30s–5min; out-of-range values are rejected; no timeout when omitted). If the child is still running when it elapses, the parent receives an event (always waking an idle main agent, even in recap mode) with the child's state, status, elapsed time, tokens and recent output. The child is **not** stopped; the parent decides to wait, steer or stop it. The timer is cleared when the child completes, fails, stops or is cancelled, and on session shutdown. It is not re-armed when a child is later resumed with `agent_steer`. Use `agent_extend_timeout {path, timeoutMs}` (same 30s–5min range) to re-arm a running child's timer from now, e.g. after a timeout event shows it is still progressing.
 
 ## Parallel and nested work
 

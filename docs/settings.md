@@ -76,6 +76,8 @@ The Labs preview shows every family's running animation frames and completed, pa
 
 When detached agents finish or fail and the main agent is idle, their results are sent back to the main agent for an automatic summary. The summary is a main-thread response, so child notifications do not become the final visible message. Progress updates do not trigger summaries, and active main-agent work is not interrupted. **Subagent Mode Off** suppresses automatic summaries even if this setting is enabled.
 
+With Final Recap on, async completion events no longer wake the main agent one by one; the recap turn starts once every outstanding async agent has reported (spawn-timeout events still wake it).
+
 **Enabling Final Recap may cause extra model turns and uses more tokens and context.** Leave it off if you prefer to inspect results manually in `/agents tree` or request a summary yourself.
 
 ## Model Picking (`modelSelection`)

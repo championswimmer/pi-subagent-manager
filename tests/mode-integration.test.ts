@@ -33,7 +33,7 @@ const workerSystemPrompt = "Execute your assigned task.";
 const worker = `---\nname: worker\ndescription: Execute work\n---\n${workerSystemPrompt}\n`;
 
 for (const earlyChildren of [2, 1, 0]) {
-  test(`root answer stays last visible with ${earlyChildren} of two children finishing before it`, { timeout: 15000 }, async () => {
+  test(`async completions wake the root after its answer, with ${earlyChildren} of two children finishing before it`, { timeout: 15000 }, async () => {
     let finishRoot!: (message: AssistantMessage) => void;
     const rootResult = new Promise<AssistantMessage>((resolve) => { finishRoot = resolve; });
     const finishes: Array<(message: AssistantMessage) => void> = [];
@@ -60,10 +60,6 @@ for (const earlyChildren of [2, 1, 0]) {
           } })),
         };
         if (rootCalls === 2) return rootResult;
-        assert.match(request.messagesText, /Worker 0 result/);
-        assert.match(request.messagesText, /Worker 1 result/);
-        assert.match(request.messagesText, /Worker 0 progressing/);
-        assert.match(request.messagesText, /Worker 1 progressing/);
         return answer("Follow-up root answer");
       },
     }, async ({ cwd, errors, open, close, requests }) => {
@@ -93,13 +89,17 @@ for (const earlyChildren of [2, 1, 0]) {
         await prompt;
         for (let i = earlyChildren; i < 2; i++) finishes[i]!(answer(`Worker ${i} result`));
         await waitFor(() => notifications().length === 4, "all progress and completions delivered");
-        assertLastVisible(session.sessionManager, "Final root answer");
+        await waitFor(() => requests.filter((r) => !r.path).length >= 3 && session.isIdle, "root woken by async completions");
+        const lastRoot = requests.filter((r) => !r.path).at(-1)!;
+        assert.match(lastRoot.messagesText, /Worker 0 result/);
+        assert.match(lastRoot.messagesText, /Worker 1 result/);
+        assert.match(lastRoot.messagesText, /Worker 0 progressing/);
+        assertLastVisible(session.sessionManager, "Follow-up root answer");
         assert.ok(notifications().every((entry) => entry.type === "custom_message" && !entry.display));
-        assert.equal(requests.filter((r) => !r.path).length, 2, "notifications never start a root turn");
         const sessionFile = session.sessionManager.getSessionFile()!;
         await close(session);
         const restored = await open(SessionManager.open(sessionFile));
-        assertLastVisible(restored.sessionManager, "Final root answer");
+        assertLastVisible(restored.sessionManager, "Follow-up root answer");
         const reload = restored.extensionRunner.getCommand("agents")!;
         await reload.handler("reload", restored.extensionRunner.createCommandContext());
         assert.equal(restored.sessionManager.getEntries().filter((entry) =>
@@ -255,6 +255,7 @@ test("streaming notifications stay in the mailbox, do not duplicate on reload, a
       await reload.handler("reload", session.extensionRunner.createCommandContext());
       await reload.handler("reload", session.extensionRunner.createCommandContext());
       assert.equal(notifications().length, 1, "deliver once when enabled and idle");
+      await waitFor(() => requests.filter((r) => !r.path).length >= 3, "async completion wakes the root");
       assert.deepEqual(errors, []);
     } finally {
       finishWorker(answer("Cleanup"));
@@ -264,7 +265,7 @@ test("streaming notifications stay in the mailbox, do not duplicate on reload, a
   });
 });
 
-test("enabled streaming mailbox is delivered once at agent settlement without another model turn", { timeout: 15000 }, async () => {
+test("enabled streaming mailbox is delivered once at agent settlement and wakes the root", { timeout: 15000 }, async () => {
   let finishRoot!: (message: AssistantMessage) => void;
   const rootResult = new Promise<AssistantMessage>((resolve) => { finishRoot = resolve; });
   await withOfflineHarness({
@@ -291,7 +292,7 @@ test("enabled streaming mailbox is delivered once at agent settlement without an
       finishRoot(answer("Root settled"));
       await prompt;
       assert.equal(notifications().length, 1);
-      assert.equal(requests.filter((request) => !request.path).length, 2, "notification does not resume root");
+await waitFor(() => requests.filter((request) => !request.path).length >= 3, "notification wakes root");
       assert.deepEqual(errors, []);
     } finally {
       finishRoot(answer("Cleanup"));

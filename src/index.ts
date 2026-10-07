@@ -20,10 +20,13 @@ import type { SavedThread, ThreadEvent } from "./types.ts";
 const REGISTRY_ENTRY = "pi-subagent:registry:v1";
 const ROOT_MAILBOX_ENTRY = "pi-subagent:root-mailbox:v1";
 const ROOT_SUMMARY_MESSAGE = "pi-subagent:final-recap";
+const ROOT_WAKE_MESSAGE = "pi-subagent:wake";
 type RootNotification = {
   rootSessionId: string;
   content: string;
   finalRecap?: boolean;
+  /** Start a main-agent turn so it reacts to this event (async completion, spawn timeout). */
+  trigger?: boolean;
   details: { mailboxId: string; path: string; state: string };
 };
 
@@ -57,7 +60,15 @@ export default function piSubagent(pi: ExtensionAPI): void {
   let summaryRunning = false;
   let suspendingSummaries = false;
   let summaryTimer: ReturnType<typeof setTimeout> | undefined;
+  let wakeRequested = false;
+  let wakeTimer: ReturnType<typeof setTimeout> | undefined;
+  const cancelWake = () => {
+    if (wakeTimer !== undefined) clearTimeout(wakeTimer);
+    wakeTimer = undefined;
+    wakeRequested = false;
+  };
   const cancelSummary = () => {
+    cancelWake();
     if (summaryTimer !== undefined) clearTimeout(summaryTimer);
     summaryTimer = undefined;
     summaryRunning = false;
@@ -184,6 +195,30 @@ export default function piSubagent(pi: ExtensionAPI): void {
       },
       { triggerTurn: false },
     );
+    if (notification.trigger === true) wakeRequested = true;
+  };
+  /** Wake an idle main agent once for all pending async events (coalesced, after the settle boundary). */
+  const scheduleWake = (ctx: ExtensionContext) => {
+    if (!wakeRequested || wakeTimer !== undefined || limits.subagentMode === "off") return;
+    const currentGeneration = generation;
+    wakeTimer = setTimeout(() => {
+      wakeTimer = undefined;
+      if (currentGeneration !== generation || context?.sessionManager !== ctx.sessionManager ||
+          limits.subagentMode === "off" || suspendingSummaries || !wakeRequested) return;
+      if (ctx.isIdle() === false) return; // agent_settled reschedules
+      wakeRequested = false;
+      try {
+        pi.sendMessage({
+          customType: ROOT_WAKE_MESSAGE,
+          content: "Asynchronous subagent event(s) arrived (see the preceding subagent notifications). " +
+            "React: collect results with agent_output, and for a timeout event decide to wait, steer, stop or agent_extend_timeout.",
+          display: false,
+          details: {},
+        }, { triggerTurn: true });
+      } catch (error) {
+        warnDelivery(error);
+      }
+    }, 0);
   };
   const pendingSummaries = (ctx: ExtensionContext) => {
     const entries = ctx.sessionManager.getBranch();
@@ -203,14 +238,15 @@ export default function piSubagent(pi: ExtensionAPI): void {
   };
   const scheduleSummary = (ctx: ExtensionContext) => {
     if (!limits.finalRecap || limits.subagentMode === "off" || summaryRunning || suspendingSummaries ||
-        summaryTimer !== undefined || ctx.isIdle() === false || !pendingSummaries(ctx).length) return;
+        summaryTimer !== undefined || ctx.isIdle() === false || (manager?.outstandingAsync() ?? 0) > 0 || !pendingSummaries(ctx).length) return;
     const currentGeneration = generation;
     // Coalesce siblings finishing together and leave the settlement boundary before
     // starting a new turn. Recheck settings/session/idle state after the deferral.
     summaryTimer = setTimeout(() => {
       summaryTimer = undefined;
       if (currentGeneration !== generation || context?.sessionManager !== ctx.sessionManager ||
-          !limits.finalRecap || limits.subagentMode === "off" || suspendingSummaries || ctx.isIdle() === false) return;
+          !limits.finalRecap || limits.subagentMode === "off" || suspendingSummaries || ctx.isIdle() === false ||
+          (manager?.outstandingAsync() ?? 0) > 0) return;
       const notifications = pendingSummaries(ctx);
       if (!notifications.length) return;
       summaryRunning = true;
@@ -254,6 +290,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
         delivered.add(notification.details.mailboxId);
       }
     }
+    scheduleWake(ctx);
     scheduleSummary(ctx);
   };
   pi.on("agent_settled", async (_event, ctx) => {
@@ -265,22 +302,33 @@ export default function piSubagent(pi: ExtensionAPI): void {
   const delivery = (event: ThreadEvent) => {
     if (event.kind === "change" || event.kind === "metrics") return;
     const thread = event.thread;
+    const fmtMs = (ms: number) => `${Math.round(ms / 1000)}s`;
+    const elapsed = (thread.elapsedMs ?? 0) + (thread.startedAt ? Date.now() - thread.startedAt : 0);
     const message =
       event.kind === "update"
         ? `Progress from ${thread.path}: ${event.message}`
+        : event.kind === "timeout"
+          ? `Agent ${thread.path} hit its ${fmtMs(event.timeoutMs)} spawn timeout and is STILL RUNNING (not stopped). ` +
+            `State: ${thread.state}; status: ${thread.status}; elapsed: ${fmtMs(elapsed)}; ` +
+            `tokens: ${thread.inputTokens ?? 0} in / ${thread.outputTokens ?? 0} out.\n` +
+            `Recent output:\n${event.recentOutput || "(none yet)"}\n` +
+            "Decide: agent_extend_timeout to be notified again later, agent_wait for it, agent_steer to redirect, agent_stop to cancel, or let it continue."
         : thread.state === "completed"
           ? `Agent ${thread.path} completed. Final answer:\n${thread.output?.slice(0, 16000) ?? "(no text)"}${(thread.output?.length ?? 0) > 16000 ? "\n[Output truncated; use agent_output for more.]" : ""}`
           : `Agent ${thread.path} is ${thread.state}: ${thread.status}. ${thread.state === "paused" ? "No answer handback; send input to resume the same session." : "Session retained for further input."}`;
     try {
       if (event.recipient === "/root") {
+        const recap = limits.finalRecap && !suspendingSummaries && event.kind === "settled" &&
+          event.async && ["completed", "failed", "stopped"].includes(thread.state);
         const notification: RootNotification = {
           rootSessionId: requireContext().sessionManager.getSessionId(),
           content: message,
           // Foreground results already handled by a busy main thread do not need
           // another turn. Completions during a summary do need a follow-up summary.
-          finalRecap: limits.finalRecap && !suspendingSummaries && event.kind === "settled" &&
-            (thread.state === "completed" || thread.state === "failed") &&
-            (requireContext().isIdle() || summaryRunning),
+          finalRecap: recap,
+          // Recap mode defers the turn until every outstanding async agent has reported.
+          trigger: !suspendingSummaries && (event.kind === "timeout" ||
+            (event.kind === "settled" && event.async && !recap)),
           details: {
             mailboxId: randomUUID(),
             path: thread.path,

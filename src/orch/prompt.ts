@@ -17,7 +17,7 @@ export function subagentPrompt(settings: ManagerSettings): string | undefined {
     policy,
     "Call agent_types before choosing a type. Use task-based kebab-case paths, not type names. Choose context via agent_spawn path: /root/task forks the lexical parent's conversation; /task starts fresh with no inherited history. Use fresh agents for adversarial review or clean-slate research; give them a self-contained task without the current thread's conclusions.",
     waitingPolicy,
-    "Use agent_status to inspect and agent_output for full results. Detached notifications do not resume your turn.",
+    "Use agent_status to inspect and agent_output for full results. Completion, failure or stop of a wait:false agent is delivered to you as a message event that starts a new turn when you are idle (with Final Recap on, once after all outstanding async agents have finished). Pass timeoutMs to agent_spawn to get a status event if a child runs long; the child is not killed. Valid range 30000–300000 ms; omit for no timeout. When a timeout event shows a child still progressing, call agent_extend_timeout to re-arm it, or agent_wait/agent_steer/agent_stop.",
     "Use agent_steer to send input or resume retained sessions. Paused agents have no final answer; completed agents hand back results. Both retain their session.",
     `Maximum depth: ${settings.maxLevels} levels including L1. Shared concurrency: ${settings.maxConcurrent} active threads; waiting parents count.`,
   ].join("\n");

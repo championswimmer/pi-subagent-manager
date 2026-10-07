@@ -34,6 +34,9 @@ interface Record {
   /** In-progress message usage. Shown live, never persisted. */
   liveInputTokens?: number;
   liveOutputTokens?: number;
+  /** Detached (spawned with wait:false): completion is reported as an event. */
+  async?: boolean;
+  timeoutTimer?: ReturnType<typeof setTimeout>;
   pauseRequested: boolean;
   stopRequested: boolean;
   observationRevision?: number;
@@ -45,6 +48,18 @@ interface Record {
 }
 const active = (view: Pick<ThreadView, "state">) =>
   view.state === "starting" || view.state === "running";
+export const MIN_SPAWN_TIMEOUT_MS = 30_000;
+export const MAX_SPAWN_TIMEOUT_MS = 300_000;
+function assertSpawnTimeout(timeoutMs: number): void {
+  if (
+    !Number.isInteger(timeoutMs) ||
+    timeoutMs < MIN_SPAWN_TIMEOUT_MS ||
+    timeoutMs > MAX_SPAWN_TIMEOUT_MS
+  )
+    throw new Error(
+      `timeoutMs must be an integer between ${MIN_SPAWN_TIMEOUT_MS} (30s) and ${MAX_SPAWN_TIMEOUT_MS} (5min)`,
+    );
+}
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -119,6 +134,7 @@ export class ThreadManager {
     const reaped: string[] = [];
     for (const path of this.reapCandidates(only)) {
       const record = this.records.get(path)!;
+      this.clearTimeout(record);
       record.detachTranscript?.();
       record.transcriptListeners?.clear();
       record.driver?.dispose();
@@ -147,6 +163,7 @@ export class ThreadManager {
       update: (message) => this.update(caller, message),
       pause: (reason) => this.pause(caller, reason),
       stop: (path) => this.stop(caller, path),
+      extendTimeout: (path, timeoutMs) => this.extendTimeout(caller, path, timeoutMs),
     };
   }
   get(path: string, caller = "/root"): ThreadView {
@@ -260,10 +277,11 @@ export class ThreadManager {
 
   async spawn(
     caller: string,
-    args: { path: string; type: string; task: string; wait?: boolean },
+    args: { path: string; type: string; task: string; wait?: boolean; timeoutMs?: number },
     signal?: AbortSignal,
   ): Promise<ThreadView> {
     this.assertLive();
+    if (args.timeoutMs !== undefined) assertSpawnTimeout(args.timeoutMs);
     caller = canonicalPath(caller);
     if (
       caller !== "/root" &&
@@ -330,7 +348,9 @@ export class ThreadManager {
     };
     this.records.set(path, record);
     if (record.contextPending) this.prepareInheritedContext(record);
+    record.async = args.wait === false;
     this.start(record, args.task);
+    if (args.timeoutMs !== undefined) this.armTimeout(record, args.timeoutMs);
     return args.wait === false ? this.view(record) : this.wait(caller, path, undefined, signal);
   }
 
@@ -430,6 +450,7 @@ export class ThreadManager {
     for (const item of targets) {
       item.stopRequested = true;
       item.startup.abort();
+      this.clearTimeout(item);
     }
     await Promise.all(
       targets.map(async (item) => {
@@ -486,6 +507,63 @@ export class ThreadManager {
       },
     };
   }
+  /** Re-arm a running child's report-only timeout from now (replaces any pending timer). */
+  extendTimeout(caller: string, path: string, timeoutMs: number): ThreadView {
+    this.assertLive();
+    path = canonicalPath(path, caller);
+    this.assertAccess(caller, path);
+    assertSpawnTimeout(timeoutMs);
+    const record = this.record(path);
+    if (!active(record.view) || record.stopRequested)
+      throw new Error("Only a working agent has a timeout to extend");
+    this.armTimeout(record, timeoutMs);
+    return this.view(record);
+  }
+  /** Number of detached agents still working; recap waits for this to reach zero. */
+  outstandingAsync(): number {
+    return [...this.records.values()].filter((r) => r.async && active(r.view)).length;
+  }
+  private clearTimeout(record: Record): void {
+    if (record.timeoutTimer !== undefined) clearTimeout(record.timeoutTimer);
+    record.timeoutTimer = undefined;
+  }
+  private armTimeout(record: Record, timeoutMs: number): void {
+    this.clearTimeout(record);
+    record.timeoutTimer = setTimeout(() => {
+      record.timeoutTimer = undefined;
+      if (this.disposed || !active(record.view) || record.stopRequested) return;
+      this.emit({
+        kind: "timeout",
+        thread: this.view(record),
+        recipient: record.view.parent ?? record.view.owner,
+        timeoutMs,
+        recentOutput: this.recentOutput(record),
+      });
+    }, timeoutMs);
+    record.timeoutTimer.unref?.();
+  }
+  private recentOutput(record: Record): string {
+    const parts: string[] = [];
+    try {
+      const messages = record.driver?.snapshot() ?? [];
+      for (const message of messages.slice(-6)) {
+        if (message.role !== "assistant") continue;
+        const content = message.content as unknown;
+        const text = Array.isArray(content)
+          ? content
+              .filter((c: any) => c?.type === "text" && typeof c.text === "string")
+              .map((c: any) => c.text)
+              .join("\n")
+          : typeof content === "string"
+            ? content
+            : "";
+        if (text.trim()) parts.push(text.trim());
+      }
+    } catch {
+      /* best effort */
+    }
+    return parts.slice(-2).join("\n---\n").slice(-2000);
+  }
   async deliver(path: string, content: string): Promise<void> {
     // Restored parents may be idle and unopened; reports still belong in their retained transcript.
     const driver = await this.ensureDriver(this.record(path), true);
@@ -502,6 +580,7 @@ export class ThreadManager {
       record.transcriptListeners?.clear();
       record.stopRequested = true;
       record.startup.abort();
+      this.clearTimeout(record);
     }
     await Promise.all(
       records.map(async (record) => {
@@ -560,6 +639,7 @@ export class ThreadManager {
         record.view.error = errorText(error);
         record.view.status = record.stopRequested ? "Stopped; session retained" : record.view.error;
       } finally {
+        this.clearTimeout(record);
         this.freezeElapsed(record);
         record.liveInputTokens = 0;
         record.liveOutputTokens = 0;
@@ -570,6 +650,7 @@ export class ThreadManager {
             kind: "settled",
             thread: this.view(record),
             recipient: record.view.parent ?? record.view.owner,
+            async: record.async === true,
           });
       }
     });

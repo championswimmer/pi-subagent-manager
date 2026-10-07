@@ -172,7 +172,7 @@ export interface ThreadService {
   /** Optional for portable adapters; the runtime manager always implements this. */
   observeTranscript?(path: string, listener: TranscriptListener): Promise<TranscriptObservation>;
   spawn(
-    args: { path: string; type: string; task: string; wait?: boolean },
+    args: { path: string; type: string; task: string; wait?: boolean; timeoutMs?: number },
     signal?: AbortSignal,
   ): Promise<ThreadView>;
   steer(path: string, message: string): Promise<ThreadView>;
@@ -180,13 +180,17 @@ export interface ThreadService {
   update(message: string): ThreadView;
   pause(reason: string): ThreadView;
   stop(path: string): Promise<ThreadView>;
+  /** Re-arm a running child's report-only timeout (30s–5min) from now. */
+  extendTimeout(path: string, timeoutMs: number): ThreadView;
 }
 export type DriverFactory = (options: DriverOptions) => Promise<AgentDriver>;
 export type ThreadEvent =
   | { kind: "change"; thread: ThreadView }
   | { kind: "metrics"; thread: ThreadView }
   | { kind: "update"; thread: ThreadView; message: string; recipient: string }
-  | { kind: "settled"; thread: ThreadView; recipient: string };
+  | { kind: "settled"; thread: ThreadView; recipient: string; async: boolean }
+  /** A spawn timeout elapsed while the child is still running. The child is NOT stopped. */
+  | { kind: "timeout"; thread: ThreadView; recipient: string; timeoutMs: number; recentOutput: string };
 export interface ManagerOptions {
   createDriver: DriverFactory;
   rootSnapshot(): AgentMessage[];

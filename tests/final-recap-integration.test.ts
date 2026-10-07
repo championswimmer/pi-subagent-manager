@@ -123,9 +123,8 @@ test("Final Recap batches idle detached completions, not progress, and persists 
   });
 });
 
-test("a sibling completing during an automatic summary gets a subsequent summary only after settlement", { timeout: 15000 }, async () => {
+test("recap waits until all outstanding async agents have reported, then runs once", { timeout: 15000 }, async () => {
   const children = [deferred<AssistantMessage>(), deferred<AssistantMessage>()];
-  const firstSummary = deferred<AssistantMessage>();
   let rootCalls = 0;
   await withOfflineHarness({
     agentFiles: { worker }, managerSettings: { finalRecap: true },
@@ -134,12 +133,8 @@ test("a sibling completing during an automatic summary gets a subsequent summary
       rootCalls++;
       if (rootCalls === 1) return spawn(2);
       if (rootCalls === 2) return answer("Initial root answer");
-      if (rootCalls === 3) {
-        assert.match(request.messagesText, /First child result/);
-        assert.doesNotMatch(request.messagesText, /Second child result/);
-        return firstSummary.promise;
-      }
-      assert.equal(rootCalls, 4, "no summary loop");
+      assert.equal(rootCalls, 3, "a single recap after the last completion");
+      assert.match(request.messagesText, /First child result/);
       assert.match(request.messagesText, /Second child result/);
       return answer("Final root summary");
     },
@@ -148,41 +143,38 @@ test("a sibling completing during an automatic summary gets a subsequent summary
     try {
       await session.prompt("Delegate parallel work");
       children[0]!.resolve(answer("First child result"));
-      await waitFor(() => requests.filter((r) => !r.path).length === 3, "first summary streaming");
-      children[1]!.resolve(answer("Second child result"));
-      await waitFor(() => mailbox(session.sessionManager).length === 2, "later completion retained while summary streams");
+      await waitFor(() => mailbox(session.sessionManager).length === 1, "first completion retained");
       await flushTimers();
-      assert.equal(requests.filter((r) => !r.path).length, 3, "second summary must not interrupt first");
-      firstSummary.resolve(answer("First root summary"));
-      await waitFor(() => requests.filter((r) => !r.path).length === 4 && session.isIdle, "second summary settled");
+      assert.equal(requests.filter((r) => !r.path).length, 2, "no recap while a sibling is outstanding");
+      assert.equal(messages(session.sessionManager, SUMMARY).length, 0);
+      children[1]!.resolve(answer("Second child result"));
+      await waitFor(() => requests.filter((r) => !r.path).length === 3 && session.isIdle, "recap settled");
       const summaries = messages(session.sessionManager, SUMMARY);
-      assert.equal(summaries.length, 2);
-      const batches = summaries.map((entry) => (entry.details as { mailboxIds: string[] }).mailboxIds);
-      assert.equal(batches[0]!.length, 1);
-      assert.equal(batches[1]!.length, 1);
-      assert.notEqual(batches[0]![0], batches[1]![0], "each completion summarized exactly once");
+      assert.equal(summaries.length, 1);
+      assert.equal((summaries[0]!.details as { mailboxIds: string[] }).mailboxIds.length, 2);
       assertLastVisible(session.sessionManager, "Final root summary");
       await flushTimers();
-      assert.equal(requests.filter((r) => !r.path).length, 4, "settlement cannot trigger a loop");
+      assert.equal(requests.filter((r) => !r.path).length, 3, "no summary loop");
       assert.deepEqual(errors, []);
     } finally {
       children.forEach((child, i) => child.resolve(answer(`Cleanup ${i}`)));
-      firstSummary.resolve(answer("First root summary"));
     }
   });
 });
 
 for (const foreground of [true, false]) {
-  test(`Final Recap does not add a turn for ${foreground ? "foreground" : "detached but root-busy"} completion`, { timeout: 15000 }, async () => {
+  test(`Final Recap ${foreground ? "does not add a turn for foreground" : "recaps once after the root settles for detached root-busy"} completion`, { timeout: 15000 }, async () => {
     const child = deferred<AssistantMessage>();
     const root = deferred<AssistantMessage>();
+    let rootCalls = 0;
     await withOfflineHarness({
       agentFiles: { worker }, managerSettings: { finalRecap: true },
       onRequest(request) {
         if (request.path) return child.promise;
-        if (request.pathCall === 1) return spawn(1, foreground);
-        assert.equal(request.pathCall, 2, "only normal root follow-up is requested");
-        return root.promise;
+        rootCalls++;
+        if (rootCalls === 1) return spawn(1, foreground);
+        if (rootCalls === 2) return root.promise;
+        return answer("Recap after busy root");
       },
     }, async ({ cwd, open, requests, errors }) => {
       const session = await open(SessionManager.create(cwd));
@@ -195,9 +187,15 @@ for (const foreground of [true, false]) {
         root.resolve(answer("Normal root final answer"));
         await prompt;
         await flushTimers();
-        assert.equal(requests.filter((r) => !r.path).length, 2);
-        assert.equal(messages(session.sessionManager, SUMMARY).length, 0);
-        assertLastVisible(session.sessionManager, "Normal root final answer");
+        if (foreground) {
+          assert.equal(requests.filter((r) => !r.path).length, 2);
+          assert.equal(messages(session.sessionManager, SUMMARY).length, 0);
+          assertLastVisible(session.sessionManager, "Normal root final answer");
+        } else {
+          await waitFor(() => messages(session.sessionManager, SUMMARY).length === 1 && session.isIdle, "recap after root settles");
+          assert.equal(requests.filter((r) => !r.path).length, 3);
+          assertLastVisible(session.sessionManager, "Recap after busy root");
+        }
         assert.deepEqual(errors, []);
       } finally {
         child.resolve(answer("Cleanup"));
@@ -260,7 +258,10 @@ for (const suppression of ["finalRecap", "off"] as const) {
         child.resolve(answer("Retained child result"));
         await waitFor(() => mailbox(session.sessionManager).length === 1, "completion retained under suppression");
         await flushTimers();
-        assert.equal(requests.filter((r) => !r.path).length, 2);
+        // With recap disabled the async completion simply wakes the root (3rd request);
+        // in off mode nothing is delivered.
+        if (suppression === "finalRecap") await waitFor(() => requests.filter((r) => !r.path).length === 3, "completion wakes root");
+        assert.equal(requests.filter((r) => !r.path).length, suppression === "off" ? 2 : 3);
         assert.equal(messages(session.sessionManager, SUMMARY).length, 0);
         assert.equal(messages(session.sessionManager, UPDATE).length, suppression === "off" ? 0 : 1);
         await writeFile(settingsFile, JSON.stringify({ finalRecap: true }));
@@ -271,8 +272,8 @@ for (const suppression of ["finalRecap", "off"] as const) {
         }
         await reload(session);
         await flushTimers();
-        assert.equal(requests.filter((r) => !r.path).length, suppression === "off" ? 3 : 2,
-          "disabled completion is not retroactively summarized; off-mode replay is consumed once");
+        assert.equal(requests.filter((r) => !r.path).length, 3,
+          "completion woke the root once; off-mode replay is consumed once");
         assert.deepEqual(errors, []);
       } finally {
         child.resolve(answer("Retained child result"));

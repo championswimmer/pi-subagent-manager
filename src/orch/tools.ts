@@ -81,7 +81,7 @@ export function agentTools(
     ),
     make(
       "agent_spawn",
-      "Spawn a named child. The lexical parent, NOT the caller, supplies a context snapshot. /root is the main thread; independent roots have no inherited context. Foreground waits by default; wait:false runs detached. For parallel work, spawn every independent sibling with wait:false before calling agent_wait; child agents with delegation tools should do the same. Existing paths are retained and can be resumed with agent_steer. Use agent_types to discover current types.",
+      "Spawn a named child. The lexical parent, NOT the caller, supplies a context snapshot. /root is the main thread; independent roots have no inherited context. Foreground waits by default; wait:false runs detached: when it completes, fails or is stopped, you receive a message event that wakes you, so do not poll. Optional timeoutMs (30000–300000; none if unset): if the child is still running after that many ms you receive an event with its status, elapsed time, tokens and recent output (the child is NOT stopped; you decide whether to wait, steer, stop it or re-arm with agent_extend_timeout). For parallel work, spawn every independent sibling with wait:false before calling agent_wait; child agents with delegation tools should do the same. Existing paths are retained and can be resumed with agent_steer. Use agent_types to discover current types.",
       Type.Object({
         path: Type.String({
           description:
@@ -90,6 +90,14 @@ export function agentTools(
         type: text,
         task: text,
         wait: Type.Optional(Type.Boolean()),
+        timeoutMs: Type.Optional(
+          Type.Integer({
+            minimum: 30000,
+            maximum: 300000,
+            description:
+              "Optional report-only timeout, 30000–300000 ms (30s–5min). If the child is still running after this many ms, a status event is sent to you; the child keeps running.",
+          }),
+        ),
       }),
       async (params, signal) => result(compact(await threads().spawn(params, signal))),
     ),
@@ -102,6 +110,12 @@ export function agentTools(
       }),
       async (params, signal) =>
         result(compact(await threads().wait(params.path, params.timeoutMs, signal))),
+    ),
+    make(
+      "agent_extend_timeout",
+      "Re-arm a running descendant's report-only timeout to fire timeoutMs (30000–300000) from now, replacing any pending timer. Use when a timeout event shows the child is still making progress. Does not stop or alter the child.",
+      Type.Object({ path, timeoutMs: Type.Integer({ minimum: 30000, maximum: 300000 }) }),
+      (params) => result(compact(threads().extendTimeout(params.path, params.timeoutMs))),
     ),
     make(
       "agent_steer",
