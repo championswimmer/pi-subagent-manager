@@ -84,6 +84,50 @@ export class ThreadManager {
     return [...this.records.values()].map((record) => this.view(record));
   }
 
+  /** Preview eligible completed sessions without changing retained records. */
+  reapCandidates(only?: readonly string[]): string[] {
+    this.assertLive();
+    const records = [...this.records.values()];
+    const eligible = new Set(
+      records
+        .filter((record) => !only || only.includes(record.view.path))
+        .filter((record) => record.view.state === "completed" && (!record.initializing || record.driver))
+        .filter((record) =>
+          !records.some(
+            (other) => active(other.view) && isDescendant(record.view.path, other.view.path),
+          ),
+        )
+        .map((record) => record.view.path),
+    );
+    // Any retained descendant still needs its lexical ancestors.
+    for (const record of records) {
+      if (eligible.has(record.view.path)) continue;
+      let parent = record.view.parent;
+      while (parent && parent !== "/root") {
+        eligible.delete(parent);
+        parent = this.records.get(parent)?.view.parent ?? null;
+      }
+    }
+    return records
+      .filter((record) => eligible.has(record.view.path))
+      .sort((a, b) => a.view.createdAt - b.view.createdAt)
+      .map((record) => record.view.path);
+  }
+
+  /** Revalidate an optional confirmed snapshot before forgetting sessions. */
+  reap(only?: readonly string[]): string[] {
+    const reaped: string[] = [];
+    for (const path of this.reapCandidates(only)) {
+      const record = this.records.get(path)!;
+      record.detachTranscript?.();
+      record.transcriptListeners?.clear();
+      record.driver?.dispose();
+      this.records.delete(record.view.path);
+      reaped.push(record.view.path);
+    }
+    return reaped;
+  }
+
   /** Bind authority once; models and the user UI share this small composable service. */
   scope(caller: string): ThreadService {
     caller = canonicalPath(caller);

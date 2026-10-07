@@ -7,13 +7,14 @@ import { IMPORT_REQUEST_PREFIX, markImportOffered, offerAgentImport } from "./pr
 import { ThreadManager } from "./orch/manager.ts";
 import { loadManagerSettings } from "./prefs/settings.ts";
 import { configureAgents } from "./ui/settings-ui.ts";
-import { AgentNavigationController, showAgentStatus } from "./ui/status-ui.ts";
+import { AgentNavigationController } from "./ui/status-ui.ts";
 import { AgentNavigationEditor } from "./ui/agent-navigation-editor.ts";
 import { createDriverFactory } from "./orch/runtime.ts";
 import { createInheritedToolSource } from "./orch/inherited-tools.ts";
 import { subagentPrompt } from "./orch/prompt.ts";
 import { agentTools } from "./orch/tools.ts";
 import { editAgentTypes, updateWidget } from "./ui/ui.ts";
+import { canOpenDialog, dialogMenu } from "./ui/dialog.ts";
 import type { SavedThread, ThreadEvent } from "./types.ts";
 
 const REGISTRY_ENTRY = "pi-subagent:registry:v1";
@@ -477,7 +478,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
     manager = undefined;
     context = undefined;
   });
-  const agentSubcommands = ["tree", "status", "settings", "types", "import", "reload"] as const;
+  const agentSubcommands = ["tree", "settings", "types", "import", "reload", "reap"] as const;
   pi.registerCommand("agents", {
     description: "Configure agent settings, import/edit definitions, or show the live tree",
     getArgumentCompletions: (argumentText) => {
@@ -533,13 +534,35 @@ export default function piSubagent(pi: ExtensionAPI): void {
             if (diagnostics.length) ctx.ui.notify(diagnostics.join("\n"), "warning");
           },
         });
-      } else if (command === "status") {
-        await showAgentStatus(ctx, requireManager().scope("/root"), undefined, limits.nerdFontIcons, limits.loaderStyle);
+      } else if (command === "reap") {
+        const current = requireManager();
+        const candidates = current.reapCandidates();
+        if (!candidates.length) {
+          ctx.ui.notify("No completed agents eligible for reaping.", "info");
+          return;
+        }
+        if (!canOpenDialog(ctx)) return;
+        closeNavigation();
+        const warning = `${candidates.length} completed agent${candidates.length === 1 ? "" : "s"} will be reaped.\nYou will not be able to resume them anymore.`;
+        const choice = await dialogMenu(ctx, "Reap completed agents?", [
+          { id: "confirm", label: "Confirm", help: warning },
+          { id: "cancel", label: "Cancel", help: warning },
+        ], { selectedId: "cancel" });
+        if (choice !== "confirm" || manager !== current) return;
+        const reaped = current.reap(candidates);
+        persist();
+        refreshWidget(ctx);
+        ctx.ui.notify(
+          reaped.length
+            ? `Reaped ${reaped.length} completed agent(s); their sessions can no longer be resumed.`
+            : "No completed agents eligible for reaping.",
+          "info",
+        );
       } else if (command === "tree") {
         await navigation.open(ctx, requireManager().scope("/root"), rest.join(" ") || undefined, limits.nerdFontIcons, limits.loaderStyle);
       } else
         ctx.ui.notify(
-          "Usage: /agents [tree [path] | status | settings | types | import | reload]",
+          "Usage: /agents [tree [path] | settings | types | import | reload | reap]",
           "warning",
         );
     },
