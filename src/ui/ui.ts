@@ -29,6 +29,7 @@ import {
   serializeAgentType,
 } from "../prefs/config.ts";
 import { editModelPreferences, MODEL_EDITOR_CANCEL } from "./model-picker.ts";
+import { editToolSelection, TOOL_EDITOR_CANCEL, type ToolEditorOptions } from "./tool-picker.ts";
 import {
   canOpenDialog,
   dialogEditor,
@@ -647,44 +648,15 @@ async function editToolList(
   ctx: ExtensionCommandContext,
   type: AgentType,
   field: "allow" | "block",
+  options: ToolEditorOptions,
 ): Promise<void> {
-  const modes = [
-    "Unset (use default policy)",
-    "Empty list",
-    "Enter exact tool names",
-  ];
-  const current = type.tools?.[field];
-  const mode = await dialogMenu(
-    ctx,
-    `tools.${field} (${sanitizeText(toolListMenuValue(current))})`,
-    modes.map((label) => ({ id: label, label })),
-    {
-      selectedId:
-        current === undefined
-          ? modes[0]
-          : current.length === 0
-            ? modes[1]
-            : modes[2],
-    },
-  );
-  if (!mode) return;
-  if (mode === "Unset (use default policy)") {
+  const value = await editToolSelection(ctx, field, type.tools?.[field], options);
+  if (value === TOOL_EDITOR_CANCEL) return;
+  if (value === undefined) {
     if (type.tools) delete type.tools[field];
   } else {
-    const value =
-      mode === "Empty list"
-        ? ""
-        : await dialogEditor(
-            ctx,
-            `tools.${field}: comma-separated exact names`,
-            type.tools?.[field]?.join(", ") ?? "",
-          );
-    if (value === undefined) return;
     type.tools ??= {};
-    type.tools[field] = value
-      .split(",")
-      .map((name) => name.trim())
-      .filter(Boolean);
+    type.tools[field] = [...value];
   }
   if (type.tools && !Object.keys(type.tools).length) delete type.tools;
 }
@@ -996,8 +968,8 @@ const EDIT_FIELD_HELP: Record<EditMenuAction, string> = {
     "Advisory display names to help pick a model. Not provider/model pins; never selected or required. One name per line; empty clears.",
   thinkingLevel: "Reasoning effort. Default follows the parent session.",
   "tools.allow":
-    "Unset uses default policy; an empty list explicitly allows no tools.",
-  "tools.block": "Exact tool names to remove from the allowed set.",
+    "Pick session tools with checkboxes. Under Allowed (except blocked), an unset or empty allow list allows no tools.",
+  "tools.block": "Pick session tools to block. Blocked tools take precedence when the policy uses this list.",
   color: "Thread widget color with live preview.",
   icon: "Paste a single Nerd Font glyph from nerdfonts.com/cheat-sheet (not its name or codepoint).\nLeave blank to remove. Display requires [labs] Nerd Font icons in settings and a Nerd Font in your terminal.",
   systemPrompt: "Edit the Markdown prompt body in a multiline dialog.",
@@ -1123,15 +1095,17 @@ export async function editAgentTypes(
   ctx: ExtensionCommandContext,
   store: ConfigStore,
   nerdFontIcons = false,
+  toolEditor: ToolEditorOptions = { getAllTools: () => [], toolFiltering: "allowed" },
 ): Promise<void> {
   if (!canOpenDialog(ctx)) return;
-  await withDialogSession(ctx, (scoped) => editAgentTypesDialog(scoped, store, nerdFontIcons));
+  await withDialogSession(ctx, (scoped) => editAgentTypesDialog(scoped, store, nerdFontIcons, toolEditor));
 }
 
 async function editAgentTypesDialog(
   ctx: ExtensionCommandContext,
   store: ConfigStore,
   nerdFontIcons: boolean,
+  toolEditor: ToolEditorOptions,
 ): Promise<void> {
   while (true) {
     const types = store.list();
@@ -1437,6 +1411,7 @@ async function editAgentTypesDialog(
             ctx,
             candidate,
             field === "tools.allow" ? "allow" : "block",
+            toolEditor,
           );
         }
         parseAgentType(serializeAgentType(candidate));

@@ -20,6 +20,7 @@ import {
   type WidgetMode,
 } from "../prefs/settings.ts";
 import { editAgentTypes } from "./ui.ts";
+import type { ToolEditorOptions } from "./tool-picker.ts";
 import { AGENT_LOADERS } from "./agent-loader.ts";
 
 const LOADER_OPTIONS = LOADER_STYLES.map((id) => {
@@ -146,6 +147,7 @@ export async function configureAgents(
     store: ConfigStore;
     settings: ManagerSettings;
     agentDir: string;
+    getAllTools?: ToolEditorOptions["getAllTools"];
     apply(): void;
   },
 ): Promise<void> {
@@ -161,6 +163,7 @@ async function configureAgentsDialog(
     store: ConfigStore;
     settings: ManagerSettings;
     agentDir: string;
+    getAllTools?: ToolEditorOptions["getAllTools"];
     apply(): void;
   },
 ): Promise<void> {
@@ -325,7 +328,10 @@ async function configureAgentsDialog(
         }
       } else if (action === "defaults") draft = { ...DEFAULT_MANAGER_SETTINGS };
       else if (action === "types") {
-        await editAgentTypes(ctx, options.store, draft.nerdFontIcons);
+        await editAgentTypes(ctx, options.store, draft.nerdFontIcons, {
+          getAllTools: options.getAllTools ?? (() => []),
+          toolFiltering: draft.toolFiltering,
+        });
         options.store.reload();
       } else if (action === "save") {
         const file = saveManagerSettings({
