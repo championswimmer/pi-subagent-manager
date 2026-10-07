@@ -175,13 +175,12 @@ export interface ThreadService {
     args: { path: string; type: string; task: string; wait?: boolean; timeoutMs?: number },
     signal?: AbortSignal,
   ): Promise<ThreadView>;
-  steer(path: string, message: string): Promise<ThreadView>;
+  /** message and/or timeoutMs (30s–5min). timeoutMs alone only re-arms a running child's report-only timeout. */
+  steer(path: string, message?: string, timeoutMs?: number): Promise<ThreadView>;
   wait(path: string, timeoutMs?: number, signal?: AbortSignal): Promise<ThreadView>;
   update(message: string): ThreadView;
   pause(reason: string): ThreadView;
   stop(path: string): Promise<ThreadView>;
-  /** Re-arm a running child's report-only timeout (30s–5min) from now. */
-  extendTimeout(path: string, timeoutMs: number): ThreadView;
 }
 export type DriverFactory = (options: DriverOptions) => Promise<AgentDriver>;
 export type ThreadEvent =

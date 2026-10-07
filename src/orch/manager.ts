@@ -158,12 +158,11 @@ export class ThreadManager {
       transcript: (path) => this.transcript(caller, path),
       observeTranscript: (path, listener) => this.observeTranscript(caller, path, listener),
       spawn: (args, signal) => this.spawn(caller, args, signal),
-      steer: (path, message) => this.steer(caller, path, message),
+      steer: (path, message, timeoutMs) => this.steer(caller, path, message, timeoutMs),
       wait: (path, timeoutMs, signal) => this.wait(caller, path, timeoutMs, signal),
       update: (message) => this.update(caller, message),
       pause: (reason) => this.pause(caller, reason),
       stop: (path) => this.stop(caller, path),
-      extendTimeout: (path, timeoutMs) => this.extendTimeout(caller, path, timeoutMs),
     };
   }
   get(path: string, caller = "/root"): ThreadView {
@@ -354,13 +353,31 @@ export class ThreadManager {
     return args.wait === false ? this.view(record) : this.wait(caller, path, undefined, signal);
   }
 
-  async steer(caller: string, path: string, message: string): Promise<ThreadView> {
+  /**
+   * Steer/resume a thread and/or re-arm its report-only timeout.
+   * timeoutMs without message only re-arms (the child must be running); both does steer then re-arm.
+   */
+  async steer(
+    caller: string,
+    path: string,
+    message?: string,
+    timeoutMs?: number,
+  ): Promise<ThreadView> {
     this.assertLive();
     caller = canonicalPath(caller);
     path = canonicalPath(path, caller);
     this.assertAccess(caller, path);
+    if (message === undefined && timeoutMs === undefined)
+      throw new Error("Provide message, timeoutMs, or both");
+    if (timeoutMs !== undefined) assertSpawnTimeout(timeoutMs);
+    if (message === undefined) return this.extendTimeout(caller, path, timeoutMs!);
     if (!message.trim()) throw new Error("Steering message must not be empty");
     const record = this.record(path);
+    const rearm = (): ThreadView => {
+      if (timeoutMs !== undefined && active(record.view) && !record.stopRequested)
+        this.armTimeout(record, timeoutMs);
+      return this.view(record);
+    };
     for (;;) {
       this.assertLive();
       this.assertCallerMaySteer(caller);
@@ -376,11 +393,11 @@ export class ThreadManager {
       if (record.view.state === "running") {
         await record.driver!.steer(message);
         this.touch(record);
-        return this.view(record);
+        return rearm();
       }
       this.assertCapacity();
       this.start(record, message);
-      return this.view(record);
+      return rearm();
     }
   }
   async wait(

@@ -83,7 +83,7 @@ test("timer is cleared on completion, failure, stop and shutdown", async (t) => 
   assert.equal(timeouts().length, 1, "shutdown clears pending timers");
 });
 
-test("extendTimeout re-arms from now; invalid ranges are rejected; unset means none", async (t) => {
+test("steer timeoutMs-only re-arms from now; invalid ranges are rejected; unset means none", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
   const { manager, gates, spawn, timeouts, flush } = setup();
   for (const bad of [0, 29_999, 300_001, 1.5, Number.NaN])
@@ -93,8 +93,8 @@ test("extendTimeout re-arms from now; invalid ranges are rejected; unset means n
   await flush();
   t.mock.timers.tick(20_000);
   for (const bad of [10, 300_001])
-    assert.throws(() => manager.extendTimeout("/root", "a", bad), /between 30000/);
-  manager.extendTimeout("/root", "a", 60_000);
+    await assert.rejects(manager.steer("/root", "a", undefined, bad), /between 30000/);
+  await manager.steer("/root", "a", undefined, 60_000);
   t.mock.timers.tick(59_999);
   assert.equal(timeouts().length, 0, "old deadline replaced");
   t.mock.timers.tick(1);
@@ -106,7 +106,8 @@ test("extendTimeout re-arms from now; invalid ranges are rejected; unset means n
   assert.equal(timeouts().length, 1, "plain child never times out");
   gates.forEach((g) => g());
   await manager.wait("/root", "a");
-  assert.throws(() => manager.extendTimeout("/root", "a", 30_000), /working agent/);
+  await assert.rejects(manager.steer("/root", "a", undefined, 30_000), /working agent/);
+  await assert.rejects(manager.steer("/root", "a"), /message, timeoutMs, or both/);
   await manager.shutdown();
 });
 
@@ -124,7 +125,7 @@ test("settled events flag detached spawns; outstandingAsync tracks them", async 
   await manager.shutdown();
 });
 
-test("tool schemas expose timeoutMs and agent_extend_timeout with 30s–5min bounds", () => {
+test("tool schemas expose timeoutMs and agent_steer timeoutMs with 30s–5min bounds", () => {
   const tools = agentTools(
     () => ({}) as any,
     "/root",
@@ -135,6 +136,24 @@ test("tool schemas expose timeoutMs and agent_extend_timeout with 30s–5min bou
   const props = (spawn.parameters as any).properties.timeoutMs;
   assert.equal(props.minimum, 30000);
   assert.equal(props.maximum, 300000);
-  const extend = tools.find((t) => t.name === "agent_extend_timeout")!;
-  assert.equal((extend.parameters as any).properties.timeoutMs.minimum, 30000);
+  assert.equal(tools.find((t) => t.name === "agent_extend_timeout"), undefined);
+  const steer = tools.find((t) => t.name === "agent_steer")!;
+  assert.equal((steer.parameters as any).properties.timeoutMs.minimum, 30000);
+  assert.equal((steer.parameters as any).properties.timeoutMs.maximum, 300000);
+  assert.deepEqual((steer.parameters as any).required, ["path"]);
+});
+
+test("steer with message and timeoutMs steers and re-arms", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const { manager, gates, spawn, timeouts, flush } = setup();
+  await spawn("a", 30_000);
+  await flush();
+  t.mock.timers.tick(20_000);
+  await manager.steer("/root", "a", "keep going", 60_000);
+  t.mock.timers.tick(59_999);
+  assert.equal(timeouts().length, 0);
+  t.mock.timers.tick(1);
+  assert.equal(timeouts().length, 1);
+  gates.forEach((g) => g());
+  await manager.shutdown();
 });

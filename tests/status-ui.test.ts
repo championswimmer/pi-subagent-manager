@@ -203,7 +203,7 @@ function launchTree(list: () => ThreadView[], selectedPath?: string, rows = 16) 
   });
   const threads = service(list);
   threads.steer = async (path, message) => {
-    steers.push({ path, message });
+    steers.push({ path, message: message! });
     return threads.get(path);
   };
   threads.observeTranscript = async (path) => ({
