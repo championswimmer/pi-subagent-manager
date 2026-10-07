@@ -47,6 +47,11 @@ const thread = (state: ThreadView["state"]): ThreadView => ({
   updatedAt: 0,
 });
 
+test("hourglass completion uses a solid check-square rather than a running frame", () => {
+  assert.equal(AGENT_LOADERS.hourglass.states.completed, "\uf14a");
+  assert.ok(!AGENT_LOADERS.hourglass.frames.includes(AGENT_LOADERS.hourglass.states.completed));
+});
+
 test("loader styles default to circle, layer by key, persist in both scopes and reject invalid layers atomically", (t) => {
   const root = mkdtempSync(join(tmpdir(), "pi-loader-settings-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));

@@ -22,6 +22,7 @@ import {
 import type { ThreadView } from "../src/types.ts";
 import { DialogEditor, DialogMenu, dialogHeight } from "../src/ui/dialog.ts";
 import { configureAgents } from "../src/ui/settings-ui.ts";
+import { ToolPickerComponent } from "../src/ui/tool-picker.ts";
 import { DEFAULT_MANAGER_SETTINGS } from "../src/prefs/settings.ts";
 import { bindDialogDriver, createDialogDriver, dialogDriverFor } from "./helpers/dialogDriver.ts";
 import { AGENT_COLORS, ConfigStore, parseAgentType, serializeAgentType } from "../src/prefs/config.ts";
@@ -622,7 +623,7 @@ test("agent editor scope field and source are modal and do not modify the draft 
 
 test("type field editor handles YAML fields without changing Markdown", async () => {
   await withFixture(async ({ root, store, body }) => {
-    const { ctx } = editorContext(
+    const { ctx, driver } = editorContext(
       root,
       [
         "worker",
@@ -631,18 +632,26 @@ test("type field editor handles YAML fields without changing Markdown", async ()
         "thinkingLevel",
         "high",
         "tools.allow",
-        "Empty list",
         "tools.block",
-        "Enter exact tool names",
         "color",
         "success",
         "Save",
         "Global",
         undefined,
       ],
-      ["renamed", "New description", "bash, read"],
+      ["renamed", "New description"],
     );
-    await editAgentTypes(ctx, store);
+    let picker = 0;
+    driver.onChild = (component) => {
+      if (!(component instanceof ToolPickerComponent)) return false;
+      const values = picker++ === 0 ? ["action:empty", "action:done"] : ["tool:bash", "tool:read", "action:done"];
+      for (const value of values) component.getSelectList().onSelect!(component.getCurrentItems().find((item) => item.value === value)!);
+      return true;
+    };
+    await editAgentTypes(ctx, store, false, {
+      getAllTools: () => [{ name: "bash", description: "Run shell" }, { name: "read", description: "Read file" }],
+      toolFiltering: "allowed",
+    });
     const saved = store.get("renamed");
     assert.equal(saved.description, "New description");
     assert.equal(saved.thinkingLevel, "high");
@@ -898,14 +907,14 @@ test("invalid field edits and untrusted project saves leave configuration unchan
       [
         "worker",
         "name",
-        "tools.allow",
-        "Enter exact tool names",
+        "Edit frontmatter YAML",
+        "Cancel",
         "Save",
         undefined,
         "Cancel",
         undefined,
       ],
-      ["../escape", "read, read"],
+      ["../escape", "name: worker\ndescription: Worker\ntools:\n  allow: [read, read]"],
     );
     await editAgentTypes(ctx, store);
     assert.equal(store.get("worker").systemPrompt, body);
@@ -1124,7 +1133,7 @@ test("edit menu shows current values, ordered models, legacy scalars, and tool p
 test("field editor prefills current values and cancelled or invalid edits keep the visible draft", async () => {
   await withFixture(async ({ root, store, body, writeWorker }) => {
     await writeWorker({ tools: { allow: ["read"], block: ["bash"] } });
-    const { ctx, menus, editors, diagnostics } = editorContext(
+    const { ctx, menus, editors, diagnostics, driver } = editorContext(
       root,
       [
         "worker",
@@ -1132,30 +1141,36 @@ test("field editor prefills current values and cancelled or invalid edits keep t
         "name",
         "description",
         "tools.allow",
-        "Enter exact tool names",
         "tools.block",
-        "Enter exact tool names",
         "tools.allow",
-        "Enter exact tool names",
         "name",
         "Cancel",
         undefined,
       ],
-      // rename, cancel, empty description, valid allow, cancel, duplicate, unsafe name
-      ["renamed", undefined, "", "bash, edit", undefined, "read, read", "../escape"],
+      // rename, cancel, empty description, unsafe name
+      ["renamed", undefined, "", "../escape"],
     );
-    await editAgentTypes(ctx, store);
-    const tools = "tools.allow: comma-separated exact names";
+    let picker = 0;
+    const initial: (readonly string[] | undefined)[] = [];
+    driver.onChild = (component) => {
+      if (!(component instanceof ToolPickerComponent)) return false;
+      initial.push(component.getDraftTools() === undefined ? undefined : [...component.getDraftTools()!]);
+      const values = picker++ === 0 ? ["tool:read", "tool:bash", "tool:edit", "action:done"] : ["action:cancel"];
+      for (const value of values) component.getSelectList().onSelect!(component.getCurrentItems().find((item) => item.value === value)!);
+      return true;
+    };
+    await editAgentTypes(ctx, store, false, {
+      getAllTools: () => ["read", "bash", "edit"].map((name) => ({ name, description: name })),
+      toolFiltering: "allowed",
+    });
+    assert.deepEqual(initial, [["read"], ["bash"], ["bash", "edit"]]);
     assert.deepEqual(editors, [
       { title: "Agent name", prefill: "worker" },
       { title: "Agent name", prefill: "renamed" },
       { title: "Agent description", prefill: "Worker" },
-      { title: tools, prefill: "read" },
-      { title: "tools.block: comma-separated exact names", prefill: "bash" },
-      { title: tools, prefill: "bash, edit" },
       { title: "Agent name", prefill: "renamed" },
     ]);
-    assert.equal(diagnostics.length, 3);
+    assert.equal(diagnostics.length, 2);
     assert.deepEqual(
       unsavedMenus(menus).at(-1)!.options,
       fieldLabels({
@@ -1509,4 +1524,49 @@ test("cancelling the customization picker leaves bundled definitions untouched",
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }
+});
+
+test("tool picker unset removes fields, preserves other lists, and cleans an empty tools object on save", async () => {
+  await withFixture(async ({ root, store, writeWorker }) => {
+    await writeWorker({ tools: { allow: ["read"], block: ["bash"] } });
+    const { ctx, driver } = editorContext(root, ["worker", "tools.allow", "Save", "Global", undefined]);
+    driver.onChild = (component) => {
+      if (!(component instanceof ToolPickerComponent)) return false;
+      for (const value of ["action:unset", "action:done"]) component.getSelectList().onSelect!(component.getCurrentItems().find((item) => item.value === value)!);
+      return true;
+    };
+    await editAgentTypes(ctx, store);
+    assert.deepEqual(store.get("worker").tools, { block: ["bash"] });
+    const other = editorContext(root, ["worker", "tools.block", "Save", "Global", undefined]);
+    other.driver.onChild = driver.onChild;
+    await editAgentTypes(other.ctx, store);
+    assert.equal(store.get("worker").tools, undefined);
+    assert.doesNotMatch(await readFile(store.get("worker").filePath!, "utf8"), /^tools:/m);
+  });
+});
+
+test("nested tool pickers use the settings draft policy and freshly fetch session tools", async () => {
+  await withFixture(async ({ root, store, agentDir }) => {
+    const { ctx, driver } = editorContext(root, ["toolFiltering", "all", "types", "worker", "tools.allow", "tools.block", "Cancel", undefined, "cancel"]);
+    ctx.isProjectTrusted = () => false;
+    let fetched = 0;
+    let pickers = 0;
+    driver.onChild = (component) => {
+      if (!(component instanceof ToolPickerComponent)) return false;
+      pickers++;
+      assert.match(stripTerminalSequences(component.render(100)[1]!), /list is not used until Tool Filtering/);
+      assert.ok(component.getCurrentItems().some((item) => item.value === `tool:inactive_${pickers}`));
+      component.handleInput("\x1b");
+      return true;
+    };
+    await configureAgents(ctx, {
+      store, agentDir, settings: { ...DEFAULT_MANAGER_SETTINGS },
+      getAllTools: () => [{ name: `inactive_${++fetched}`, description: "Registered session tool" }],
+      apply: () => assert.fail("Cancelled settings must not apply"),
+    });
+    assert.equal(fetched, 2);
+    assert.equal(pickers, 2);
+    assert.equal(store.get("worker").tools, undefined);
+    assertOneOverlay(driver, "nested tool pickers");
+  });
 });

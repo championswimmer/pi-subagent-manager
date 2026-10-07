@@ -505,7 +505,10 @@ export default function piSubagent(pi: ExtensionAPI): void {
       if (command === "import") {
         await importAgents(ctx, false);
       } else if (command === "types") {
-        await editAgentTypes(ctx, store, limits.nerdFontIcons);
+        await editAgentTypes(ctx, store, limits.nerdFontIcons, {
+          getAllTools: () => pi.getAllTools(),
+          toolFiltering: limits.toolFiltering,
+        });
         store.reload();
       } else if (command === "reload") {
         store.reload();
@@ -525,6 +528,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
           store,
           settings: limits,
           agentDir: getAgentDir(),
+          getAllTools: () => pi.getAllTools(),
           apply: () => {
             const diagnostics = loadLimits(ctx);
             requireManager().setLimits(limits);

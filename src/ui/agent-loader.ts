@@ -32,9 +32,9 @@ export const AGENT_LOADERS: Record<
   },
   hourglass: {
     label: "Hourglass",
-    // Nerd Fonts fa-hourglass-start/half/end, pause, times-circle, stop.
+    // Nerd Fonts fa-hourglass-start/half/end, check-square, pause, times-circle, stop.
     frames: ["\uf251", "\uf252", "\uf253"],
-    states: { completed: "\uf253", paused: "\uf04c", failed: "\uf057", stopped: "\uf04d" },
+    states: { completed: "\uf14a", paused: "\uf04c", failed: "\uf057", stopped: "\uf04d" },
   },
 };
 
