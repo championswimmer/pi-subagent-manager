@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { getMarkdownTheme, initTheme, type Theme } from "@earendil-works/pi-coding-agent";
-import { CURSOR_MARKER, Markdown, visibleWidth, stripTerminalSequences } from "@earendil-works/pi-tui";
+import {
+  CURSOR_MARKER,
+  Markdown,
+  visibleWidth,
+  stripTerminalSequences,
+} from "@earendil-works/pi-tui";
 import { LiveAgentView, type AgentViewportState } from "../src/ui/live-agent-view.ts";
 import type {
   ThreadService,
@@ -13,7 +18,10 @@ import type {
 
 // The live UI uses pi's active Markdown theme, just like the main transcript.
 initTheme("dark");
-const theme = { fg: (_token: string, text: string) => text } as Theme;
+const theme = {
+  fg: (_token: string, text: string) => text,
+  bg: (_token: string, text: string) => text,
+} as unknown as Theme;
 const tick = () => new Promise((resolve) => setTimeout(resolve, 25));
 const message = (content: string): AgentMessage => ({ role: "user", content, timestamp: 0 });
 function snapshot(patch: Partial<TranscriptSnapshot> = {}): TranscriptSnapshot {
@@ -42,7 +50,7 @@ function launch(
   initial: TranscriptSnapshot = snapshot(),
   rows = 10,
   viewport: AgentViewportState = { scrollTop: 0, follow: true },
-  options: { path?: string; steer?: ThreadService["steer"] } = {},
+  options: { path?: string; steer?: ThreadService["steer"]; theme?: Theme } = {},
 ) {
   let listener: TranscriptListener = () => {};
   let unsubscribed = 0;
@@ -77,7 +85,7 @@ function launch(
       },
       terminal: { rows },
     },
-    theme,
+    options.theme ?? theme,
     service,
     options.path ?? "/root/a",
     viewport,
@@ -119,7 +127,8 @@ test("live viewer shows assistant/tool streams and browsing never sends input", 
           { type: "text", text: "partial assistant" },
           {
             type: "thinking",
-            thinking: "- private thinking 0\n- private thinking 1\n- private thinking 2\n- private thinking 3",
+            thinking:
+              "- private thinking 0\n- private thinking 1\n- private thinking 2\n- private thinking 3",
           },
         ],
       } as AgentMessage,
@@ -174,7 +183,11 @@ test("bottom input sends Enter to the inspected descendant through the steering 
       for (const key of ["c", "t", "l", "r"]) live.view.handleInput(key);
       live.view.handleInput(" focus on tests 界🙂");
       const bottom = stripTerminalSequences(live.view.render(100).at(-1)!).trimEnd();
-      assert.equal(bottom, "Steer > ctlr focus on tests 界🙂");
+      assert.equal(
+        bottom,
+        " Steer > ctlr focus on tests 界🙂",
+        "input keeps one column of left padding",
+      );
       assert.equal(live.viewport.showInherited, undefined);
       assert.equal(live.viewport.detail, undefined);
       assert.equal(live.viewport.follow, true);
@@ -182,7 +195,7 @@ test("bottom input sends Enter to the inspected descendant through the steering 
       live.view.handleInput("\r");
       await tick();
       assert.deepEqual(live.steers, [{ path, message: "ctlr focus on tests 界🙂" }]);
-      assert.equal(stripTerminalSequences(live.view.render(100).at(-1)!).trimEnd(), "Steer >");
+      assert.equal(stripTerminalSequences(live.view.render(100).at(-1)!).trimEnd(), " Steer >");
       assert.match(live.view.render(100).join("\n"), /Steering sent/);
       assert.deepEqual(live.done, [], "sending leaves the viewer open");
       live.view.handleInput("unsent draft");
@@ -232,7 +245,10 @@ test("input cursor editing and Tab browsing preserve the draft and forward focus
 test("pending steering blocks duplicate submissions and preserves edits made while sending", async () => {
   let finish!: (value: NonNullable<TranscriptSnapshot["thread"]>) => void;
   const live = launch(undefined, 10, undefined, {
-    steer: () => new Promise((resolve) => { finish = resolve; }),
+    steer: () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
   });
   await tick();
   try {
@@ -272,7 +288,7 @@ test("failed steering keeps the draft for retry and sanitizes error feedback", a
     await tick();
     assert.equal(live.steers.length, 2);
     assert.match(live.view.render(100).join("\n"), /Steering sent/);
-    assert.equal(stripTerminalSequences(live.view.render(100).at(-1)!).trimEnd(), "Steer >");
+    assert.equal(stripTerminalSequences(live.view.render(100).at(-1)!).trimEnd(), " Steer >");
   } finally {
     live.view.dispose();
   }
@@ -310,9 +326,10 @@ test("late steering settlement never repaints a disposed viewer", async () => {
   for (const fail of [false, true]) {
     let settle!: () => void;
     const live = launch(undefined, 10, undefined, {
-      steer: () => new Promise((resolve, reject) => {
-        settle = () => fail ? reject(new Error("late failure")) : resolve(snapshot().thread!);
-      }),
+      steer: () =>
+        new Promise((resolve, reject) => {
+          settle = () => (fail ? reject(new Error("late failure")) : resolve(snapshot().thread!));
+        }),
     });
     await tick();
     live.view.handleInput("follow up");
@@ -358,9 +375,10 @@ test("message Markdown matches pi's renderer, including syntax highlighting and 
     for (const width of [90, 38]) {
       const lines = live.view.render(width);
       const rendered = lines.map((line) => stripTerminalSequences(line).trimEnd()).join("\n");
+      // Transcript rows have one column of padding on each side.
       const expected = new Markdown(source, 0, 0, markdownTheme)
-        .render(width)
-        .map((line) => stripTerminalSequences(line).trimEnd())
+        .render(width - 2)
+        .map((line) => ` ${stripTerminalSequences(line)}`.trimEnd())
         .join("\n");
       assert.ok(rendered.includes(expected), `same Markdown layout at width ${width}`);
       assert.ok(lines.join("\n").includes(markdownTheme.bold("bold")));
@@ -522,6 +540,72 @@ test("tool calls and results show only three preview rows while messages stay co
   // Only the two result previews overflow three rows; pi-style call lines never print JSON.
   assert.equal(content.split("\n").filter((line) => line.trim() === "...").length, 2);
   live.view.dispose();
+});
+
+test("transcript has one column of side padding; tool calls and results use pi's tool backgrounds", async () => {
+  const codes: Record<string, string> = {
+    toolSuccessBg: "42",
+    customMessageBg: "45",
+    toolErrorBg: "41",
+  };
+  const tagged = {
+    fg: (_token: string, text: string) => text,
+    bg: (token: string, text: string) => `\x1b[${codes[token] ?? "40"}m${text}\x1b[49m`,
+  } as unknown as Theme;
+  const live = launch(
+    snapshot({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "hello" },
+            { type: "toolCall", id: "t1", name: "bash", arguments: { command: "ls" } },
+          ],
+        } as AgentMessage,
+        {
+          role: "toolResult",
+          toolCallId: "t1",
+          toolName: "bash",
+          content: [{ type: "text", text: "listing" }],
+          isError: false,
+          timestamp: 0,
+        } as AgentMessage,
+        {
+          role: "toolResult",
+          toolCallId: "t2",
+          toolName: "bash",
+          content: [{ type: "text", text: "boom" }],
+          isError: true,
+          timestamp: 0,
+        } as AgentMessage,
+      ],
+    }),
+    30,
+    undefined,
+    { theme: tagged },
+  );
+  await tick();
+  try {
+    const raw = live.view.render(40);
+    const find = (needle: string) =>
+      raw.find((line) => stripTerminalSequences(line).includes(needle)) ?? "";
+    assert.match(stripTerminalSequences(find("hello")), /^ hello/);
+    // Bands span the full row, padding columns included, in pi's tool colors.
+    for (const [needle, code] of [
+      ["$ ls", "42"],
+      ["listing", "45"],
+      ["boom", "41"],
+    ] as const) {
+      const line = find(needle);
+      assert.ok(line.startsWith(`\x1b[${code}m `), `${needle} uses band ${code}`);
+      assert.ok(line.endsWith(" \x1b[49m"), `${needle} band reaches the right edge`);
+      assert.equal(visibleWidth(line), 40);
+    }
+    for (const line of raw.map(stripTerminalSequences).filter((line) => line.trim()))
+      assert.match(line, /^ \S/, `padded: ${JSON.stringify(line)}`);
+  } finally {
+    live.view.dispose();
+  }
 });
 
 test("t cycles preview, compact and full detail for tool calls and thinking", async () => {

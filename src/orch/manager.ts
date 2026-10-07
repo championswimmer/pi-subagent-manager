@@ -144,6 +144,7 @@ export class ThreadManager {
         output: current.output,
         error: current.error,
         createdAt: current.createdAt,
+        ...(current.lastStartedAt !== undefined ? { lastStartedAt: current.lastStartedAt } : {}),
         sessionFile: current.sessionFile,
         // Settled totals only. startedAt and partial usage must not churn persistence.
         elapsedMs: record.view.elapsedMs ?? 0,
@@ -476,6 +477,7 @@ export class ThreadManager {
     record.view.state = "starting";
     record.view.status = "Starting";
     record.view.startedAt = Date.now();
+    record.view.lastStartedAt = record.view.startedAt;
     delete record.view.output;
     delete record.view.error;
     const epoch = this.epoch;

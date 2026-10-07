@@ -16,6 +16,8 @@ import { dialogText, type DialogHost } from "./dialog.ts";
 import { AGENT_PROGRESS_INTERVAL, agentProgressIcon, agentTypeLabel } from "./ui.ts";
 import type { LoaderStyle } from "../prefs/settings.ts";
 
+type ThemeBg = Parameters<Theme["bg"]>[0];
+
 /** Transcript detail level cycled by the t key: full → preview → compact. */
 export type TranscriptDetail = "full" | "preview" | "compact";
 const DETAIL_CYCLE: TranscriptDetail[] = ["full", "preview", "compact"];
@@ -66,7 +68,10 @@ export class LiveAgentView {
   private unsubscribe: (() => void) | undefined;
   private renderTimer: ReturnType<typeof setTimeout> | undefined;
   private progressTimer: ReturnType<typeof setInterval> | undefined;
-  private cache = new WeakMap<object, { width: number; detail: TranscriptDetail; lines: string[] }>();
+  private cache = new WeakMap<
+    object,
+    { width: number; detail: TranscriptDetail; lines: string[] }
+  >();
   private scroll: ScrollView;
   private content: string[] = [];
   private restoreViewport = true;
@@ -189,7 +194,10 @@ export class LiveAgentView {
 
   private syncProgress(): void {
     const state = this.snapshot?.thread?.state;
-    const active = this.nerdFontIcons && !this.disposed && !this.error &&
+    const active =
+      this.nerdFontIcons &&
+      !this.disposed &&
+      !this.error &&
       (state === "starting" || state === "running");
     if (!active) {
       if (this.progressTimer !== undefined) clearInterval(this.progressTimer);
@@ -277,6 +285,23 @@ export class LiveAgentView {
     return this.viewport.detail ?? "preview";
   }
 
+  /** One column of horizontal padding on each side of the transcript. */
+  private pad(lines: string[]): string[] {
+    return lines.map((line) => ` ${line}`);
+  }
+
+  /** Full-width themed band with one column of padding, like pi's tool boxes. */
+  private band(lines: string[], token: ThemeBg, width: number): string[] {
+    const inner = Math.max(1, width - 2);
+    return lines.map((line) => {
+      const clipped = truncateToWidth(line, inner, "", true);
+      return this.theme.bg(
+        token,
+        ` ${clipped}${" ".repeat(Math.max(0, inner - visibleWidth(clipped)))} `,
+      );
+    });
+  }
+
   private wrap(value: string, width: number): string[] {
     return text(value)
       .split("\n")
@@ -322,26 +347,37 @@ export class LiveAgentView {
     return lines;
   }
 
+  /** Renders padded rows: `width` is the full transcript width. Tool calls get a themed band. */
   private blocks(content: unknown, width: number): string[] {
-    if (typeof content === "string") return this.markdown(content, width);
-    if (!Array.isArray(content)) return this.wrap(json(content), width);
+    const inner = Math.max(1, width - 2);
+    if (!Array.isArray(content)) return this.pad(this.blockLines(content, inner));
     return content.flatMap((value) => {
       const block = object(value);
-      if (!block) return this.wrap(json(value), width);
-      if (block.type === "text") return this.markdown(String(block.text ?? ""), width);
-      if (block.type === "image") return ["[Image — text-only observer]"];
-      if (block.type === "thinking") {
-        if (this.detail === "compact")
-          return [this.theme.fg("dim", "[Thinking hidden · t cycles view]")];
-        // Thinking is model-authored Markdown; preview truncates the rendered lines, not the source.
-        const rendered = this.markdown(String(block.thinking ?? "[redacted thinking]"), width, true);
-        if (this.detail === "full" || rendered.length <= 3) return rendered;
-        return [...rendered.slice(0, 3), this.theme.fg("dim", "...")];
-      }
-      if (block.type === "toolCall")
-        return this.toolCall(String(block.name), block.arguments, width);
-      return this.preview(json(block), width);
+      if (block?.type === "toolCall")
+        return this.band(
+          this.toolCall(String(block.name), block.arguments, inner),
+          "toolSuccessBg",
+          width,
+        );
+      return this.pad(this.blockLines(value, inner));
     });
+  }
+
+  private blockLines(value: unknown, width: number): string[] {
+    if (typeof value === "string") return this.markdown(value, width);
+    const block = object(value);
+    if (!block) return this.wrap(json(value), width);
+    if (block.type === "text") return this.markdown(String(block.text ?? ""), width);
+    if (block.type === "image") return ["[Image — text-only observer]"];
+    if (block.type === "thinking") {
+      if (this.detail === "compact")
+        return [this.theme.fg("dim", "[Thinking hidden · t cycles view]")];
+      // Thinking is model-authored Markdown; preview truncates the rendered lines, not the source.
+      const rendered = this.markdown(String(block.thinking ?? "[redacted thinking]"), width, true);
+      if (this.detail === "full" || rendered.length <= 3) return rendered;
+      return [...rendered.slice(0, 3), this.theme.fg("dim", "...")];
+    }
+    return this.preview(json(block), width);
   }
 
   private message(message: AgentMessage, width: number): string[] {
@@ -354,17 +390,30 @@ export class LiveAgentView {
         : message.role;
     const collapsed = !["user", "assistant", "custom"].includes(message.role);
     const content = data.content ?? data.summary ?? data.output ?? data;
-    const lines = [
-      this.theme.fg(data.isError ? "error" : "accent", dialogText(label)),
-      ...(collapsed ? this.preview(content, width) : this.blocks(content, width)),
-      ...(data.errorMessage
-        ? (collapsed
-            ? this.preview(String(data.errorMessage), width)
-            : this.wrap(String(data.errorMessage), width)
-          ).map((line) => this.theme.fg("error", line))
-        : []),
-      "",
-    ];
+    const inner = Math.max(1, width - 2);
+    const heading = this.theme.fg(data.isError ? "error" : "accent", dialogText(label));
+    const errors = data.errorMessage
+      ? (collapsed
+          ? this.preview(String(data.errorMessage), inner)
+          : this.wrap(String(data.errorMessage), inner)
+        ).map((line) => this.theme.fg("error", line))
+      : [];
+    const lines =
+      message.role === "toolResult"
+        ? [
+            ...this.band(
+              [heading, ...this.preview(content, inner), ...errors],
+              data.isError ? "toolErrorBg" : "customMessageBg",
+              width,
+            ),
+            "",
+          ]
+        : [
+            ...this.pad([heading]),
+            ...(collapsed ? this.pad(this.preview(content, inner)) : this.blocks(content, width)),
+            ...this.pad(errors),
+            "",
+          ];
     this.cache.set(message, { width, detail: this.detail, lines });
     return lines;
   }
@@ -450,7 +499,9 @@ export class LiveAgentView {
       }
       case "ls": {
         const limit = num("limit");
-        lines = [`${title("ls")} ${path ?? "."}${limit != null ? detail(` (limit ${limit})`) : ""}`];
+        lines = [
+          `${title("ls")} ${path ?? "."}${limit != null ? detail(` (limit ${limit})`) : ""}`,
+        ];
         break;
       }
       default:
@@ -476,6 +527,7 @@ export class LiveAgentView {
     const columns = Math.max(1, width);
     const snapshot = this.snapshot;
     const thread = snapshot?.thread;
+    const inner = Math.max(1, columns - 2);
     const header = this.theme.fg(
       "accent",
       dialogText(
@@ -485,25 +537,26 @@ export class LiveAgentView {
     const body: string[] = [];
     if (this.error)
       body.push(
-        this.theme.fg("error", dialogText(`Attachment error: ${this.error}`)),
-        "Ctrl+R Retry · Esc Back · Ctrl+Q Back to main",
+        ` ${this.theme.fg("error", dialogText(`Attachment error: ${this.error}`))}`,
+        " Ctrl+R Retry · Esc Back · Ctrl+Q Back to main",
       );
     if (!snapshot) {
-      if (!this.error) body.push("Attaching to retained live session…");
+      if (!this.error) body.push(" Attaching to retained live session…");
     } else {
       if (snapshot.inheritedCount)
         body.push(
-          this.theme.fg(
-            "dim",
-            `${snapshot.inheritedCount} inherited messages ${this.viewport.showInherited ? "shown" : "collapsed"} · c toggle`,
-          ),
+          " " +
+            this.theme.fg(
+              "dim",
+              `${snapshot.inheritedCount} inherited messages ${this.viewport.showInherited ? "shown" : "collapsed"} · c toggle`,
+            ),
         );
       const start = this.viewport.showInherited ? 0 : snapshot.inheritedCount;
       for (const message of snapshot.messages.slice(start))
         body.push(...this.message(message, columns));
       if (snapshot.assistant)
         body.push(
-          this.theme.fg("warning", "Assistant streaming…"),
+          ` ${this.theme.fg("warning", "Assistant streaming…")}`,
           ...this.message(snapshot.assistant, columns),
         );
       const committedResults = new Set(
@@ -513,23 +566,29 @@ export class LiveAgentView {
       );
       for (const tool of snapshot.tools) {
         if (committedResults.has(tool.toolCallId)) continue;
-        const call = this.toolCall(tool.toolName, tool.args, columns);
+        const call = this.toolCall(tool.toolName, tool.args, inner);
         call[0] = `${call[0]} ${this.theme.fg(
           tool.isError ? "error" : "warning",
           dialogText(
             `— ${tool.state}${tool.isError ? " (error)" : ""}${tool.parentToolCallId ? " (nested)" : ""}`,
           ),
         )}`;
-        body.push(...call);
+        body.push(...this.band(call, "toolSuccessBg", columns));
         if (tool.result !== undefined && this.detail !== "compact")
-          body.push(...this.preview(object(tool.result)?.content ?? tool.result, columns));
+          body.push(
+            ...this.band(
+              this.preview(object(tool.result)?.content ?? tool.result, inner),
+              tool.isError ? "toolErrorBg" : "customMessageBg",
+              columns,
+            ),
+          );
         body.push("");
       }
       if (!body.length)
         body.push(
           thread?.state === "starting"
-            ? "Starting — waiting for transcript attachment…"
-            : "No retained messages yet.",
+            ? " Starting — waiting for transcript attachment…"
+            : " No retained messages yet.",
         );
     }
     this.content = body;
@@ -548,7 +607,7 @@ export class LiveAgentView {
     const footer = this.error
       ? "Ctrl+R Retry · Tab input/transcript · Esc tree · Ctrl+Q main"
       : `${this.editing ? "Enter steer · Tab browse" : `Tab steer · Home/End scroll · c context · t view:${this.detail}`} · Esc tree · Ctrl+Q main · ↑↓/PgUp/PgDn scroll · ${this.viewport.follow ? "following" : "scrolled"}`;
-    const input = this.input.render(columns)[0]!;
+    const input = ` ${this.input.render(inner)[0]!}`;
     const status = this.theme.fg(
       this.steerStatus ? (this.steerFailed ? "error" : "muted") : this.error ? "error" : "muted",
       dialogText(
@@ -560,14 +619,22 @@ export class LiveAgentView {
               : "Live transcript · Enter to steer"),
       ),
     );
+    // Chrome rows share the transcript's one-column side padding; `visible` is already padded.
+    const chrome = (line: string) => ` ${truncateToWidth(line, inner, "")}`;
     const lines =
       height === 1
         ? [input]
         : height === 2
-          ? [header, input]
+          ? [chrome(header), input]
           : height === 3
-            ? [header, this.theme.fg("dim", footer), input]
-            : [header, status, ...visible, this.theme.fg("dim", footer), input];
+            ? [chrome(header), chrome(this.theme.fg("dim", footer)), input]
+            : [
+                chrome(header),
+                chrome(status),
+                ...visible,
+                chrome(this.theme.fg("dim", footer)),
+                input,
+              ];
     return fillViewport(lines, width, height);
   }
 }
