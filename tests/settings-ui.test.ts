@@ -6,10 +6,13 @@ import test, { type TestContext } from "node:test";
 import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import { ConfigStore } from "../src/prefs/config.ts";
 import { dialogHeight, type DialogRow } from "../src/ui/dialog.ts";
+import { AGENT_LOADERS } from "../src/ui/agent-loader.ts";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { configureAgents } from "../src/ui/settings-ui.ts";
 import {
   DEFAULT_MANAGER_SETTINGS,
   loadManagerSettings,
+  LOADER_STYLES,
   type ManagerSettings,
 } from "../src/prefs/settings.ts";
 import { createDialogDriver } from "./helpers/dialogDriver.ts";
@@ -80,6 +83,54 @@ async function run(
     projectFile: join(root, ".pi", "agent", "subagent-manager", "settings.json"),
   };
 }
+
+test("[labs] Loader style previews all families and states together, and saves every selection", async (t) => {
+  for (const loaderStyle of LOADER_STYLES) {
+    const result = await run(t, ["loaderStyle", loaderStyle, "save"]);
+    const chooser = result.menus[1]!;
+    assert.equal(result.menus[0]!.rows.find((row) => row.id === "loaderStyle")!.label, "[labs] Loader style");
+    assert.equal(result.value(0, "loaderStyle"), "Circle");
+    assert.equal(chooser.title, "[labs] Loader style");
+    assert.deepEqual(chooser.rows.map((row) => row.id), [...LOADER_STYLES]);
+    const preview = result.renders.find((lines) => lines[0]?.includes("[labs] Loader style"))!;
+    assert.ok(preview, "loader picker rendered");
+    const text = stripTerminalSequences(preview.join("\n"));
+    for (const row of chooser.rows) {
+      const loader = AGENT_LOADERS[row.id as typeof loaderStyle];
+      assert.ok(text.includes(loader.label), `${loader.label} visible alongside other options`);
+      for (const glyph of [...loader.frames, ...Object.values(loader.states)]) {
+        assert.ok(row.value!.includes(glyph));
+        assert.ok(text.includes(glyph), `${row.id} preview ${glyph} visible`);
+      }
+      for (const state of ["Starting/running", "Completed", "Paused", "Failed", "Stopped"]) {
+        assert.ok(row.help!.includes(state));
+      }
+    }
+    assert.ok(text.includes("completed, paused, failed, stopped"), "visible preview legend");
+    assert.equal(result.loaded.settings.loaderStyle, loaderStyle);
+    assert.equal(result.applied, 1);
+    assert.equal(result.value(2, "loaderStyle"), AGENT_LOADERS[loaderStyle].label);
+  }
+});
+
+test("[labs] Loader style cancel, restore-defaults and narrow layouts preserve draft semantics", async (t) => {
+  const cancelled = await run(t, ["loaderStyle", "braille", "cancel"]);
+  assert.equal(cancelled.applied, 0);
+  assert.equal(existsSync(cancelled.userFile), false);
+  const chooserCancelled = await run(t, ["loaderStyle", undefined, "save"], {
+    settings: { ...DEFAULT_MANAGER_SETTINGS, loaderStyle: "hourglass" },
+  });
+  assert.equal(chooserCancelled.loaded.settings.loaderStyle, "hourglass");
+  const restored = await run(t, ["defaults", "save"], {
+    settings: { ...DEFAULT_MANAGER_SETTINGS, loaderStyle: "braille" },
+  });
+  assert.equal(restored.loaded.settings.loaderStyle, "circle");
+  for (const width of [20, 40, 60]) {
+    const result = await run(t, ["loaderStyle", "hourglass", "save"], { width, trusted: true });
+    assert.equal(result.loaded.settings.loaderStyle, "hourglass");
+    assert.ok(result.renders.every((lines) => lines.every((line) => visibleWidth(line) <= width)));
+  }
+});
 
 test("[labs] Nerd Font setting toggles, persists, and cancels without saving", async (t) => {
   const enabled = await run(t, ["nerdFontIcons", "save"]);

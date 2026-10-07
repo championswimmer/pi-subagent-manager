@@ -24,6 +24,7 @@ import {
   frameDialog,
 } from "./dialog.ts";
 import type { ThreadService } from "../types.ts";
+import type { LoaderStyle } from "../prefs/settings.ts";
 import { buildStatusTree, type StatusRow } from "./thread-tree.ts";
 import {
   AGENT_PROGRESS_INTERVAL, agentProgressIcon, agentTypeBadge, agentTypeLabel, showThreads, threadMetrics,
@@ -109,6 +110,7 @@ export class StatusDialog {
       fullscreen?: boolean;
     },
     private nerdFontIcons = false,
+    private loaderStyle: LoaderStyle = "circle",
   ) {
     this.state = navigation?.state ?? { selectedPath: selected || ROOT, collapsed: new Set() };
   }
@@ -260,7 +262,7 @@ export class StatusDialog {
       const status = dialogText(thread.status);
       return [
         this.theme.fg(selected ? "accent" : base, head),
-        this.theme.fg(base, `${agentTypeLabel(thread.type, thread.icon, this.nerdFontIcons)}  ${path}  `),
+        this.theme.fg(base, `${agentTypeLabel(thread.type, thread.icon, this.nerdFontIcons, agentProgressIcon(thread, this.nerdFontIcons, Date.now(), true, this.loaderStyle))}  ${path}  `),
         this.theme.fg(hint, state),
         this.theme.fg(base, `  ${status}`),
       ].join("");
@@ -268,8 +270,8 @@ export class StatusDialog {
     const rest = [thread.path, thread.state, thread.status]
       .map((part) => dialogText(part))
       .join("  ");
-    const badge = agentTypeBadge(thread.type, thread.color, this.theme,
-      agentProgressIcon(thread, this.nerdFontIcons), this.nerdFontIcons);
+    const badge = agentTypeBadge(thread.type, thread.color, this.theme, thread.icon, this.nerdFontIcons,
+      agentProgressIcon(thread, this.nerdFontIcons, Date.now(), true, this.loaderStyle));
     if (selected)
       return `${this.theme.fg("accent", head)}${badge} ${this.theme.fg("accent", rest)}`;
     return `${head}${badge} ${rest}`;
@@ -337,6 +339,7 @@ async function showAgentDialog(
     selected?: string;
     inspect?: (path: string) => Promise<void>;
     nerdFontIcons?: boolean;
+    loaderStyle?: LoaderStyle;
   } = {},
 ): Promise<void> {
   const open = options.inspect ?? ((path: string) => showThreads(ctx, service, path));
@@ -347,7 +350,7 @@ async function showAgentDialog(
     let dialog: StatusDialog | undefined;
     try {
       const chosen = await ctx.ui.custom<string | undefined>((host, theme, _keys, done) => {
-        dialog = new StatusDialog(host, theme, service, done, selected, options.title, undefined, options.nerdFontIcons);
+        dialog = new StatusDialog(host, theme, service, done, selected, options.title, undefined, options.nerdFontIcons, options.loaderStyle);
         dialog.startRefresh();
         return dialog;
       }, DIALOG_OPTIONS);
@@ -367,9 +370,10 @@ export async function showAgentStatus(
   service: ThreadService,
   inspect?: (path: string) => Promise<void>,
   nerdFontIcons = false,
+  loaderStyle: LoaderStyle = "circle",
 ): Promise<void> {
   if (!canOpenDialog(ctx)) return;
-  await showAgentDialog(ctx, service, { inspect, nerdFontIcons });
+  await showAgentDialog(ctx, service, { inspect, nerdFontIcons, loaderStyle });
 }
 
 /** Root-owned navigation state. Opening and closing never changes the executing session. */
@@ -390,7 +394,7 @@ export class AgentNavigationController {
     this.session = undefined;
   }
 
-  open(ctx: ExtensionContext, service: ThreadService, selectedPath?: string, nerdFontIcons = false): Promise<void> {
+  open(ctx: ExtensionContext, service: ThreadService, selectedPath?: string, nerdFontIcons = false, loaderStyle: LoaderStyle = "circle"): Promise<void> {
     if (this.opening) return this.opening;
     if (!canOpenDialog(ctx)) return Promise.resolve();
     if (selectedPath) this.tree.selectedPath = selectedPath;
@@ -471,6 +475,7 @@ export class AgentNavigationController {
                     actions: (path) => finish({ kind: "actions", path }),
                   },
                   nerdFontIcons,
+                  loaderStyle,
                 );
                 treeDialog.startRefresh();
                 return treeDialog;
@@ -488,7 +493,7 @@ export class AgentNavigationController {
               }
               const result = await session.mount<"back" | "main">(
                 (tui, activeTheme, _keys, finish) =>
-                  new LiveAgentView(tui, activeTheme, service, chosen.path, viewport!, finish, nerdFontIcons),
+                  new LiveAgentView(tui, activeTheme, service, chosen.path, viewport!, finish, nerdFontIcons, loaderStyle),
               );
               if (result !== "back") break;
             }
@@ -534,11 +539,12 @@ export async function showAgentTree(
   service: ThreadService,
   selectedPath?: string,
   nerdFontIcons = false,
+  loaderStyle: LoaderStyle = "circle",
 ): Promise<void> {
   let navigation = navigationByService.get(service);
   if (!navigation) {
     navigation = new AgentNavigationController();
     navigationByService.set(service, navigation);
   }
-  await navigation.open(ctx, service, selectedPath, nerdFontIcons);
+  await navigation.open(ctx, service, selectedPath, nerdFontIcons, loaderStyle);
 }

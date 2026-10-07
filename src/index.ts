@@ -96,7 +96,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
           manager.list().some((thread) => thread.path !== "/root" &&
             (thread.state === "starting" || thread.state === "running")),
         openTree: () => manager && context
-          ? navigation.open(context, manager.scope("/root"), undefined, limits.nerdFontIcons) : undefined,
+          ? navigation.open(context, manager.scope("/root"), undefined, limits.nerdFontIcons, limits.loaderStyle) : undefined,
         canCollapse: () => manager !== undefined && context?.mode === "tui" &&
           limits.subagentMode !== "off" && !navigation.isOpen && !widgetCollapsed &&
           limits.widgetMode === "full" && widgetThreads().some((thread) => thread.path !== "/root"),
@@ -335,7 +335,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
     if (limits.subagentMode === "off") {
       if (ctx.hasUI) ctx.ui.setWidget("pi-subagent", undefined);
     } else updateWidget(ctx, widgetThreads(), widgetCollapsed ? "minimal" : limits.widgetMode,
-      limits.nerdFontIcons, rootTurnEnded);
+      limits.nerdFontIcons, rootTurnEnded, limits.loaderStyle);
   };
   pi.on("agent_start", async (_event, ctx) => {
     // A new task must not resurrect the previous task's settled agents. Automatic
@@ -534,9 +534,9 @@ export default function piSubagent(pi: ExtensionAPI): void {
           },
         });
       } else if (command === "status") {
-        await showAgentStatus(ctx, requireManager().scope("/root"), undefined, limits.nerdFontIcons);
+        await showAgentStatus(ctx, requireManager().scope("/root"), undefined, limits.nerdFontIcons, limits.loaderStyle);
       } else if (command === "tree") {
-        await navigation.open(ctx, requireManager().scope("/root"), rest.join(" ") || undefined, limits.nerdFontIcons);
+        await navigation.open(ctx, requireManager().scope("/root"), rest.join(" ") || undefined, limits.nerdFontIcons, limits.loaderStyle);
       } else
         ctx.ui.notify(
           "Usage: /agents [tree [path] | status | settings | types | import | reload]",
