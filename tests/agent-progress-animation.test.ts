@@ -10,6 +10,7 @@ import {
   renderThreads,
   updateWidget,
 } from "../src/ui/ui.ts";
+import { AGENT_LOADERS } from "../src/ui/agent-loader.ts";
 import { StatusDialog } from "../src/ui/status-ui.ts";
 import { LiveAgentView } from "../src/ui/live-agent-view.ts";
 import type {
@@ -56,7 +57,7 @@ function snapshot(current: ThreadView, revision = 0): TranscriptSnapshot {
 }
 const plain = (lines: string[]) => stripTerminalSequences(lines.join("\n"));
 
-test("progress frames shape-shift deterministically only for starting/running Nerd Font agents", () => {
+test("circle progress frames shape-shift deterministically and settled indicators remain static", () => {
   for (const state of ["starting", "running"] as const) {
     const agent = thread(state);
     const frames = Array.from({ length: 8 }, (_, index) =>
@@ -71,7 +72,7 @@ test("progress frames shape-shift deterministically only for starting/running Ne
     assert.equal(agentProgressIcon(agent, true, 8 * AGENT_PROGRESS_INTERVAL), frames[0]);
     assert.equal(agentProgressIcon(agent, true, AGENT_PROGRESS_INTERVAL - 1), frames[0]);
     assert.equal(agentProgressIcon(agent, false, AGENT_PROGRESS_INTERVAL), undefined);
-    assert.equal(agentProgressIcon(agent, true, AGENT_PROGRESS_INTERVAL, false), roleIcon);
+    assert.equal(agentProgressIcon(agent, true, AGENT_PROGRESS_INTERVAL, false), frames[0]);
     assert.equal(
       agentProgressIcon({ state }, true, 0),
       frames[0],
@@ -80,13 +81,13 @@ test("progress frames shape-shift deterministically only for starting/running Ne
   }
   for (const state of ["paused", "stopped", "completed", "failed"] as const) {
     for (const now of [0, AGENT_PROGRESS_INTERVAL, 2000]) {
-      assert.equal(agentProgressIcon(thread(state), true, now), roleIcon);
+      assert.equal(agentProgressIcon(thread(state), true, now), AGENT_LOADERS.circle.states[state]);
       assert.equal(agentProgressIcon(thread(state), false, now), undefined);
     }
   }
 });
 
-test("widgets animate active glyphs, retain settled role glyphs, and fit every frame at narrow widths", (t) => {
+test("widgets animate active glyphs, retain role glyphs in every state, and fit narrow widths", (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: 0 });
   const active = { ...thread(), icon: undefined };
   const settled = { ...thread("completed"), path: "/root/done" };

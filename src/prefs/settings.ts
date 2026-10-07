@@ -19,6 +19,9 @@ export type SubagentMode = (typeof SUBAGENT_MODES)[number];
 export const WIDGET_MODES = ["full", "minimal"] as const;
 export type WidgetMode = (typeof WIDGET_MODES)[number];
 
+export const LOADER_STYLES = ["circle", "braille", "hourglass"] as const;
+export type LoaderStyle = (typeof LOADER_STYLES)[number];
+
 export const TOOL_FILTERING_MODES = ["allowed", "all-except-blocked", "all"] as const;
 export type ToolFilteringMode = (typeof TOOL_FILTERING_MODES)[number];
 
@@ -34,6 +37,7 @@ export interface ManagerSettings {
   toolFiltering: ToolFilteringMode;
   widgetMode: WidgetMode;
   nerdFontIcons: boolean;
+  loaderStyle: LoaderStyle;
   finalRecap: boolean;
   maxLevels: number;
   maxConcurrent: number;
@@ -50,11 +54,12 @@ export const DEFAULT_MANAGER_SETTINGS: ManagerSettings = {
   toolFiltering: "allowed",
   widgetMode: "full",
   nerdFontIcons: false,
+  loaderStyle: "circle",
   finalRecap: false,
 };
 
 const KEYS = [
-  "maxLevels", "maxConcurrent", "maxThreads", "modelSelection", "subagentMode", "toolFiltering", "widgetMode", "nerdFontIcons", "finalRecap",
+  "maxLevels", "maxConcurrent", "maxThreads", "modelSelection", "subagentMode", "toolFiltering", "widgetMode", "nerdFontIcons", "loaderStyle", "finalRecap",
 ] as const;
 const MAX_LEVELS = 32;
 
@@ -95,6 +100,7 @@ function requirement(key: (typeof KEYS)[number]): string {
   if (key === "nerdFontIcons" || key === "finalRecap") return `${key} must be a boolean`;
   if (key === "subagentMode") return "subagentMode must be off, opportunistic or orchestration";
   if (key === "widgetMode") return "widgetMode must be full or minimal";
+  if (key === "loaderStyle") return "loaderStyle must be circle, braille or hourglass";
   if (key === "toolFiltering") return "toolFiltering must be allowed, all-except-blocked or all";
   if (key === "modelSelection")
     return "modelSelection must be pick-first-available, pick-first-scoped or use-current";
@@ -146,6 +152,11 @@ function parseSettings(content: string): Partial<ManagerSettings> {
     if (key === "widgetMode") {
       if (!WIDGET_MODES.includes(value as WidgetMode)) throw new Error(requirement(key));
       layer.widgetMode = value as WidgetMode;
+      continue;
+    }
+    if (key === "loaderStyle") {
+      if (!LOADER_STYLES.includes(value as LoaderStyle)) throw new Error(requirement(key));
+      layer.loaderStyle = value as LoaderStyle;
       continue;
     }
     if (key === "modelSelection") {

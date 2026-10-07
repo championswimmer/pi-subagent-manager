@@ -8,6 +8,8 @@ import {
 } from "./dialog.ts";
 import {
   DEFAULT_MANAGER_SETTINGS,
+  LOADER_STYLES,
+  type LoaderStyle,
   loadManagerSaveScope,
   saveManagerSaveScope,
   saveManagerSettings,
@@ -18,6 +20,17 @@ import {
   type WidgetMode,
 } from "../prefs/settings.ts";
 import { editAgentTypes } from "./ui.ts";
+import { AGENT_LOADERS } from "./agent-loader.ts";
+
+const LOADER_OPTIONS = LOADER_STYLES.map((id) => {
+  const loader = AGENT_LOADERS[id];
+  return {
+    id,
+    label: loader.label,
+    value: `${loader.frames.join(" ")} · ${Object.values(loader.states).join(" ")}`,
+    help: `Each row: all starting/running frames · completed, paused, failed, stopped.\nStarting/running: ${loader.frames.join(" ")}\nCompleted: ${loader.states.completed} · Paused: ${loader.states.paused}\nFailed: ${loader.states.failed} · Stopped: ${loader.states.stopped}\nRequires [labs] Nerd Font icons On. The loader appears before the unchanged role icon.`,
+  };
+});
 
 const FIELDS = [
   {
@@ -195,7 +208,13 @@ async function configureAgentsDialog(
           id: "nerdFontIcons",
           label: "[labs] Nerd Font icons",
           value: draft.nerdFontIcons ? "On" : "Off",
-          help: "Experimental: display each agent type’s optional icon.\nRequires a Nerd Font configured in your terminal; otherwise glyphs may appear as boxes.\nOff by default. Save and apply to update the widget immediately.",
+          help: "Experimental: display each agent type’s optional icon, preceded by its loader/state indicator.\nRequires a Nerd Font configured in your terminal; otherwise glyphs may appear as boxes.\nOff by default. Save and apply to update the widget immediately.",
+        },
+        {
+          id: "loaderStyle",
+          label: "[labs] Loader style",
+          value: AGENT_LOADERS[draft.loaderStyle].label,
+          help: "Choose Circle, Braille or Hourglass. Preview every animation frame and settled state for all families.\nRequires [labs] Nerd Font icons On. Circle is the default.\nSave and apply to update the widget immediately.",
         },
         {
           id: "finalRecap",
@@ -286,6 +305,11 @@ async function configureAgentsDialog(
           draft.widgetMode = mode as WidgetMode;
       } else if (action === "nerdFontIcons") {
         draft.nerdFontIcons = !draft.nerdFontIcons;
+      } else if (action === "loaderStyle") {
+        const style = await dialogMenu(ctx, "[labs] Loader style", LOADER_OPTIONS, {
+          selectedId: draft.loaderStyle,
+        });
+        if (LOADER_STYLES.includes(style as LoaderStyle)) draft.loaderStyle = style as LoaderStyle;
       } else if (action === "finalRecap") {
         draft.finalRecap = !draft.finalRecap;
       } else if (action === "scope") {

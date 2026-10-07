@@ -70,7 +70,7 @@ const settings = (
   widgetMode: WidgetMode = "full",
   nerdFontIcons = false,
   finalRecap = false,
-) => ({ maxLevels, maxConcurrent, maxThreads, modelSelection, subagentMode, toolFiltering, widgetMode, nerdFontIcons, finalRecap });
+) => ({ maxLevels, maxConcurrent, maxThreads, modelSelection, subagentMode, toolFiltering, widgetMode, nerdFontIcons, loaderStyle: "circle", finalRecap });
 
 const escape = (path: string) => new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
@@ -132,6 +132,7 @@ test("missing files return a fresh copy of defaults without diagnostics", (t) =>
       toolFiltering: "allowed",
       widgetMode: "full",
       nerdFontIcons: false,
+      loaderStyle: "circle",
       finalRecap: false,
     },
     diagnostics: [],
@@ -370,6 +371,7 @@ test("save writes canonical 0600 files, creates owned directories, and reloads w
   const reordered = {
     widgetMode: "full",
     nerdFontIcons: false,
+    loaderStyle: "circle",
     finalRecap: false,
     subagentMode: "opportunistic",
     toolFiltering: "allowed",

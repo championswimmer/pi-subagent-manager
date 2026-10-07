@@ -14,6 +14,7 @@ import {
 import type { ThreadService, TranscriptSnapshot } from "../types.ts";
 import { dialogText, type DialogHost } from "./dialog.ts";
 import { AGENT_PROGRESS_INTERVAL, agentProgressIcon, agentTypeLabel } from "./ui.ts";
+import type { LoaderStyle } from "../prefs/settings.ts";
 
 /** Transcript detail level cycled by the t key: full → preview → compact. */
 export type TranscriptDetail = "full" | "preview" | "compact";
@@ -86,6 +87,7 @@ export class LiveAgentView {
     private viewport: AgentViewportState,
     private done: (result: "back" | "main") => void,
     private nerdFontIcons = false,
+    private loaderStyle: LoaderStyle = "circle",
   ) {
     this.scroll = new ScrollView(
       { render: () => this.content, invalidate() {} },
@@ -477,7 +479,7 @@ export class LiveAgentView {
     const header = this.theme.fg(
       "accent",
       dialogText(
-        `${this.path} · ${agentTypeLabel(thread?.type ?? "agent", thread ? agentProgressIcon(thread, this.nerdFontIcons) : undefined, this.nerdFontIcons)} · ${thread?.state ?? "attaching"} — Watching — main continues`,
+        `${this.path} · ${agentTypeLabel(thread?.type ?? "agent", thread?.icon, this.nerdFontIcons, thread ? agentProgressIcon(thread, this.nerdFontIcons, Date.now(), true, this.loaderStyle) : undefined)} · ${thread?.state ?? "attaching"} — Watching — main continues`,
       ),
     );
     const body: string[] = [];

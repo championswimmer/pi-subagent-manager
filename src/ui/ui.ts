@@ -39,7 +39,9 @@ import {
   withDialogSession,
 } from "./dialog.ts";
 import { getModelPreferences } from "../prefs/models.ts";
-import type { WidgetMode } from "../prefs/settings.ts";
+import type { LoaderStyle, WidgetMode } from "../prefs/settings.ts";
+import { AGENT_PROGRESS_INTERVAL, agentProgressIcon, isAgentLoaderGlyph } from "./agent-loader.ts";
+export { AGENT_PROGRESS_INTERVAL, agentProgressIcon } from "./agent-loader.ts";
 import { buildStatusTree, type StatusRow } from "./thread-tree.ts";
 import {
   THINKING_LEVELS,
@@ -91,33 +93,11 @@ function contrastPill(
 }
 
 /** Invalid/untrusted saved icons never reach the terminal. Names remain readable. */
-export function agentTypeLabel(type: string, icon?: string, nerdFontIcons = false): string {
-  const prefix = nerdFontIcons && typeof icon === "string" && /^\p{Co}$/u.test(icon)
+export function agentTypeLabel(type: string, icon?: string, nerdFontIcons = false, loaderIcon?: string): string {
+  const role = nerdFontIcons && typeof icon === "string" && /^\p{Co}$/u.test(icon)
     ? `${icon} ` : "";
-  return `${prefix}${sanitizeText(type)}`;
-}
-
-/** Nerd Fonts md-circle-slice-1..8: an equal-width, shape-changing progress cycle.
- * Verified against https://raw.githubusercontent.com/ryanoasis/nerd-fonts/master/glyphnames.json.
- */
-export const AGENT_PROGRESS_INTERVAL = 180;
-const AGENT_PROGRESS_FRAMES = Array.from({ length: 8 }, (_, index) =>
-  String.fromCodePoint(0xf0a9e + index),
-);
-
-/** Keep the configured role icon for settled threads and non-animated/RPC output. */
-export function agentProgressIcon(
-  thread: Pick<ThreadView, "state" | "icon">,
-  nerdFontIcons: boolean,
-  now = Date.now(),
-  animate = true,
-): string | undefined {
-  if (!nerdFontIcons) return undefined;
-  if (animate && (thread.state === "starting" || thread.state === "running")) {
-    const frame = Math.floor(Math.max(0, now) / AGENT_PROGRESS_INTERVAL) % AGENT_PROGRESS_FRAMES.length;
-    return AGENT_PROGRESS_FRAMES[frame];
-  }
-  return thread.icon;
+  const progress = nerdFontIcons && loaderIcon && isAgentLoaderGlyph(loaderIcon) ? `${loaderIcon} ` : "";
+  return `${progress}${role}${sanitizeText(type)}`;
 }
 
 export function agentTypeBadge(
@@ -126,8 +106,9 @@ export function agentTypeBadge(
   theme: AgentBadgeTheme,
   icon?: string,
   nerdFontIcons = false,
+  loaderIcon?: string,
 ): string {
-  return contrastPill(agentTypeLabel(type, icon, nerdFontIcons), color, theme);
+  return contrastPill(agentTypeLabel(type, icon, nerdFontIcons, loaderIcon), color, theme);
 }
 
 function agentPath(
@@ -204,6 +185,7 @@ export function renderThreads(
   width: number,
   theme: AgentBadgeTheme,
   nerdFontIcons = false,
+  loaderStyle: LoaderStyle = "circle",
 ): string[] {
   const priority = (thread: ThreadView) =>
     thread.state === "starting" || thread.state === "running"
@@ -228,7 +210,8 @@ export function renderThreads(
           ? "warning"
           : "accent";
     const badge = agentTypeBadge(
-      thread.type, thread.color, theme, agentProgressIcon(thread, nerdFontIcons), nerdFontIcons,
+      thread.type, thread.color, theme, thread.icon, nerdFontIcons,
+      agentProgressIcon(thread, nerdFontIcons, Date.now(), true, loaderStyle),
     );
     const path = agentPath(thread.path, thread.color, theme);
     const state = theme.fg(stateColor, `[${sanitizeText(thread.state)}]`);
@@ -262,7 +245,8 @@ interface AgentWidgetRenderOptions {
   /** RPC widgets cannot open a terminal browser. */
   showBrowserHint?: boolean;
   nerdFontIcons?: boolean;
-  /** RPC snapshots use static role icons and never start an animation. */
+  loaderStyle?: LoaderStyle;
+  /** RPC snapshots use a static running frame and never start an animation. */
   animate?: boolean;
 }
 
@@ -378,11 +362,12 @@ function agentLine(
   theme: AgentBadgeTheme,
   nerdFontIcons: boolean,
   animate: boolean,
+  loaderStyle: LoaderStyle,
 ): string {
   const thread = row.thread!;
   const badge = agentTypeBadge(
-    thread.type, thread.color, theme,
-    agentProgressIcon(thread, nerdFontIcons, Date.now(), animate), nerdFontIcons,
+    thread.type, thread.color, theme, thread.icon, nerdFontIcons,
+    agentProgressIcon(thread, nerdFontIcons, Date.now(), animate, loaderStyle),
   );
   const left = `${row.prefix}${badge} ${agentPath(thread.path, thread.color, theme)} ${theme.fg(agentStateColor(thread.state), `[${sanitizeText(thread.state)}]`)} ${sanitizeText(thread.task)}`;
   return fitLine(left, theme.fg("muted", threadMetrics(thread)), width);
@@ -456,7 +441,7 @@ export function renderAgentTree(
   threads: ThreadView[],
   width: number,
   theme: AgentBadgeTheme,
-  { showBrowserHint = true, nerdFontIcons = false, animate = true }: AgentWidgetRenderOptions = {},
+  { showBrowserHint = true, nerdFontIcons = false, animate = true, loaderStyle = "circle" }: AgentWidgetRenderOptions = {},
 ): string[] {
   const columns = Math.max(0, width);
   const rows = buildStatusTree(
@@ -485,7 +470,7 @@ export function renderAgentTree(
       lines.push(placeholderLine(row, columns, theme));
       continue;
     }
-    lines.push(agentLine(row, columns, theme, nerdFontIcons, animate));
+    lines.push(agentLine(row, columns, theme, nerdFontIcons, animate, loaderStyle));
   }
   lines.push(agentWidgetStatus(live, omitted, columns, theme, showBrowserHint));
   return lines;
@@ -496,7 +481,7 @@ export function renderAgentSummary(
   threads: ThreadView[],
   width: number,
   theme: Pick<Theme, "fg">,
-  { showBrowserHint = true, nerdFontIcons = false, animate = true }: AgentWidgetRenderOptions = {},
+  { showBrowserHint = true, nerdFontIcons = false, animate = true, loaderStyle = "circle" }: AgentWidgetRenderOptions = {},
 ): string[] {
   const agents = new Map<string, ThreadView>();
   for (const thread of threads) {
@@ -528,13 +513,14 @@ export function renderAgentSummary(
     ["paused", "warning"],
     ["completed", "success"],
   ];
-  const progress = counts.running > 0
-    ? agentProgressIcon({ state: "running" }, nerdFontIcons, Date.now(), animate)
-    : undefined;
   const left = statuses
     .filter(([state]) => state === "running" || counts[state] > 0)
-    .map(([state, color]) => theme.fg(color,
-      `${state === "running" && progress ? `${progress} ` : ""}${counts[state]} ${state}`))
+    .map(([state, color]) => {
+      const progress = counts[state] > 0
+        ? agentProgressIcon({ state }, nerdFontIcons, Date.now(), animate, loaderStyle)
+        : undefined;
+      return theme.fg(color, `${progress ? `${progress} ` : ""}${counts[state]} ${state}`);
+    })
     .join(theme.fg("muted", ", ")) +
     (showBrowserHint && counts.running > 0 ? theme.fg("muted", " · ← browser") : "");
   const right = theme.fg("muted", `↑${formatCount(input)} ↓${formatCount(output)}`);
@@ -547,6 +533,7 @@ export function updateWidget(
   mode: WidgetMode = "full",
   nerdFontIcons = false,
   rootTurnEnded = false,
+  loaderStyle: LoaderStyle = "circle",
 ): void {
   if (!ctx.hasUI) return;
   if (!threads.some((thread) => thread.path !== "/root")) {
@@ -560,7 +547,7 @@ export function updateWidget(
   if (ctx.mode === "rpc") {
     ctx.ui.setWidget(
       "pi-subagent",
-      render(threads, 80, ctx.ui.theme, { showBrowserHint: false, nerdFontIcons, animate: false }),
+      render(threads, 80, ctx.ui.theme, { showBrowserHint: false, nerdFontIcons, loaderStyle, animate: false }),
       AGENT_WIDGET_PLACEMENT,
     );
     return;
@@ -578,6 +565,7 @@ export function updateWidget(
         render: (width) => render(snapshot, width, ctx.ui.theme, {
           showBrowserHint: !settled,
           nerdFontIcons,
+          loaderStyle,
         }),
         invalidate: () => {},
         dispose: () => {

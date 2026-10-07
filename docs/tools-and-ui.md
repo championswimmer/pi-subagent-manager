@@ -101,7 +101,7 @@ In full mode:
 - Active branches are shown first; the most recent agents within each state are preferred when previews overflow. Overflow is counted, not listed.
 - Time freezes while paused and resumes on continue.
 - A small status strip below the previews shows the running count (including starting agents) and **Press ← to open subagent browser**, including when agents overflow. The full footer also shows **→ collapse**. Minimal mode keeps **← browser** inline so it stays one line. Browser hints appear only while subagents are starting or running; RPC output omits keyboard hints.
-- With **[labs] Nerd Font icons** enabled, starting/running agents show a cycling progress glyph in the widget and fullscreen tree/live-view headers. Settled agents retain static role icons. The minimal summary also animates its running count. Animation timers stop on settlement or disposal; RPC output stays static.
+- With **[labs] Nerd Font icons** enabled, the selected Circle, Braille, or Hourglass loader appears before the preserved role icon in the widget and fullscreen tree/live-view headers. Each family provides completed, paused, failed, and stopped state icons. The minimal summary uses the same indicators for its status counts. Preview all families and states under **[labs] Loader style**. Animation timers stop on settlement or disposal; RPC output stays static.
 
 ### Interrupts and stopping agents
 

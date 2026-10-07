@@ -8,7 +8,8 @@ import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-ag
 import { setKeybindings, TuiMainScreen, type Terminal } from "@earendil-works/pi-tui";
 import piSubagent from "../src/index.ts";
 import { markImportOffered } from "../src/prefs/agent-import.ts";
-import { DEFAULT_MANAGER_SETTINGS, loadManagerSettings, saveManagerSettings } from "../src/prefs/settings.ts";
+import { DEFAULT_MANAGER_SETTINGS, loadManagerSettings, saveManagerSettings, LOADER_STYLES, type LoaderStyle } from "../src/prefs/settings.ts";
+import { AGENT_LOADERS } from "../src/ui/agent-loader.ts";
 import { ThreadManager } from "../src/orch/manager.ts";
 import type { ThreadView } from "../src/types.ts";
 import { AgentNavigationEditor } from "../src/ui/agent-navigation-editor.ts";
@@ -53,15 +54,22 @@ async function fixture(
     competingEditor?: boolean; reason?: "startup" | "resume";
     threads?: ThreadView[];
     widgetMode?: "full" | "minimal";
+    nerdFontIcons?: boolean;
+    loaderStyle?: LoaderStyle;
   } = {},
 ) {
   const cwd = mkdtempSync(join(tmpdir(), "pi-agent-navigation-"));
   const oldDir = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = cwd;
   markImportOffered(cwd);
-  if (options.widgetMode) saveManagerSettings({
+  if (options.widgetMode || options.nerdFontIcons || options.loaderStyle) saveManagerSettings({
     cwd, agentDir: cwd, includeProject: false, scope: "user",
-    settings: { ...DEFAULT_MANAGER_SETTINGS, widgetMode: options.widgetMode },
+    settings: {
+      ...DEFAULT_MANAGER_SETTINGS,
+      widgetMode: options.widgetMode ?? DEFAULT_MANAGER_SETTINGS.widgetMode,
+      nerdFontIcons: options.nerdFontIcons ?? DEFAULT_MANAGER_SETTINGS.nerdFontIcons,
+      loaderStyle: options.loaderStyle ?? DEFAULT_MANAGER_SETTINGS.loaderStyle,
+    },
   });
   const list = mock.method(ThreadManager.prototype, "list", () => options.threads ?? []);
   const hooks = new Map<string, Function>();
@@ -138,6 +146,31 @@ async function fixture(
     rmSync(cwd, { recursive: true, force: true });
   }
 }
+
+test("root passes the persisted loader family to widgets, tree/status commands and browser gesture", async () => {
+  const icon = "\uf121";
+  for (const loaderStyle of LOADER_STYLES) {
+    await fixture(async ({ widget, command, ctx, driver, editor }) => {
+      // The test clock may advance between surfaces; accept any frame from this family.
+      const hasLabel = (text: string) => AGENT_LOADERS[loaderStyle].frames.some((glyph) => text.includes(`${glyph} ${icon} worker`));
+      assert.ok(hasLabel(widget().join("\n")), `widget family ${loaderStyle}`);
+      driver.onChild = (component) => {
+        assert.ok(component instanceof StatusDialog);
+        assert.ok(hasLabel(component.render(120).join("\n")), `browser family ${loaderStyle}`);
+        component.handleInput("\x1b");
+        return true;
+      };
+      await command.handler("tree", ctx);
+      await command.handler("status", ctx);
+      const main = editor()!;
+      main.setText("");
+      main.handleInput("\x1b[H");
+      main.handleInput("\x1b[D");
+      await settle();
+      assert.equal(driver.stats.outerOpens, 3);
+    }, { threads: [{ ...thread("running"), icon }], loaderStyle, nerdFontIcons: true });
+  }
+});
 
 test("root installs the public editor and command/gesture use the same tree without changing draft", async () => {
   await fixture(async ({ editor, command, ctx, driver }) => {
