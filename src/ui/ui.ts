@@ -42,7 +42,7 @@ import { getModelPreferences } from "../prefs/models.ts";
 import type { LoaderStyle, WidgetMode } from "../prefs/settings.ts";
 import { AGENT_PROGRESS_INTERVAL, agentProgressIcon, isAgentLoaderGlyph } from "./agent-loader.ts";
 export { AGENT_PROGRESS_INTERVAL, agentProgressIcon } from "./agent-loader.ts";
-import { buildStatusTree, type StatusRow } from "./thread-tree.ts";
+import { buildStatusTree, lastStarted, type StatusRow } from "./thread-tree.ts";
 import {
   THINKING_LEVELS,
   type AgentType,
@@ -276,76 +276,6 @@ function statePriority(state: ThreadView["state"] | undefined): number {
   return 2;
 }
 
-function explicitParent(
-  path: string,
-  threadsByPath: Map<string, ThreadView>,
-): string | null {
-  if (path === WIDGET_ROOT) return null;
-  const thread = threadsByPath.get(path);
-  if (thread)
-    return thread.parent && thread.parent !== path ? thread.parent : null;
-  const index = path.lastIndexOf("/");
-  return index > 0 ? path.slice(0, index) : null;
-}
-
-/** Lowest state in the branch. Parent links define ancestry; cycles are guarded. */
-function branchPriorityComparator(
-  threads: ThreadView[],
-): (a: string, b: string) => number {
-  const threadsByPath = new Map<string, ThreadView>();
-  for (const thread of threads) {
-    if (thread?.path && !threadsByPath.has(thread.path))
-      threadsByPath.set(thread.path, thread);
-  }
-  const children = new Map<string, string[]>();
-  const link = (path: string, seen: Set<string>) => {
-    if (!path || seen.has(path)) return;
-    seen.add(path);
-    const parent = explicitParent(path, threadsByPath);
-    if (!parent || parent === path) return;
-    const list = children.get(parent) ?? [];
-    if (!list.includes(path)) list.push(path);
-    children.set(parent, list);
-    link(parent, seen);
-  };
-  link(WIDGET_ROOT, new Set());
-  for (const path of threadsByPath.keys()) link(path, new Set());
-
-  const subtree = new Map<string, number>();
-  const ancestors = new Map<string, number>();
-  const subtreeOf = (path: string, stack: Set<string>): number => {
-    const cached = subtree.get(path);
-    if (cached !== undefined) return cached;
-    const own = statePriority(threadsByPath.get(path)?.state);
-    if (stack.has(path)) return own;
-    stack.add(path);
-    let best = own;
-    for (const child of children.get(path) ?? [])
-      best = Math.min(best, subtreeOf(child, stack));
-    stack.delete(path);
-    subtree.set(path, best);
-    return best;
-  };
-  const ancestorOf = (path: string): number => {
-    const cached = ancestors.get(path);
-    if (cached !== undefined) return cached;
-    let best = 2;
-    const seen = new Set<string>();
-    let current: string | null = path;
-    while (current && !seen.has(current)) {
-      seen.add(current);
-      best = Math.min(best, statePriority(threadsByPath.get(current)?.state));
-      current = explicitParent(current, threadsByPath);
-    }
-    ancestors.set(path, best);
-    return best;
-  };
-  return (a, b) =>
-    subtreeOf(a, new Set()) - subtreeOf(b, new Set()) ||
-    ancestorOf(a) - ancestorOf(b) ||
-    (a < b ? -1 : a > b ? 1 : 0);
-}
-
 function agentStateColor(
   state: ThreadView["state"],
 ): "error" | "warning" | "accent" {
@@ -406,7 +336,7 @@ function takeWidgetRows(rows: StatusRow[], budget: number): StatusRow[] {
       (a, b) =>
         statePriority(a.row.thread!.state) -
           statePriority(b.row.thread!.state) ||
-        b.row.thread!.createdAt - a.row.thread!.createdAt || a.index - b.index,
+        lastStarted(b.row.thread) - lastStarted(a.row.thread) || a.index - b.index,
     );
   const chosen = new Set<number>();
   let used = 0;
@@ -444,11 +374,7 @@ export function renderAgentTree(
   { showBrowserHint = true, nerdFontIcons = false, animate = true, loaderStyle = "circle" }: AgentWidgetRenderOptions = {},
 ): string[] {
   const columns = Math.max(0, width);
-  const rows = buildStatusTree(
-    threads,
-    new Set(),
-    branchPriorityComparator(threads),
-  );
+  const rows = buildStatusTree(threads, new Set());
   const agents = rows.filter((row) => row.thread && row.path !== WIDGET_ROOT);
   if (!agents.length) return [];
   const live = agents.filter(

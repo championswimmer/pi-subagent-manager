@@ -202,48 +202,42 @@ test("agent tree heading, hierarchy, declared parents, and root exclusion", () =
   assert.match(lineOf(missing, "Hold"), /└─ /);
 });
 
-test("active branches sort before paused before settled, including promoted ancestors", () => {
+test("agents sort newest-started first; a branch ranks by its most recent start", () => {
+  const ordered = renderAgentTree(
+    [
+      thread("/root/a-old", { state: "running", task: "Old", createdAt: 1, lastStartedAt: 1 }),
+      thread("/root/b-new", { state: "completed", task: "New", createdAt: 3, lastStartedAt: 3 }),
+      thread("/root/c-mid", { state: "paused", task: "Mid", createdAt: 2, lastStartedAt: 2 }),
+    ],
+    100,
+    theme,
+  );
+  assert.ok(indexOf(ordered, "New") < indexOf(ordered, "Mid"));
+  assert.ok(indexOf(ordered, "Mid") < indexOf(ordered, "Old"));
+
+  // Resuming an older agent moves it back to the top.
+  const resumed = renderAgentTree(
+    [
+      thread("/root/first", { task: "First", createdAt: 1, lastStartedAt: 10 }),
+      thread("/root/second", { task: "Second", createdAt: 5, lastStartedAt: 5 }),
+    ],
+    100,
+    theme,
+  );
+  assert.ok(indexOf(resumed, "First") < indexOf(resumed, "Second"));
+
+  // A recently started child promotes its parent branch; saves without lastStartedAt use createdAt.
   const promoted = renderAgentTree(
     [
-      thread("/root/a-paused", { state: "paused", task: "Pause" }),
-      thread("/root/m-done", { state: "completed", task: "Old" }),
-      thread("/root/m-done/live", {
-        parent: "/root/m-done",
-        state: "running",
-        task: "Live",
-      }),
-      thread("/root/z-run", { state: "running", task: "Run" }),
+      thread("/root/p", { task: "Parent", createdAt: 1 }),
+      thread("/root/p/kid", { parent: "/root/p", task: "Kid", createdAt: 9 }),
+      thread("/root/q", { task: "Other", createdAt: 5 }),
     ],
     100,
     theme,
   );
-  assert.ok(indexOf(promoted, "Old") < indexOf(promoted, "Live"));
-  assert.ok(indexOf(promoted, "Live") < indexOf(promoted, "Pause"));
-  assert.ok(indexOf(promoted, "Run") < indexOf(promoted, "Pause"));
-
-  const ranked = renderAgentTree(
-    [
-      thread("/root/stop", { state: "stopped", task: "Halt" }),
-      thread("/root/fail", { state: "failed", task: "Boom" }),
-      thread("/root/done", { state: "completed", task: "Done" }),
-      thread("/root/pause", { state: "paused", task: "Wait" }),
-    ],
-    100,
-    theme,
-  );
-  assert.ok(indexOf(ranked, "Wait") < indexOf(ranked, "Done"));
-  assert.ok(indexOf(ranked, "Wait") < indexOf(ranked, "Boom"));
-  assert.ok(indexOf(ranked, "Wait") < indexOf(ranked, "Halt"));
-
-  const roots = renderAgentTree(
-    [
-      thread("/k", { parent: null, state: "paused", task: "Indie" }),
-      thread("/root/run", { parent: "/root", state: "starting", task: "Boot" }),
-    ],
-    80,
-    theme,
-  );
-  assert.ok(indexOf(roots, "Boot") < indexOf(roots, "Indie"));
+  assert.ok(indexOf(promoted, "Parent") < indexOf(promoted, "Kid"));
+  assert.ok(indexOf(promoted, "Kid") < indexOf(promoted, "Other"));
 });
 
 test("shows task and elapsed tokens in one row per agent without status text", (t) => {
@@ -354,8 +348,12 @@ test("ends below agent rows with running count and browser entry", () => {
   for (const state of ["running", "completed"] as const) {
     const lines = plain(renderAgentTree([thread("/root/job", { state })], 80, theme));
     assert.equal(lines.length, 3);
-    assert.equal(lines.at(-1), state === "running"
-      ? "1 running · Press ← to open subagent browser · → collapse" : "0 running · → collapse");
+    assert.equal(
+      lines.at(-1),
+      state === "running"
+        ? "1 running · Press ← to open subagent browser · → collapse"
+        : "0 running · → collapse",
+    );
     assert.match(lines.at(-2)!, /\/root\/job/);
     assert.doesNotMatch(lines.join("\n"), /Working/);
     assert.doesNotMatch(lines.join("\n"), /Esc:|abort main|more agents/);
@@ -364,12 +362,27 @@ test("ends below agent rows with running count and browser entry", () => {
 
 test("browser hint appears only for starting or running subagents in either widget mode", () => {
   for (const render of [renderAgentTree, renderAgentSummary]) {
-    for (const state of ["starting", "running", "paused", "completed", "failed", "stopped"] as const) {
+    for (const state of [
+      "starting",
+      "running",
+      "paused",
+      "completed",
+      "failed",
+      "stopped",
+    ] as const) {
       const lines = plain(render([thread("/root"), thread("/root/job", { state })], 100, theme));
-      assert.equal(lines.some((line) => line.includes("←")),
-        state === "starting" || state === "running", state);
-      assert.equal(lines.some((line) => line.includes("→ collapse")), render === renderAgentTree);
-      const rpcLines = plain(render([thread("/root/job", { state })], 100, theme, { showBrowserHint: false }));
+      assert.equal(
+        lines.some((line) => line.includes("←")),
+        state === "starting" || state === "running",
+        state,
+      );
+      assert.equal(
+        lines.some((line) => line.includes("→ collapse")),
+        render === renderAgentTree,
+      );
+      const rpcLines = plain(
+        render([thread("/root/job", { state })], 100, theme, { showBrowserHint: false }),
+      );
       assert.doesNotMatch(rpcLines.join("\n"), /←|→ collapse/);
     }
   }
@@ -418,7 +431,10 @@ test("bounds the widget to twelve lines and counts every omitted real agent", ()
   const packed = renderAgentTree(nested, 90, theme);
   assert.equal(packed.length, 12);
   assert.match(plain(packed)[0]!, /12 live · 0 paused$/);
-  assert.equal(plain(packed).at(-1), "12 running · +2 more agents · Press ← to open subagent browser · → collapse");
+  assert.equal(
+    plain(packed).at(-1),
+    "12 running · +2 more agents · Press ← to open subagent browser · → collapse",
+  );
   assert.ok(indexOf(packed, "Parent") < indexOf(packed, "Child 0"));
   assert.match(plain(packed).join("\n"), /Child 8/);
   assert.equal(
@@ -446,7 +462,10 @@ test("live branches cannot be hidden by settled descendants", () => {
   assert.match(plain(lines)[0]!, /2 live · 0 paused$/);
   assert.ok(indexOf(lines, "Active parent") < indexOf(lines, "Settled child 0"));
   assert.ok(indexOf(lines, "Other active branch") >= 0);
-  assert.equal(plain(lines).at(-1), "2 running · +1 more agents · Press ← to open subagent browser · → collapse");
+  assert.equal(
+    plain(lines).at(-1),
+    "2 running · +1 more agents · Press ← to open subagent browser · → collapse",
+  );
 });
 
 test("browser strip counts unique real starting/running agents and clips safely", () => {
@@ -464,12 +483,20 @@ test("browser strip counts unique real starting/running agents and clips safely"
   for (const width of [0, 1, 2, 8, 20, 40, 80, 120]) {
     const lines = renderAgentTree(threads, width, theme);
     assert.ok(lines.length <= 12);
-    assert.ok(lines.every((line) => visibleWidth(line) <= width), String(width));
+    assert.ok(
+      lines.every((line) => visibleWidth(line) <= width),
+      String(width),
+    );
     if (width >= 80) {
       const footer = lines.at(-1)!;
-      assert.equal(stripTerminalSequences(footer), "2 running · Press ← to open subagent browser · → collapse");
+      assert.equal(
+        stripTerminalSequences(footer),
+        "2 running · Press ← to open subagent browser · → collapse",
+      );
       assert.ok(footer.includes(theme.fg("accent", "2 running")));
-      assert.ok(footer.includes(theme.fg("muted", " · Press ← to open subagent browser · → collapse")));
+      assert.ok(
+        footer.includes(theme.fg("muted", " · Press ← to open subagent browser · → collapse")),
+      );
     }
   }
   assert.deepEqual(threads, before);
@@ -547,15 +574,19 @@ test("widget collapses only after the root turn ends and every real agent is idl
     mode: "tui",
     ui: {
       theme,
-      setWidget: (_key: string, value: unknown) => { content = value; },
+      setWidget: (_key: string, value: unknown) => {
+        content = value;
+      },
     },
   } as unknown as ExtensionContext;
   const renderLast = () => {
     if (Array.isArray(content)) return plain(content);
-    const component = (content as (tui: { requestRender(): void }) => {
-      render(width: number): string[];
-      dispose(): void;
-    })({ requestRender() {} });
+    const component = (
+      content as (tui: { requestRender(): void }) => {
+        render(width: number): string[];
+        dispose(): void;
+      }
+    )({ requestRender() {} });
     const lines = plain(component.render(80));
     component.dispose();
     return lines;
@@ -613,7 +644,10 @@ test("minimal summary counts unique real agents with semantic colors and active-
   assert.equal(lines.length, 1);
   assert.match(plain(lines)[0]!, /← browser/);
   const line = lines[0]!;
-  assert.match(plain(lines)[0]!, /^3 running, 2 stopped, 1 failed, 1 paused, 1 completed · ← browser\s+↑1\.4k ↓39$/);
+  assert.match(
+    plain(lines)[0]!,
+    /^3 running, 2 stopped, 1 failed, 1 paused, 1 completed · ← browser\s+↑1\.4k ↓39$/,
+  );
   for (const [color, text] of [
     ["accent", "3 running"],
     ["muted", "2 stopped"],
@@ -647,12 +681,18 @@ test("minimal summary handles empty and settled agents, metrics boundaries, and 
       thread(`/root/paused${index}`, { state: "paused", inputTokens: 5_000, outputTokens: 6_000 }),
     ),
   ];
-  assert.match(plain(renderAgentSummary(threads, 100, theme))[0]!, /^3 running, 20 paused · ← browser\s+↑1m ↓1.5m$/);
+  assert.match(
+    plain(renderAgentSummary(threads, 100, theme))[0]!,
+    /^3 running, 20 paused · ← browser\s+↑1m ↓1.5m$/,
+  );
   const counters = theme.fg("muted", "↑1m ↓1.5m");
   for (const width of [0, 1, 2, 4, 9, 10, 20, 40, 80, 100]) {
     const lines = renderAgentSummary(threads, width, theme);
     assert.equal(lines.length, 1);
-    assert.ok(lines.every((line) => visibleWidth(line) <= width), String(width));
+    assert.ok(
+      lines.every((line) => visibleWidth(line) <= width),
+      String(width),
+    );
     const line = lines[0]!;
     assert.ok(visibleWidth(line) <= width, String(width));
     assert.ok(!/[\x00-\x1f\x7f-\x9f]/.test(stripTerminalSequences(line)));
@@ -674,10 +714,12 @@ test("updateWidget retains full default and switches minimal/full in TUI and RPC
   } as unknown as ExtensionContext;
   const threads = [thread("/root/job", { state: "completed", task: "Done" })];
   const renderLast = () => {
-    const component = (calls.at(-1)!.content as (tui: { requestRender(): void }) => {
-      render(width: number): string[];
-      dispose(): void;
-    })({ requestRender() {} });
+    const component = (
+      calls.at(-1)!.content as (tui: { requestRender(): void }) => {
+        render(width: number): string[];
+        dispose(): void;
+      }
+    )({ requestRender() {} });
     const lines = component.render(80);
     component.dispose();
     return lines;
@@ -692,15 +734,23 @@ test("updateWidget retains full default and switches minimal/full in TUI and RPC
 
   ctx.mode = "rpc";
   updateWidget(ctx, threads, "minimal");
-  assert.deepEqual(calls.at(-1)!.content, renderAgentSummary(threads, 80, theme, { showBrowserHint: false }));
+  assert.deepEqual(
+    calls.at(-1)!.content,
+    renderAgentSummary(threads, 80, theme, { showBrowserHint: false }),
+  );
   assert.doesNotMatch(plain(calls.at(-1)!.content as string[]).join("\n"), /Press ←/);
   updateWidget(ctx, threads, "full");
-  assert.deepEqual(calls.at(-1)!.content, renderAgentTree(threads, 80, theme, { showBrowserHint: false }));
+  assert.deepEqual(
+    calls.at(-1)!.content,
+    renderAgentTree(threads, 80, theme, { showBrowserHint: false }),
+  );
   updateWidget(ctx, [], "minimal");
   assert.equal(calls.at(-1)!.content, undefined);
   updateWidget(ctx, [thread("/root")], "minimal");
   assert.equal(calls.at(-1)!.content, undefined);
-  assert.ok(calls.every((call) => (call.options as { placement: string }).placement === "aboveEditor"));
+  assert.ok(
+    calls.every((call) => (call.options as { placement: string }).placement === "aboveEditor"),
+  );
 });
 
 test("full widget status strip resolves the current theme at render time", () => {
@@ -710,23 +760,32 @@ test("full widget status strip resolves the current theme at render time", () =>
     hasUI: true,
     mode: "tui",
     ui: {
-      get theme() { return current; },
-      setWidget: (_key: string, value: unknown) => { content = value; },
+      get theme() {
+        return current;
+      },
+      setWidget: (_key: string, value: unknown) => {
+        content = value;
+      },
     },
   } as unknown as ExtensionContext;
   updateWidget(ctx, [thread("/root/job", { state: "completed" })]);
-  const component = (content as (tui: { requestRender(): void }) => {
-    render(width: number): string[];
-    invalidate(): void;
-    dispose(): void;
-  })({ requestRender() {} });
+  const component = (
+    content as (tui: { requestRender(): void }) => {
+      render(width: number): string[];
+      invalidate(): void;
+      dispose(): void;
+    }
+  )({ requestRender() {} });
   const first = component.render(80);
   current = testTheme("light");
   component.invalidate();
   const second = component.render(80);
   assert.deepEqual(plain(second), plain(first));
   assert.notEqual(second.at(-1), first.at(-1));
-  assert.equal(second.at(-1), current.fg("accent", "0 running") + current.fg("muted", " · → collapse"));
+  assert.equal(
+    second.at(-1),
+    current.fg("accent", "0 running") + current.fg("muted", " · → collapse"),
+  );
   component.dispose();
 });
 
@@ -740,16 +799,22 @@ test("minimal widget resolves live themes without allocating elapsed-time timers
     hasUI: true,
     mode: "tui",
     ui: {
-      get theme() { return current; },
-      setWidget: (_key: string, value: unknown) => { content = value; },
+      get theme() {
+        return current;
+      },
+      setWidget: (_key: string, value: unknown) => {
+        content = value;
+      },
     },
   } as unknown as ExtensionContext;
   updateWidget(ctx, [thread("/root/job", { inputTokens: 12, outputTokens: 3 })], "minimal");
-  const component = (content as (tui: { requestRender(): void }) => {
-    render(width: number): string[];
-    invalidate(): void;
-    dispose(): void;
-  })({ requestRender() {} });
+  const component = (
+    content as (tui: { requestRender(): void }) => {
+      render(width: number): string[];
+      invalidate(): void;
+      dispose(): void;
+    }
+  )({ requestRender() {} });
   const first = component.render(80);
   assert.ok(first[0]!.includes(current.fg("accent", "1 running")));
   current = testTheme("light");

@@ -61,6 +61,8 @@ export interface ThreadView {
   elapsedMs?: number;
   /** Current run start. Live only; omitted from saved views so reloads do not count offline time. */
   startedAt?: number;
+  /** Most recent run start (spawn or resume). Persisted; orders the agent tree newest-first. */
+  lastStartedAt?: number;
   /** Cumulative input tokens, including cache read/write. Live views include the in-progress message. */
   inputTokens?: number;
   /** Cumulative output tokens. Live views include the in-progress message. */
@@ -152,6 +154,7 @@ export interface SavedThreadView {
   sessionLeafId?: string | null;
   /** Frozen cumulative active time. `startedAt` is intentionally not persisted. */
   elapsedMs?: number;
+  lastStartedAt?: number;
   inputTokens?: number;
   outputTokens?: number;
 }
