@@ -1456,6 +1456,31 @@ test("bundled tweak-settings saves a sparse .yml and locks prompt and name", asy
   }
 });
 
+test("Reset to bundled deletes the override and restores the shipped agent", async () => {
+  const fixture = await bundledFixture();
+  try {
+    const run = async (choices: (string | undefined)[]) => {
+      const context = editorContext(fixture.root, choices);
+      await editAgentTypes(context.ctx, fixture.store);
+      return context;
+    };
+    const first = await run(["coder", "override", "Cancel", undefined]);
+    assert.ok(!first.menus.some((m) => m.options.includes("Reset to bundled")));
+    await run(["coder", "override", "thinkingLevel", "low", "Save", "Global", undefined]);
+    assert.equal(fixture.store.get("coder").thinkingLevel, "low");
+    const kept = await run(["coder", "Reset to bundled", "keep", "Cancel", undefined]);
+    assert.ok(kept.menus.some((m) => m.options.includes("Reset to bundled")));
+    assert.deepEqual(await readdir(userAgentsDir(fixture.agentDir)), ["coder.yml"]);
+    const reset = await run(["coder", "Reset to bundled", "reset", undefined]);
+    assert.match(reset.diagnostics.join("\n"), /Reset coder/);
+    assert.deepEqual(await readdir(userAgentsDir(fixture.agentDir)), []);
+    assert.equal(fixture.store.get("coder").thinkingLevel, "high");
+    assert.equal(fixture.store.get("coder").source, "bundled");
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("bundled fork copies the full definition including prompt edits", async () => {
   const fixture = await bundledFixture();
   try {

@@ -46,6 +46,9 @@ In `/agents types`, editing a bundled agent asks you to pick one mode first,
 and settings stay locked until you choose. Overrides cannot rename the agent
 or edit the system prompt — fork it instead.
 
+To undo a fork or override, choose **Reset to bundled** (after Save) in the editor.
+It deletes the `.md`/`.yml` file after confirmation and the shipped agent applies again.
+
 These are the only locations read. Other packages' `~/.pi/agent/agents` or `.pi/agents` are ignored — use [`/agents import`](importing-agents.md) for those.
 
 ## 2. Write the file

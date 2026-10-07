@@ -1030,6 +1030,7 @@ const EDIT_MENU_ACTIONS = [
   "Edit frontmatter YAML",
   "External editor (entire Markdown)",
   "Save",
+  "Reset to bundled",
   "Cancel",
 ] as const;
 
@@ -1054,6 +1055,7 @@ const EDIT_FIELD_LABELS: Record<EditMenuAction, string> = {
   "Edit frontmatter YAML": "Frontmatter YAML",
   "External editor (entire Markdown)": "External editor",
   Save: "Save",
+  "Reset to bundled": "Reset to bundled",
   Cancel: "Cancel",
 };
 
@@ -1081,6 +1083,8 @@ const EDIT_FIELD_HELP: Record<EditMenuAction, string> = {
   "External editor (entire Markdown)":
     "Edit the complete definition using $VISUAL / $EDITOR.",
   Save: "Validate and save. Existing sessions keep their original configuration.",
+  "Reset to bundled":
+    "Delete this fork/override file and go back to the definition shipped with the extension. Unsaved edits are discarded.",
   Cancel: "Close without saving any edits.",
 };
 
@@ -1254,7 +1258,11 @@ async function editAgentTypesDialog(
       const field = await dialogMenu(
         ctx,
         `Edit ${sanitizeText(draft.name)} (unsaved)`,
-        EDIT_MENU_ACTIONS.map((action) => {
+        EDIT_MENU_ACTIONS.filter(
+          (action) =>
+            action !== "Reset to bundled" ||
+            (!isNew && !!original?.customization && !!original.baseSource),
+        ).map((action) => {
           const decorated = editMenuLabel(action, draft);
           const separator = decorated.indexOf(": ");
           return {
@@ -1368,6 +1376,30 @@ async function editAgentTypesDialog(
           const saved = store.save(validated, scope, original);
           ctx.ui.notify(
             `Saved ${sanitizeText(saved.filePath ?? saved.name)}${original && original.name !== saved.name ? " (original file retained)" : ""}.`,
+            "info",
+          );
+          break;
+        }
+        if (field === "Reset to bundled") {
+          if (!original?.customization || !original.baseSource) continue;
+          const { scope, filePath } = original.customization;
+          const confirmed = await dialogMenu(
+            ctx,
+            `Reset ${sanitizeText(original.name)}?`,
+            [
+              {
+                id: "reset",
+                label: "Reset",
+                help: `Deletes ${filePath} and restores the ${original.baseSource ?? "bundled"} definition.`,
+              },
+              { id: "keep", label: "Keep" },
+            ],
+            { selectedId: "keep" },
+          );
+          if (confirmed !== "reset") continue;
+          store.removeCustomization(original.name, scope);
+          ctx.ui.notify(
+            `Reset ${sanitizeText(original.name)}: deleted ${sanitizeText(filePath)}; using the ${original.baseSource ?? "bundled"} definition.`,
             "info",
           );
           break;
