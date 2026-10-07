@@ -45,9 +45,10 @@ Child progress and completion notifications are retained in the main agent's con
 | ----------------------------- | ---------------------------------------------------------------------------------- |
 | `/agents`, `/agents settings` | [Settings](settings.md) dialog. **Agent definitions** jumps to the type editor.    |
 | `/agents types`               | Type browser and editor — see [custom agents](custom-agents.md#editing-in-the-tui) |
-| `/agents tree [path]`         | Live full tree; optional path preselects. `/agents status` is an alias.            |
+| `/agents tree [path]`         | Live full tree; optional path preselects.            |
 | `/agents import`              | [Import picker](importing-agents.md)                                               |
 | `/agents reload`              | Reload definitions and settings; show diagnostics                                  |
+| `/agents reap`                | Show the eligible count and a Confirm/Cancel dialog, then forget completed agents and free retained-thread slots. Active parents and ancestors of retained threads are preserved; reaped agents cannot be resumed. Session files are not deleted. |
 
 ### `/agents tree` keys
 

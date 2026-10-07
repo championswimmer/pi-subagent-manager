@@ -696,3 +696,96 @@ test("restored transcript observation is read-only and enforces scope", async ()
   observation.unsubscribe();
   await manager.shutdown();
 });
+
+test("reap frees retained slots, disposes drivers, and removes durable records", async () => {
+  const { manager, drivers } = fixture({ maxThreads: 1 });
+  await manager.spawn("/root", { path: "old", type: "worker", task: "old", wait: false });
+  await tick();
+  drivers.get("/root/old")!.finish();
+  await manager.wait("/root", "old");
+  await assert.rejects(
+    manager.spawn("/root", { path: "new", type: "worker", task: "new", wait: false }),
+    /Total thread limit/,
+  );
+  assert.deepEqual(manager.reap(), ["/root/old"]);
+  assert.equal(drivers.get("/root/old")!.disposed, true);
+  assert.deepEqual(manager.saved(), []);
+  assert.throws(() => manager.get("/root/old"), /Unknown thread/);
+  assert.deepEqual(manager.reap(), []);
+  await manager.spawn("/root", { path: "new", type: "worker", task: "new", wait: false });
+  assert.deepEqual(manager.reap(), [], "running agents survive");
+  await manager.shutdown();
+});
+
+test("reap preserves non-completed threads and their completed ancestors", async () => {
+  const { manager } = fixture();
+  manager.restore([
+    saved("/root/parent", { state: "completed", createdAt: 1 }),
+    saved("/root/parent/done", { state: "completed", createdAt: 2 }),
+    saved("/root/parent/paused", { state: "paused" }),
+    saved("/root/stopped", { state: "stopped" }),
+    saved("/root/failed", { state: "failed" }),
+    saved("/root/newer", { state: "completed", createdAt: 10 }),
+    saved("/root/older", { state: "completed", createdAt: 0 }),
+    saved("/root/tree", { state: "completed", createdAt: 3 }),
+    saved("/root/tree/child", { state: "completed", createdAt: 4 }),
+  ]);
+  assert.deepEqual(manager.reap(), [
+    "/root/older", "/root/parent/done", "/root/tree", "/root/tree/child", "/root/newer",
+  ]);
+  assert.deepEqual(manager.list().map((thread) => thread.path), [
+    "/root/parent", "/root/parent/paused", "/root/stopped", "/root/failed",
+  ]);
+  await manager.shutdown();
+});
+
+test("reap keeps completed children available to an active parent", async () => {
+  const { manager, drivers } = fixture();
+  await manager.spawn("/root", { path: "parent", type: "worker", task: "parent", wait: false });
+  await tick();
+  await manager.spawn("/root/parent", { path: "child", type: "worker", task: "child", wait: false });
+  await tick();
+  drivers.get("/root/parent/child")!.finish();
+  await manager.wait("/root", "/root/parent/child");
+  assert.deepEqual(manager.reap(), []);
+  drivers.get("/root/parent")!.finish();
+  await manager.wait("/root", "parent");
+  assert.deepEqual(manager.reap(), ["/root/parent", "/root/parent/child"]);
+  await manager.shutdown();
+});
+
+test("reap preview is read-only and excludes agents completed after confirmation started", async () => {
+  const { manager, drivers } = fixture();
+  await manager.spawn("/root", { path: "old", type: "worker", task: "old", wait: false });
+  await manager.spawn("/root", { path: "new", type: "worker", task: "new", wait: false });
+  await tick();
+  drivers.get("/root/old")!.finish();
+  await manager.wait("/root", "old");
+  const candidates = manager.reapCandidates();
+  assert.deepEqual(candidates, ["/root/old"]);
+  assert.equal(drivers.get("/root/old")!.disposed, false);
+  assert.equal(manager.saved().length, 2);
+  drivers.get("/root/new")!.finish();
+  await manager.wait("/root", "new");
+  assert.deepEqual(manager.reap(candidates), ["/root/old"]);
+  assert.equal(manager.get("/root/new").state, "completed");
+  await manager.shutdown();
+});
+
+test("confirmed reap revalidates resumed descendants and preserves their ancestors", async () => {
+  const { manager, drivers } = fixture();
+  await manager.spawn("/root", { path: "parent", type: "worker", task: "parent", wait: false });
+  await tick();
+  await manager.spawn("/root/parent", { path: "child", type: "worker", task: "child", wait: false });
+  await tick();
+  drivers.get("/root/parent/child")!.finish();
+  await manager.wait("/root", "/root/parent/child");
+  drivers.get("/root/parent")!.finish();
+  await manager.wait("/root", "parent");
+  const candidates = manager.reapCandidates();
+  assert.equal(candidates.length, 2);
+  await manager.steer("/root", "/root/parent/child", "Continue");
+  assert.deepEqual(manager.reap(candidates), []);
+  assert.equal(manager.list().length, 2);
+  await manager.shutdown();
+});

@@ -147,7 +147,7 @@ async function fixture(
   }
 }
 
-test("root passes the persisted loader family to widgets, tree/status commands and browser gesture", async () => {
+test("root passes the persisted loader family to widgets, tree command and browser gesture", async () => {
   const icon = "\uf121";
   for (const loaderStyle of LOADER_STYLES) {
     await fixture(async ({ widget, command, ctx, driver, editor }) => {
@@ -161,13 +161,12 @@ test("root passes the persisted loader family to widgets, tree/status commands a
         return true;
       };
       await command.handler("tree", ctx);
-      await command.handler("status", ctx);
       const main = editor()!;
       main.setText("");
       main.handleInput("\x1b[H");
       main.handleInput("\x1b[D");
       await settle();
-      assert.equal(driver.stats.outerOpens, 3);
+      assert.equal(driver.stats.outerOpens, 2);
     }, { threads: [{ ...thread("running"), icon }], loaderStyle, nerdFontIcons: true });
   }
 });

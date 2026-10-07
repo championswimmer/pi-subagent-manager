@@ -97,7 +97,7 @@ async function withCommands(
   }
 }
 
-const SUBCOMMANDS = ["tree", "status", "settings", "types", "import", "reload"].map((value) => ({
+const SUBCOMMANDS = ["tree", "settings", "types", "import", "reload", "reap"].map((value) => ({
   value,
   label: value,
 }));
@@ -224,8 +224,8 @@ test("off does not acknowledge migration or inject guidance", async () => {
 test("dialog subcommands decline RPC mode without opening a dialog", async () => {
   await withCommands(async ({ command, ctx, renders, notifications }) => {
     (ctx as { mode: string }).mode = "rpc";
-    for (const args of ["", "settings", "tree", "status"]) await command.handler(args, ctx);
-    assert.equal(notifications.filter((text) => text.includes("TUI mode")).length, 4);
+    for (const args of ["", "settings", "tree"]) await command.handler(args, ctx);
+    assert.equal(notifications.filter((text) => text.includes("TUI mode")).length, 3);
     await command.handler("import", ctx);
     assert.match(notifications.at(-1)!, /Agent import requires TUI mode/);
     assert.equal(renders.length, 0);
@@ -249,21 +249,21 @@ test("subcommand completions are fuzzy and unknown subcommands report usage", as
     const complete = (prefix: string) => command.getArgumentCompletions(prefix);
     assert.deepEqual(complete(""), SUBCOMMANDS);
     assert.deepEqual(complete("   "), SUBCOMMANDS);
-    assert.deepEqual(complete("sta"), [{ value: "status", label: "status" }]);
+    assert.equal(complete("sta"), null);
     assert.deepEqual(complete("TyPeS"), [{ value: "types", label: "types" }]);
     assert.deepEqual(complete("   tpe"), [{ value: "types", label: "types" }]);
     for (const prefix of ["thread", "status ", "types foo", "settings 5", "tree /missing"])
       assert.equal(complete(prefix), null, prefix);
     await command.handler("nope", ctx);
     assert.match(notifications.at(-1)!, /tree/);
-    assert.match(notifications.at(-1)!, /status/);
+    assert.doesNotMatch(notifications.at(-1)!, /status/);
     assert.doesNotMatch(notifications.at(-1)!, /thread/);
     await command.handler("thread /root/alpha", ctx);
     assert.match(notifications.at(-1)!, /Usage:.*tree/);
   });
 });
 
-test("tree and status open overlays, and tree completes thread paths", async () => {
+test("tree opens overlays and status is rejected, and tree completes thread paths", async () => {
   await withCommands(async ({ command, ctx, hooks, renders, notifications }) => {
     seedThreads(ctx, ["/root/alpha", "/root/zeta"]);
     await hooks.get("session_tree")!({}, ctx);
@@ -277,7 +277,9 @@ test("tree and status open overlays, and tree completes thread paths", async () 
     assert.deepEqual(command.getArgumentCompletions("tree"), [{ value: "tree", label: "tree" }]);
 
     await command.handler("status", ctx);
-    assert.match(renders.at(-1)!.join("\n"), /Agents status/);
+    assert.match(notifications.at(-1)!, /Usage:/);
+    assert.equal(renders.length, 0);
+    notifications.length = 0;
     await command.handler("tree", ctx);
     assert.match(renders.at(-1)!.join("\n"), /Agents tree/);
     await command.handler("tree /root/zeta", ctx);
@@ -360,5 +362,60 @@ test("saving widget mode refreshes immediately and reload reads the persisted ch
     assert.equal(renderWidget().length, 1, "Reload applies a choice changed on disk");
     await hooks.get("session_tree")!({}, ctx);
     assert.equal(renderWidget().length, 1, "Session attachment reloads the choice");
+  });
+});
+
+test("agents reap persists removals, refreshes the widget, and completes by name", async () => {
+  await withCommands(async ({ command, ctx, hooks, notifications, widgets, replies, renders }) => {
+    seedThreads(ctx, ["/root/old", "/root/old/child"]);
+    await hooks.get("session_tree")!({}, ctx);
+    assert.deepEqual(command.getArgumentCompletions("reap"), [{ value: "reap", label: "reap" }]);
+    const before = widgets.length;
+    replies.push("confirm");
+    await command.handler("reap", ctx);
+    assert.match(notifications.at(-1)!, /Reaped 2 completed agent/);
+    assert.match(renders.flat().join("\n"), /2 completed agents will be reaped/);
+    assert.match(renders.flat().join("\n"), /You will not be able to resume them anymore/);
+    assert.ok(widgets.length > before);
+    assert.equal(command.getArgumentCompletions("tree /root/old"), null);
+    await hooks.get("session_tree")!({}, ctx);
+    await command.handler("reap", ctx);
+    assert.match(notifications.at(-1)!, /No completed agents eligible/);
+  });
+});
+
+test("agents reap cancel and dismiss preserve completed sessions", async () => {
+  await withCommands(async ({ command, ctx, hooks, replies, renders, notifications }) => {
+    seedThreads(ctx, ["/root/old"]);
+    await hooks.get("session_tree")!({}, ctx);
+    for (const reply of ["cancel", undefined]) {
+      replies.push(reply);
+      await command.handler("reap", ctx);
+      assert.match(renders.flat().join("\n"), /1 completed agent will be reaped/);
+      assert.deepEqual(command.getArgumentCompletions("tree /root/old"), [
+        { value: "tree /root/old", label: "/root/old" },
+      ]);
+      assert.equal(notifications.some((message) => message.startsWith("Reaped")), false);
+      await hooks.get("session_tree")!({}, ctx);
+    }
+  });
+});
+
+test("agents reap without completed agents opens no confirmation", async () => {
+  await withCommands(async ({ command, ctx, notifications, renders }) => {
+    await command.handler("reap", ctx);
+    assert.match(notifications.at(-1)!, /No completed agents eligible/);
+    assert.equal(renders.length, 0);
+  });
+});
+
+test("agents reap refuses to bypass confirmation outside the TUI", async () => {
+  await withCommands(async ({ command, ctx, hooks, renders }) => {
+    seedThreads(ctx, ["/root/old"]);
+    await hooks.get("session_tree")!({}, ctx);
+    ctx.mode = "rpc";
+    await command.handler("reap", ctx);
+    assert.equal(renders.length, 0);
+    assert.ok(command.getArgumentCompletions("tree /root/old"));
   });
 });
