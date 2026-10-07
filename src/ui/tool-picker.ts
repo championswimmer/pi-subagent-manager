@@ -51,6 +51,10 @@ const LAYOUT = { minPrimaryColumnWidth: 24, maxPrimaryColumnWidth: 52 };
 interface ToolItem extends SelectItem {
   group: string;
 }
+const MCP_TOOL = /^mcp__(.+?)__(.+)$/;
+export function mcpServerOf(name: string): string | undefined {
+  return MCP_TOOL.exec(name)?.[1];
+}
 
 export class ToolPickerComponent extends Container {
   private readonly searchInput = new Input({ placeholder: "Search tools" });
@@ -60,6 +64,7 @@ export class ToolPickerComponent extends Container {
   private readonly byName: Map<string, SessionTool>;
   private draft: string[] | undefined;
   private query = "";
+  private readonly expanded = new Set<string>();
   private _focused = false;
 
   constructor(
@@ -155,7 +160,7 @@ export class ToolPickerComponent extends Container {
       height,
       field === "allow" ? "Allowed tools" : "Blocked tools",
       [...header, ...rows].map((line) => ` ${line}`),
-      "↑↓ select · Enter toggle/action · Ctrl+S done · Esc cancel",
+      "↑↓ select · Enter toggle/action · ←→ collapse/expand MCP · Ctrl+S done · Esc cancel",
     );
   }
 
@@ -165,6 +170,25 @@ export class ToolPickerComponent extends Container {
       return;
     }
     const kb = getKeybindings();
+    const current = this.selectList.getSelectedItem()?.value;
+    const isRight = matchesKey(data, Key.right);
+    const isLeft = matchesKey(data, Key.left);
+    if ((isRight || isLeft) && current) {
+      const server = current.startsWith("group:")
+        ? current.slice("group:".length)
+        : isLeft && current.startsWith("tool:")
+          ? mcpServerOf(current.slice("tool:".length))
+          : undefined;
+      const key =
+        server === undefined ? undefined : current.startsWith("group:") ? server : `mcp__${server}`;
+      if (key !== undefined) {
+        if (isRight && current.startsWith("group:")) this.expanded.add(key);
+        else if (isLeft) this.expanded.delete(key);
+        this.refresh(`group:${key}`);
+        this.options.tui.requestRender();
+        return;
+      }
+    }
     if (
       kb.matches(data, "tui.select.up") ||
       kb.matches(data, "tui.select.down") ||
@@ -209,11 +233,69 @@ export class ToolPickerComponent extends Container {
         : "unavailable in current session · preserved",
       group: checked ? "Selected tools" : "Session tools · A–Z",
     });
+    const searching = this.query.trim().length > 0;
+    const groups = new Map<string, string[]>();
+    const flat: string[] = [];
+    const addName = (name: string) => {
+      const server = mcpServerOf(name);
+      if (server === undefined) return flat.push(name);
+      const key = `mcp__${server}`;
+      const list = groups.get(key) ?? [];
+      if (!list.includes(name)) list.push(name);
+      groups.set(key, list);
+    };
+    for (const name of selected) if (mcpServerOf(name) === undefined) addName(name);
+    const matchedNames = new Set(matches.map((tool) => tool.name));
+    for (const tool of matches) if (!selected.has(tool.name)) addName(tool.name);
+    // Group members: all session tools plus preserved draft names (so toggling affects the whole MCP).
+    const members = new Map<string, string[]>();
+    for (const name of [...this.tools.map((t) => t.name), ...selected]) {
+      const server = mcpServerOf(name);
+      if (server === undefined) continue;
+      const list = members.get(`mcp__${server}`) ?? [];
+      if (!list.includes(name)) list.push(name);
+      members.set(`mcp__${server}`, list);
+    }
+    for (const name of selected) if (mcpServerOf(name) !== undefined && !searching) addName(name);
+    for (const key of [...groups.keys()]) {
+      // Show a group when not searching, or when any member matches the search.
+      if (searching && !members.get(key)!.some((n) => matchedNames.has(n))) groups.delete(key);
+    }
+    if (!searching) for (const key of members.keys()) if (!groups.has(key)) groups.set(key, []);
+    const flatSelected = flat.filter((n) => selected.has(n));
+    const flatUnselected = flat.filter((n) => !selected.has(n));
+    const rows: { sort: string; items: ToolItem[] }[] = flatUnselected.map((n) => ({
+      sort: n,
+      items: [toolItem(n, false)],
+    }));
+    for (const key of groups.keys()) {
+      const all = members.get(key)!.sort((a, b) => a.localeCompare(b));
+      const on = all.filter((n) => selected.has(n)).length;
+      const open = searching || this.expanded.has(key);
+      const mark = on === 0 ? " " : on === all.length ? "x" : "-";
+      const items: ToolItem[] = [
+        {
+          value: `group:${key}`,
+          label: `${open ? "▾" : "▸"} [${mark}] ${dialogText(key)}`,
+          description: `${on}/${all.length} tools · ${open ? "← collapse" : "→ expand"}`,
+          group: "Session tools · A–Z",
+        },
+      ];
+      if (open) {
+        for (const n of all) {
+          if (searching && !matchedNames.has(n)) continue;
+          const item = toolItem(n, selected.has(n));
+          item.label = `    ${item.label}`;
+          item.group = "Session tools · A–Z";
+          items.push(item);
+        }
+      }
+      rows.push({ sort: key, items });
+    }
+    rows.sort((x, y) => x.sort.localeCompare(y.sort));
     this.currentItems = [
-      ...[...selected].map((name) => toolItem(name, true)),
-      ...matches
-        .filter((tool) => !selected.has(tool.name))
-        .map((tool) => toolItem(tool.name, false)),
+      ...flatSelected.map((name) => toolItem(name, true)),
+      ...rows.flatMap((row) => row.items),
       {
         value: "action:done",
         label: "Done",
@@ -259,7 +341,15 @@ export class ToolPickerComponent extends Container {
       if (item.value === "action:done") this.finish();
       else if (item.value === "action:cancel") this.options.onCancel();
       else {
-        if (item.value === "action:unset") this.draft = undefined;
+        if (item.value.startsWith("group:")) {
+          const key = item.value.slice("group:".length);
+          const names = [
+            ...new Set([...this.tools.map((t) => t.name), ...(this.draft ?? [])]),
+          ].filter((n) => mcpServerOf(n) !== undefined && `mcp__${mcpServerOf(n)}` === key);
+          const allOn = names.every((n) => this.draft?.includes(n));
+          const rest = (this.draft ?? []).filter((n) => !names.includes(n));
+          this.draft = allOn ? rest : [...rest, ...names];
+        } else if (item.value === "action:unset") this.draft = undefined;
         else if (item.value === "action:empty") this.draft = [];
         else {
           const name = item.value.slice("tool:".length);

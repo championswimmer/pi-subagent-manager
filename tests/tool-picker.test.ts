@@ -132,7 +132,12 @@ test("empty/no-match and hostile text render safely within resized bounds", () =
   const empty = create({ tools: [] });
   assert.match(empty.component.render(100).join("\n"), /No tools available/);
   const { component, done } = create({
-    tools: [{ name: "\x1b]0;owned\x07danger", description: "\x1b[31mred\x1b[0m\nnext" }],
+    tools: [
+      {
+        name: "\x1b]0;owned\x07danger",
+        description: "\x1b[31mred\x1b[0m\nnext",
+      },
+    ],
     rows: 16,
   });
   for (const width of [2, 20, 40, 100]) {
@@ -193,4 +198,36 @@ test("editor obtains all tools freshly, including inactive session tools, and gu
   assert.equal(await editToolSelection(rpc, "allow", [], options), TOOL_EDITOR_CANCEL);
   assert.equal(fetched, 2);
   assert.match(notices[0]!, /draft unchanged/);
+});
+
+test("mcp tools group under a collapsed aggregate row with expand/collapse and toggle-all", () => {
+  const { component } = create({
+    tools: [
+      { name: "read", description: "Read" },
+      { name: "mcp__fs__ls", description: "ls" },
+      { name: "mcp__fs__cat", description: "cat" },
+    ],
+    initial: ["mcp__fs__ls"],
+  });
+  const values = () => component.getCurrentItems().map((i) => i.value);
+  assert.deepEqual(
+    values().filter((v) => !v.startsWith("action:")),
+    ["group:mcp__fs", "tool:read"],
+  );
+  assert.match(
+    component.getCurrentItems().find((i) => i.value === "group:mcp__fs")!.label,
+    /\[-\] mcp__fs/,
+  );
+  const select = (v: string) => component.getSelectList().setSelectedIndex(values().indexOf(v));
+  select("group:mcp__fs");
+  component.handleInput("\x1b[C");
+  assert.ok(values().includes("tool:mcp__fs__cat"));
+  component.handleInput("\x1b[D");
+  assert.ok(!values().includes("tool:mcp__fs__cat"));
+  select("group:mcp__fs");
+  component.handleInput("\r");
+  assert.deepEqual([...component.getDraftTools()!].sort(), ["mcp__fs__cat", "mcp__fs__ls"]);
+  select("group:mcp__fs");
+  component.handleInput("\r");
+  assert.deepEqual(component.getDraftTools(), []);
 });
