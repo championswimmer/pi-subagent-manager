@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { test, type TestContext } from "node:test";
 import {
   DEFAULT_MANAGER_SETTINGS as DEFAULTS,
@@ -749,4 +749,23 @@ test("saving settings keeps the file's own requiredChildExtensions value", (t) =
     JSON.parse(readFileSync(f.globalFile, "utf8")).requiredChildExtensions,
     "not-an-array",
   );
+});
+
+test("requiredChildExtensions applies pi's Windows path normalization on win32", (t) => {
+  const f = fixture(t);
+  const home = join(f.root, "home");
+  const previousHome = process.env.HOME;
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  process.env.HOME = home;
+  Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+  t.after(() => {
+    Object.defineProperty(process, "platform", platform);
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+  });
+  writeJson(f.globalFile, { requiredChildExtensions: ["~\\guard.ts", "/c/guards/guard.ts"] });
+  // Host path functions stay POSIX here; this pins the win32-only normalization steps.
+  assert.deepEqual(required(f, false), {
+    paths: [join(home, "guard.ts"), resolve(f.cwd, "C:\\guards\\guard.ts")],
+  });
 });

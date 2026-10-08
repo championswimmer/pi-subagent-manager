@@ -793,3 +793,39 @@ for (const [failure, source, message] of [
     },
   );
 }
+
+test(
+  "a required directory whose manifest lists a missing entry point refuses the spawn",
+  { timeout: 30000 },
+  async () => {
+    await withOfflineHarness(
+      { agentFiles: AGENTS, builtinTools: true, onRequest: () => answer("must not run") },
+      async (harness) => {
+        const { directory, cwd, requests, open, tool } = harness;
+        const bundle = path.join(directory, "guard-bundle");
+        await mkdir(bundle);
+        await writeFile(path.join(bundle, "ok.ts"), "export default function () {}\n");
+        await writeFile(
+          path.join(bundle, "package.json"),
+          JSON.stringify({
+            name: "guard-bundle",
+            pi: { extensions: ["./ok.ts", "./guard.ts", "./more/*.ts", "!./ok.ts"] },
+          }),
+        );
+        await writeSettings(globalSettings(harness), { requiredChildExtensions: [bundle] });
+        const session = await open(SessionManager.create(cwd, path.join(directory, "parents")));
+        const failed = await tool<ThreadView>(session, "agent_spawn", {
+          path: "worker",
+          type: "guarded",
+          task: "Run",
+        });
+        assert.equal(failed.state, "failed");
+        assert.equal(
+          failed.error,
+          `Required child extension ${bundle} failed to load: manifest entry ${path.join(bundle, "guard.ts")} does not exist`,
+        );
+        assert.equal(requests.length, 0);
+      },
+    );
+  },
+);
