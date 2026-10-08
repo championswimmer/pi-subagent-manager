@@ -696,7 +696,7 @@ test("requiredChildExtensions resolves like pi -e and unions global then project
   assert.deepEqual(required(f), { paths: [join(home, "guards", "global.ts"), "/opt/shared.ts"] });
 });
 
-test("requiredChildExtensions survives an invalid sibling key; an unparseable file drops it", (t) => {
+test("requiredChildExtensions survives an invalid sibling key", (t) => {
   const f = fixture(t);
   writeJson(f.globalFile, { maxLevels: 0, requiredChildExtensions: ["/opt/guard.ts"] });
   assert.deepEqual(required(f), { paths: ["/opt/guard.ts"] });
@@ -705,9 +705,59 @@ test("requiredChildExtensions survives an invalid sibling key; an unparseable fi
   assert.deepEqual(loaded.diagnostics, [
     `${f.globalFile}: maxLevels must be a positive safe integer`,
   ]);
+});
+
+const UNPARSEABLE_REQUIRED =
+  "could not be parsed as a JSON object and mentions requiredChildExtensions; subagents will not start until it is fixed";
+
+test("an unparseable file that mentions requiredChildExtensions is an error naming the file", (t) => {
+  const f = fixture(t);
+  writeJson(f.globalFile, { requiredChildExtensions: ["/opt/guard.ts"] });
+  for (const content of [
+    '{"requiredChildExtensions": ["/opt/project.ts"],',
+    '["requiredChildExtensions"]',
+    '{"maxLevels": 2} // requiredChildExtensions: ["/opt/project.ts"]',
+  ]) {
+    writeJson(f.projectFile, content);
+    const expected = `${f.projectFile}: ${UNPARSEABLE_REQUIRED}`;
+    assert.deepEqual(required(f), { paths: ["/opt/guard.ts"], error: expected });
+    const loaded = load(f);
+    assert.deepEqual(loaded.settings, DEFAULTS);
+    assert.equal(loaded.diagnostics.length, 2);
+    assert.match(loaded.diagnostics[0], new RegExp(`^${escape(f.projectFile).source}: `));
+    assert.equal(loaded.diagnostics[1], expected);
+  }
+  writeJson(f.projectFile, {});
   writeJson(f.globalFile, '{"requiredChildExtensions": ["/opt/guard.ts"],');
-  assert.deepEqual(required(f), { paths: [] });
+  assert.deepEqual(required(f, false), {
+    paths: [],
+    error: `${f.globalFile}: ${UNPARSEABLE_REQUIRED}`,
+  });
+});
+
+test("an unparseable file that does not mention requiredChildExtensions only warns", (t) => {
+  const f = fixture(t);
+  writeJson(f.globalFile, { requiredChildExtensions: ["/opt/guard.ts"] });
+  writeJson(f.projectFile, '{"maxLevels": 2,');
+  assert.deepEqual(required(f), { paths: ["/opt/guard.ts"] });
   assert.equal(load(f).diagnostics.length, 1);
+});
+
+test("a settings file that cannot be read contributes no requiredChildExtensions", (t) => {
+  const f = fixture(t);
+  mkdirSync(f.globalFile, { recursive: true });
+  assert.deepEqual(required(f, false), { paths: [] });
+  assert.deepEqual(load(f, false).diagnostics, [
+    `${f.globalFile}: Settings must be a regular file: ${f.globalFile}`,
+  ]);
+  if (process.getuid?.() === 0) return t.skip("root bypasses mode 000");
+  writeJson(f.projectFile, '{"requiredChildExtensions": ["/opt/guard.ts"],');
+  chmodSync(f.projectFile, 0o000);
+  try {
+    assert.deepEqual(required(f), { paths: [] });
+  } finally {
+    chmodSync(f.projectFile, 0o600);
+  }
 });
 
 test("an invalid requiredChildExtensions value in either layer is an error naming file and key", (t) => {

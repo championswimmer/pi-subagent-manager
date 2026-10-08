@@ -829,3 +829,125 @@ test(
     );
   },
 );
+
+const UNPARSEABLE_REQUIRED =
+  "could not be parsed as a JSON object and mentions requiredChildExtensions; subagents will not start until it is fixed";
+async function writeRawSettings(file: string, content: string) {
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, content);
+}
+
+for (const [layer, settingsFile] of [
+  ["global", globalSettings],
+  ["project", projectSettings],
+] as const) {
+  test(
+    `an unparseable ${layer} settings file that mentions requiredChildExtensions refuses spawns`,
+    { timeout: 30000 },
+    async () => {
+      await withOfflineHarness(
+        { agentFiles: AGENTS, builtinTools: true, onRequest: () => answer("must not run") },
+        async (harness) => {
+          const { directory, cwd, requests, open, tool } = harness;
+          const guard = await writeGuard(directory);
+          const file = settingsFile(harness);
+          await writeRawSettings(
+            file,
+            `{ "requiredChildExtensions": [${JSON.stringify(guard.extensionPath)}], `,
+          );
+          const session = await open(SessionManager.create(cwd, path.join(directory, "parents")));
+          const failed = await tool<ThreadView>(session, "agent_spawn", {
+            path: "worker",
+            type: "guarded",
+            task: "Run",
+          });
+          assert.equal(failed.state, "failed");
+          assert.equal(
+            failed.error,
+            `Subagent /root/worker not started: ${file}: ${UNPARSEABLE_REQUIRED}`,
+          );
+          assert.equal(requests.length, 0);
+        },
+      );
+    },
+  );
+}
+
+test(
+  "an unparseable settings file that does not mention requiredChildExtensions still allows spawns",
+  { timeout: 30000 },
+  async () => {
+    await withOfflineHarness(
+      { agentFiles: AGENTS, builtinTools: true, onRequest: () => answer("worker finished") },
+      async (harness) => {
+        const { directory, cwd, requests, open, tool } = harness;
+        await writeRawSettings(globalSettings(harness), `{ "maxLevels": 3, `);
+        const session = await open(SessionManager.create(cwd, path.join(directory, "parents")));
+        const done = await tool<ThreadView>(session, "agent_spawn", {
+          path: "worker",
+          type: "guarded",
+          task: "Run",
+        });
+        assert.equal(done.state, "completed");
+        assert.equal(done.output, "worker finished");
+        assert.equal(requests.length, 1);
+      },
+    );
+  },
+);
+
+test(
+  "a live paused child is not resumed while a settings file mentioning the key is unparseable",
+  { timeout: 30000 },
+  async () => {
+    let cwdPath = "";
+    await withOfflineHarness(
+      {
+        agentFiles: AGENTS,
+        builtinTools: true,
+        onRequest(request) {
+          if (request.pathCall === 1)
+            return toolUse("pause-1", "agent_pause", { reason: "Wait for the parent" });
+          if (request.pathCall === 2)
+            return toolUse("bash-worker", "bash", { command: markedCommand(cwdPath, "worker") });
+          return answer("worker finished");
+        },
+      },
+      async (harness) => {
+        const { directory, cwd, requests, open, tool } = harness;
+        cwdPath = cwd;
+        const guard = await writeGuard(directory);
+        const file = globalSettings(harness);
+        await writeSettings(file, { requiredChildExtensions: [guard.extensionPath] });
+        const session = await open(SessionManager.create(cwd, path.join(directory, "parents")));
+        const paused = await tool<ThreadView>(session, "agent_spawn", {
+          path: "worker",
+          type: "guarded",
+          task: "Pause first",
+        });
+        assert.equal(paused.state, "paused");
+
+        await writeRawSettings(
+          file,
+          `{ "requiredChildExtensions": [${JSON.stringify(guard.extensionPath)}], `,
+        );
+        await tool(session, "agent_steer", { path: "worker", message: "Now run the command" });
+        const refused = await tool<ThreadView>(session, "agent_wait", { path: "worker" });
+        assert.equal(refused.state, "failed");
+        assert.equal(
+          refused.error,
+          `Subagent /root/worker not resumed: ${file}: ${UNPARSEABLE_REQUIRED}`,
+        );
+        assert.equal(requests.length, 1, "the refused resume made no model request");
+        assert.equal(existsSync(path.join(cwd, "worker.txt")), false);
+
+        await writeSettings(file, { requiredChildExtensions: [guard.extensionPath] });
+        await tool(session, "agent_steer", { path: "worker", message: "Now run the command" });
+        const done = await tool<ThreadView>(session, "agent_wait", { path: "worker" });
+        assert.equal(done.state, "completed");
+        assert.equal(existsSync(path.join(cwd, "worker.txt")), false);
+        assert.deepEqual(await loggedCommands(guard.logPath), [markedCommand(cwd, "worker")]);
+      },
+    );
+  },
+);
