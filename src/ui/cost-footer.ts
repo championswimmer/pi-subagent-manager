@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import type { Usage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import type { CostDisplayMode } from "../prefs/settings.ts";
 
 export function footerUsage(entries: readonly SessionEntry[]) {
   const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
@@ -46,18 +47,39 @@ export class CostFooterController {
   private installed = false;
   private requestRender: (() => void) | undefined;
 
+  private publishedMode: CostDisplayMode | undefined;
+  private statusContext: ExtensionContext | undefined;
   constructor(
     private readonly pi: Pick<ExtensionAPI, "getCommands" | "events">,
     private readonly subagentCost: () => number,
     private readonly nerdFontIcons: () => boolean,
+    private readonly displayMode: () => CostDisplayMode = () => "pi-footer-status",
   ) {}
 
   refresh(ctx: ExtensionContext): void {
-    // Publishing is independent of which footer owns the screen, including headless sessions.
-    this.pi.events.emit(COST_WIDGET_EVENT, {
-      widgetId: COST_WIDGET_ID,
-      value: formatSubagentCost(this.subagentCost(), this.nerdFontIcons()),
-    });
+    const mode = this.displayMode();
+    const value = formatSubagentCost(this.subagentCost(), this.nerdFontIcons());
+    if (this.publishedMode !== undefined && this.publishedMode !== mode) {
+      this.clear();
+      this.reset(ctx);
+    }
+    this.publishedMode = mode;
+    if (mode !== "pi-footer-event") {
+      if (ctx.hasUI) {
+        this.statusContext = ctx;
+        const statusValue =
+          mode === "pi-status"
+            ? `Total: ${formatSubagentCost(
+                footerUsage(ctx.sessionManager.getEntries()).cost + this.subagentCost(),
+                this.nerdFontIcons(),
+              )}`
+            : value;
+        ctx.ui.setStatus(COST_WIDGET_ID, statusValue);
+      }
+      return;
+    }
+    // Event mode also works in headless sessions; status modes need a UI consumer.
+    this.pi.events.emit(COST_WIDGET_EVENT, { widgetId: COST_WIDGET_ID, value });
     if (hasExternalFooter(this.pi)) {
       // Do not clear setFooter here: it could already belong to pi-footer.
       this.installed = false;
@@ -80,7 +102,11 @@ export class CostFooterController {
   }
 
   clear(): void {
-    this.pi.events.emit(COST_WIDGET_EVENT, { widgetId: COST_WIDGET_ID, value: null });
+    if (this.publishedMode === "pi-footer-event")
+      this.pi.events.emit(COST_WIDGET_EVENT, { widgetId: COST_WIDGET_ID, value: null });
+    this.statusContext?.ui.setStatus(COST_WIDGET_ID, undefined);
+    this.statusContext = undefined;
+    this.publishedMode = undefined;
   }
 }
 

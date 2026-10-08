@@ -109,6 +109,7 @@ async function fixture(
     isProjectTrusted: () => false,
     ui: {
       theme,
+      setStatus() {},
       setWidget(_key: string, factory: Function | undefined) {
         widget?.dispose?.();
         widget = factory?.(host, theme);

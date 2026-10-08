@@ -82,6 +82,7 @@ async function withCommands(
     isProjectTrusted: () => false,
     ui: {
       theme: driver.theme,
+      setStatus() {},
       setWidget(_key: string, widget: unknown) { widgets.push(widget); },
       notify: (text: string) => notifications.push(text),
       custom: driver.custom,

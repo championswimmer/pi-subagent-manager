@@ -70,7 +70,7 @@ const settings = (
   widgetMode: WidgetMode = "full",
   nerdFontIcons = false,
   finalRecap = false,
-) => ({ maxLevels, maxConcurrent, maxThreads, modelSelection, subagentMode, toolFiltering, widgetMode, nerdFontIcons, loaderStyle: "circle", finalRecap });
+) => ({ maxLevels, maxConcurrent, maxThreads, modelSelection, subagentMode, toolFiltering, widgetMode, costDisplay: "pi-footer-status", nerdFontIcons, loaderStyle: "circle", finalRecap });
 
 const escape = (path: string) => new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
@@ -131,6 +131,7 @@ test("missing files return a fresh copy of defaults without diagnostics", (t) =>
       subagentMode: "opportunistic",
       toolFiltering: "allowed",
       widgetMode: "full",
+      costDisplay: "pi-footer-status",
       nerdFontIcons: false,
       loaderStyle: "circle",
       finalRecap: false,
@@ -370,6 +371,7 @@ test("save writes canonical 0600 files, creates owned directories, and reloads w
 
   const reordered = {
     widgetMode: "full",
+      costDisplay: "pi-footer-status",
     nerdFontIcons: false,
     loaderStyle: "circle",
     finalRecap: false,
@@ -614,5 +616,24 @@ test("Final Recap rejects non-booleans atomically when loading and saving", (t) 
     assert.match(result.diagnostics[0], /finalRecap must be a boolean/);
     rejects(() => save(f, "user", { ...DEFAULTS, finalRecap: invalid }), /finalRecap must be a boolean/);
     assert.equal(readFileSync(f.globalFile, "utf8"), before);
+  }
+});
+
+
+test("cost display defaults to a discoverable status key and validates all modes", (t) => {
+  const f = fixture(t);
+  assert.equal(load(f).settings.costDisplay, "pi-footer-status");
+  for (const costDisplay of ["pi-footer-event", "pi-footer-status", "pi-status"] as const) {
+    save(f, "user", { ...DEFAULTS, costDisplay });
+    assert.equal(load(f, false).settings.costDisplay, costDisplay);
+    save(f, "project", { ...DEFAULTS, costDisplay });
+    assert.equal(load(f).settings.costDisplay, costDisplay);
+  }
+  for (const invalid of ["auto", "", true, 0, null, [], {}]) {
+    writeJson(f.projectFile, { costDisplay: invalid });
+    const result = load(f);
+    assert.equal(result.settings.costDisplay, "pi-status");
+    assert.match(result.diagnostics[0], /costDisplay must be/);
+    rejects(() => save(f, "user", { ...DEFAULTS, costDisplay: invalid }), /costDisplay must be/);
   }
 });

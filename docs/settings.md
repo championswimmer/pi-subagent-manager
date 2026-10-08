@@ -17,6 +17,7 @@ All keys are optional. Defaults:
   "widgetMode": "full",
   "nerdFontIcons": false,
   "loaderStyle": "circle",
+  "costDisplay": "pi-footer-status",
   "finalRecap": false,
   "modelSelection": "pick-first-scoped",
   "toolFiltering": "allowed",
@@ -69,6 +70,18 @@ All six bundled agents have [role-specific icons](default-agents.md#nerd-font-ic
 Choose **Circle** (default), **Braille**, or **Hourglass** in `/agents` settings and save with **Ctrl+S**, or set `"loaderStyle": "circle"`, `"braille"`, or `"hourglass"` in your settings file. Loaders are displayed when **[labs] Nerd Font icons** is enabled.
 
 The Labs preview shows every family's running animation frames and completed, paused, failed, and stopped icons, so you can compare all states before choosing. Starting uses the running animation. State indicators always precede the unchanged role icon; the selected family also applies to the minimal widget's counts. In non-animated output, active agents use the family's first frame.
+
+## [labs] Cost display (`costDisplay`)
+
+Choose the cost output in `/agents settings` and save. The stable ID/key is **`subagent_cost`**.
+
+| Value | Output |
+| --- | --- |
+| `pi-footer-status` (default) | Publishes `$0.0000` via Pi’s `setStatus` API. In `/footer`, add **Extension Status** and pick **`subagent_cost`** from the status-key selector. |
+| `pi-footer-event` | Emits `pi-footer:update-widget` with `widgetId: "subagent_cost"`. Add **Pi Event Value**, enter **Widget ID** manually, and enable **Raw value only**. Event IDs do not appear in the status selector. Without an extension providing `/footer`, preserves the combined-cost fallback footer. |
+| `pi-status` | Sets Pi’s status to `Total: $0.0000` — main session + all settled subagents; no pi-footer events or custom footer. |
+
+Both status modes use the same public Pi status API: third-party footers may also display Pi status-only output. These modes never replace your footer. The pi-footer modes show the **settled subagent-only** USD subtotal; Pi status shows **main session + all settled subagents**. In all modes, running costs settle on completion, pause, stop, or failure. It publishes on session start/reload, immediately when a subagent starts (even at zero), and after settlement/settings changes. Switching modes clears the previous output; shutdown clears the published value. Nerd Font icons apply when enabled.
 
 ## [labs] Final Recap (`finalRecap`)
 

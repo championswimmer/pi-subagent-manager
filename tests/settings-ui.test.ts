@@ -551,3 +551,15 @@ for (const width of [32, 80]) {
     assert.equal(result.value(1, "finalRecap"), "On");
   });
 }
+
+
+test("[labs] Cost display offers and saves all three transports", async (t) => {
+  for (const mode of ["pi-footer-event", "pi-footer-status", "pi-status"] as const) {
+    const result = await run(t, ["costDisplay", mode, "save"]);
+    assert.equal(result.menus[1]!.title, "[labs] Cost display");
+    assert.deepEqual(result.menus[1]!.rows.map((row) => row.id), ["pi-footer-event", "pi-footer-status", "pi-status"]);
+    assert.equal(result.value(0, "costDisplay"), "pi-footer status key");
+    assert.equal(result.loaded.settings.costDisplay, mode);
+    assert.equal(result.applied, 1);
+  }
+});
