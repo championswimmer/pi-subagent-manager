@@ -93,6 +93,7 @@ Enable **[labs] Final Recap** in `/agents` to automatically ask the idle main ag
 
 - Tool policies are **not a sandbox**. Agents share your working directory and OS permissions.
 - Children can use your registered extension, MCP and web tools when [Tool Filtering](docs/settings.md#tool-filtering-toolfiltering) permits them. Skills are not automatically loaded; external tools share main-session resources/context.
+- Your extensions' hooks (such as a `tool_call` guard) do not run inside children unless you list them in [`requiredChildExtensions`](docs/settings.md#required-child-extensions-requiredchildextensions); listed extensions load into every subagent, and a child that cannot load one does not start.
 - Don't run multiple subagent extensions together — they clash on `/agents`.
 
 ## License

@@ -26,7 +26,7 @@ All keys are optional. Defaults:
 }
 ```
 
-Unknown keys, bad values and symlinked paths produce warnings. An invalid file is ignored as a whole; the previous layer (or defaults) stays in effect.
+Unknown keys, bad values and symlinked paths produce warnings. An invalid file is ignored as a whole; the previous layer (or defaults) stays in effect. [`requiredChildExtensions`](#required-child-extensions-requiredchildextensions) follows its own rules: both files' lists are combined, and an invalid value stops subagents from starting.
 
 Other packages' settings (e.g. `.pi/subagents.json`) are never read here.
 
@@ -115,6 +115,24 @@ How the type's `tools.allow` / `tools.block` lists are applied.
 - UI/command-driven resumes after reopening the main session need a main-session `agent_*` tool call to establish the execution bridge; use `agent_steer` rather than the thread dialog.
 - Applies to newly started sessions (including retained ones reopened after reload). Already-open sessions keep their selected tools, and the main session's tool set is unchanged.
 - Non-default modes can expose `agent_spawn` to types that weren't meant to delegate.
+
+## Required child extensions (`requiredChildExtensions`)
+
+Subagents run in their own sessions and do not load your pi extensions. An extension that guards tool calls in the main session (for example one that blocks certain `bash` commands through `pi.on("tool_call", ...)`) therefore does not see the `bash`, `write` or `edit` calls a child makes. List such extensions here and every subagent loads them:
+
+```json
+{
+  "requiredChildExtensions": ["~/.pi/agent/extensions/command-guard.ts"]
+}
+```
+
+- File-only: not shown in the `/agents` dialog. Saving from the dialog keeps the value already in that file.
+- Each entry is an extension path in the form `pi -e` accepts: `~` expands to your home directory, and relative paths resolve against the working directory (prefer absolute or `~/` paths). A directory loads the way `pi -e <directory>` loads it.
+- Applies to every child: forked and independent, nested at any depth, and resumed ones (`/reload`, `pi --resume`, steering a paused or finished agent). The files are read each time a child session starts, so edits apply to the next spawn or resume without `/agents reload`.
+- **Global and project lists are combined**, unlike every other key. A project file can add required extensions but cannot remove or replace a global one, so a repository cannot switch off a guard you installed.
+- **Fails closed.** A child does not start when a required extension is missing, fails to load, or throws in its `session_start` handler; the spawn or resume fails with an error naming the path. A value that is not an array of non-empty strings, in either file, refuses every spawn and resume with an error naming the file and key until it is fixed, even if other keys in that file are valid.
+- An invalid value for another key does not drop this one; an unparseable or unreadable settings file is still ignored as a whole (with a warning), including its `requiredChildExtensions`.
+- Required extensions contribute their event hooks (`tool_call`, `tool_result`, `session_start`, ...). Tools they register are not added to a child's tool list; a child gets one only when its [Tool Filtering](#tool-filtering-toolfiltering) policy already permits a tool of that name.
 
 ## Max Levels (`maxLevels`)
 
