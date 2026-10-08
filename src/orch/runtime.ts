@@ -157,13 +157,22 @@ function canonicalPath(target: string): string {
   }
 }
 
-/** A required file matches itself; a required directory matches the entry points inside it. */
+function isWithin(parent: string, child: string): boolean {
+  return child === parent || child.startsWith(`${parent}${path.sep}`);
+}
+
+/**
+ * A required file matches itself; a required directory matches the entry points inside it.
+ * Loader paths keep symlinks unresolved while its de-duplication compares realpaths, so a
+ * match in either form counts.
+ */
 function belongsToRequired(requiredPath: string, candidate: string): boolean {
   // Inline factories carry synthetic paths such as "<inline:1>", never a file.
   if (candidate.startsWith("<")) return false;
-  const required = canonicalPath(requiredPath);
-  const resolved = canonicalPath(candidate);
-  return resolved === required || resolved.startsWith(`${required}${path.sep}`);
+  return (
+    isWithin(path.resolve(requiredPath), path.resolve(candidate)) ||
+    isWithin(canonicalPath(requiredPath), canonicalPath(candidate))
+  );
 }
 
 function assertRequiredExtensionsLoaded(
@@ -181,6 +190,20 @@ function assertRequiredExtensionsLoaded(
     )
       throw new Error(`Required child extension ${requiredPath} did not load an extension`);
   }
+}
+
+/** Names of the non-hidden tools the required extensions registered. */
+function requiredExtensionTools(
+  loaded: LoadExtensionsResult,
+  requiredPaths: readonly string[],
+): string[] {
+  return loaded.extensions
+    .filter((extension) =>
+      requiredPaths.some((requiredPath) => belongsToRequired(requiredPath, extension.resolvedPath)),
+    )
+    .flatMap((extension) => [...extension.tools.values()])
+    .filter((tool) => tool.definition.exposure !== "hidden")
+    .map((tool) => tool.definition.name);
 }
 
 function assertRequiredExtensionsStarted(
@@ -297,15 +320,19 @@ export function createDriverFactory(
       );
     return { model: modelIdentity(model), thinkingLevel: clampThinkingLevel(model, thinkingLevel) };
   };
-  const createDriver: DriverFactory = async (options) => {
-    options.signal.throwIfAborted();
+  // Read at every driver start and every prompt, so edits apply without /agents reload.
+  const readRequiredExtensions = () => {
     const ctx = getRootContext();
-    // Read at every driver start, so a settings edit applies to the next spawn or resume.
-    const requiredExtensions = loadRequiredChildExtensions({
+    return loadRequiredChildExtensions({
       cwd: ctx.cwd,
       agentDir: getAgentDir(),
       includeProject: ctx.isProjectTrusted(),
     });
+  };
+  const createDriver: DriverFactory = async (options) => {
+    options.signal.throwIfAborted();
+    const ctx = getRootContext();
+    const requiredExtensions = readRequiredExtensions();
     if (requiredExtensions.error)
       throw new Error(`Subagent ${options.path} not started: ${requiredExtensions.error}`);
     // Tool policy is a startup snapshot; retained live sessions keep their selected set.
@@ -443,22 +470,14 @@ export function createDriverFactory(
     const inherited = getInheritedTools();
     const localNames = new Set([...BUILTINS, ...options.tools.map((tool) => tool.name)]);
     const externalTools = inherited.tools.filter((tool) => !localNames.has(tool.name));
-    const toolNames = selectTools(
-      options.type.tools,
-      [...localNames, ...externalTools.map((tool) => tool.name)],
-      toolFiltering,
-    );
-    const allowed = new Set(toolNames);
-    const rootActive = new Set(inherited.activeNames);
-    // Preserve deferred/codemode exposure rather than flooding model declarations with MCP tools.
-    const activeToolNames = toolNames.filter(
-      (name) =>
-        localNames.has(name) ||
-        rootActive.has(name) ||
-        (options.type.tools?.allow?.includes(name) && toolFiltering === "allowed"),
-    );
-    const customTools = [...options.tools, ...externalTools].filter(
-      (tool) => allowed.has(tool.name) && tool.name !== "codemode" && tool.name !== "tool_search",
+    const knownNames = [...localNames, ...externalTools.map((tool) => tool.name)];
+    // Tools of required extensions are known only after the loader runs; until then, names the
+    // policy declares stand in for them so validation waits for the real inventory below.
+    const declaredNames = requiredExtensions.paths.length
+      ? [...(options.type.tools?.allow ?? []), ...(options.type.tools?.block ?? [])]
+      : [];
+    let allowed = new Set(
+      selectTools(options.type.tools, [...knownNames, ...declaredNames], toolFiltering),
     );
     const settingsManager = SettingsManager.inMemory({ cacheWarming: "off" });
     let parkQueue = () => {};
@@ -513,6 +532,29 @@ export function createDriverFactory(
     await loader.reload();
     // Fail closed: a child must never run without an extension the user marked required.
     assertRequiredExtensionsLoaded(loader.getExtensions(), requiredExtensions.paths);
+    const requiredToolNames = new Set(
+      requiredExtensionTools(loader.getExtensions(), requiredExtensions.paths).filter(
+        (name) => !knownNames.includes(name),
+      ),
+    );
+    const toolNames = selectTools(
+      options.type.tools,
+      [...knownNames, ...requiredToolNames],
+      toolFiltering,
+    );
+    allowed = new Set(toolNames);
+    const rootActive = new Set(inherited.activeNames);
+    // Preserve deferred/codemode exposure rather than flooding model declarations with MCP tools.
+    const activeToolNames = toolNames.filter(
+      (name) =>
+        localNames.has(name) ||
+        requiredToolNames.has(name) ||
+        rootActive.has(name) ||
+        (options.type.tools?.allow?.includes(name) && toolFiltering === "allowed"),
+    );
+    const customTools = [...options.tools, ...externalTools].filter(
+      (tool) => allowed.has(tool.name) && tool.name !== "codemode" && tool.name !== "tool_search",
+    );
     options.signal.throwIfAborted();
     const { session } = await createAgentSession({
       cwd: ctx.cwd,
@@ -760,6 +802,17 @@ export function createDriverFactory(
     const assertOpen = () => {
       if (disposed) throw new Error("Subagent driver is disposed");
     };
+    // A retained driver resumes without being rebuilt, so it cannot pick up extensions added
+    // since it started; refuse rather than run a turn without them.
+    const assertRequiredExtensionsCurrent = () => {
+      const current = readRequiredExtensions();
+      if (current.error) throw new Error(`Subagent ${options.path} not resumed: ${current.error}`);
+      const added = current.paths.find((entry) => !requiredExtensions.paths.includes(entry));
+      if (added)
+        throw new Error(
+          `Subagent ${options.path} was started without required child extension ${added}; reload the session to resume it with that extension`,
+        );
+    };
     return {
       get sessionFile() {
         const file = session.sessionFile;
@@ -771,6 +824,7 @@ export function createDriverFactory(
       async prompt(message) {
         assertOpen();
         if (running) throw new Error("Subagent is already running; use steer instead");
+        assertRequiredExtensionsCurrent();
         running = true;
         aborted = false;
         baseline = session.messages.length;
