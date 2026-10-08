@@ -273,7 +273,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
             customType: ROOT_WAKE_MESSAGE,
             content:
               "Asynchronous subagent event(s) arrived (see the preceding subagent notifications). " +
-              "React: collect results with agent_output, and for a timeout event decide to wait, steer, stop or re-arm with agent_steer timeoutMs.",
+              "React: collect results with agent_output, and for a timeout event decide to wait, steer, stop or re-arm with agent_steer using path and timeoutMs only (omit message; resets the reporting timer from now without interrupting the running agent).",
             display: false,
             details: {},
           },

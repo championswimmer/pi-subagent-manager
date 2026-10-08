@@ -113,11 +113,23 @@ export function agentTools(
     ),
     make(
       "agent_steer",
-      "Send input to a descendant and/or re-arm its report-only timeout. With message: working threads receive queued steering; completed, stopped and paused threads resume the SAME session with its previous context. With timeoutMs (30000–300000): the timeout fires that many ms from now, replacing any pending timer. timeoutMs WITHOUT message only re-arms the timeout of a running child (error if not running) and does not steer or resume it; with both, steer and re-arm. At least one is required. Returns immediately; use agent_wait for the result.",
+      'Send input to a descendant and/or re-arm its report-only timeout. With message: working threads receive queued steering; completed, stopped and paused threads resume the SAME session with its previous context. With timeoutMs (30000–300000): the timeout fires that many ms from now, replacing any pending timer. To extend a running background agent\'s reporting timer without sending input, call agent_steer({path: "/root/task", timeoutMs: 120000}) and omit message entirely. This resets the timer to 120000 ms from now, not an addition to the old deadline. timeoutMs WITHOUT message only re-arms the timeout of a running child (error if not running) and does not steer, interrupt or resume it; with both, steer and re-arm. At least one is required. Returns immediately; use agent_wait for the result.',
       Type.Object({
         path,
-        message: Type.Optional(text),
-        timeoutMs: Type.Optional(Type.Integer({ minimum: 30000, maximum: 300000 })),
+        message: Type.Optional(
+          Type.String({
+            minLength: 1,
+            description: "Input to send or resume with. Omit entirely for a timer-only re-arm.",
+          }),
+        ),
+        timeoutMs: Type.Optional(
+          Type.Integer({
+            minimum: 30000,
+            maximum: 300000,
+            description:
+              "Reset the report-only timer to this many ms from now, replacing any pending timer. With no message, only re-arms a running agent; does not send input, interrupt or resume it.",
+          }),
+        ),
       }),
       async (params) =>
         result(compact(await threads().steer(params.path, params.message, params.timeoutMs))),
