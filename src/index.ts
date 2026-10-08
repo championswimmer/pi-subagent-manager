@@ -50,6 +50,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
     pi,
     () => costLedger.totalUsd,
     () => limits.nerdFontIcons,
+    () => limits.costDisplay,
   );
   const refreshCostFooter = (ctx: ExtensionContext) => costFooter.refresh(ctx);
   const rollupCost = (thread: ThreadView) => {
@@ -506,6 +507,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
   pi.on("agent_end", async (_event, ctx) => {
     rootTurnEnded = true;
     if (manager) refreshWidget(ctx);
+    refreshCostFooter(ctx);
     // A migration can span clarification turns. Reload after each root turn, without converting files.
     if (limits.subagentMode === "off" || !migrationRequested) return;
     store.reload();
@@ -572,6 +574,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
         refreshWidget(requireContext());
         if (event.kind !== "metrics") persist();
         if (event.kind === "settled") rollupCost(event.thread);
+        else refreshCostFooter(requireContext());
         delivery(event);
       },
     });
@@ -633,10 +636,10 @@ export default function piSubagent(pi: ExtensionAPI): void {
   pi.on("session_before_fork", stopWorkingThreads);
   pi.on("session_shutdown", async () => {
     cancelSummary();
-    costFooter.clear();
     generation++;
     closeNavigation(true);
     await manager?.shutdown();
+    costFooter.clear();
     persist();
     if (context?.hasUI) context.ui.setWidget("pi-subagent", undefined);
     manager = undefined;

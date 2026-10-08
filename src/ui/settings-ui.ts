@@ -8,6 +8,7 @@ import {
 } from "./dialog.ts";
 import {
   DEFAULT_MANAGER_SETTINGS,
+  type CostDisplayMode,
   LOADER_STYLES,
   type LoaderStyle,
   loadManagerSaveScope,
@@ -117,6 +118,24 @@ const WIDGET_MODE_OPTIONS = [
 const WIDGET_MODE_HELP =
   "Full: detailed agent status rows above the input box.\nMinimal: one-line status counts and cumulative input/output tokens for active (starting/running) agents.\nSave and apply to update the widget immediately.";
 
+const COST_DISPLAY_OPTIONS = [
+  {
+    id: "pi-footer-event",
+    label: "pi-footer event",
+    help: "Publish settled subagent-only USD via pi-footer:update-widget with Widget ID subagent_cost. Add a Pi Event Value widget manually and enable Raw value only. Without an external /footer, retain the combined-cost fallback.",
+  },
+  {
+    id: "pi-footer-status",
+    label: "pi-footer status key",
+    help: "Publish settled subagent-only USD under status key subagent_cost for pi-footer’s Extension Status selector, including $0.0000 before any cost settles. Does not replace your footer.",
+  },
+  {
+    id: "pi-status",
+    label: "Pi status only",
+    help: "Only update Pi’s status with total USD cost: main session + all settled subagents. pi-footer modes show subagent-only cost. No pi-footer events or custom footer. Third-party footers may also consume this status key.",
+  },
+] as const;
+
 const MODEL_SELECTION_OPTIONS = [
   {
     id: "pick-first-available",
@@ -206,6 +225,12 @@ async function configureAgentsDialog(
           label: "Status Widget",
           value: WIDGET_MODE_OPTIONS.find((mode) => mode.id === draft.widgetMode)!.label,
           help: WIDGET_MODE_HELP,
+        },
+        {
+          id: "costDisplay",
+          label: "[labs] Cost display",
+          value: COST_DISPLAY_OPTIONS.find((mode) => mode.id === draft.costDisplay)!.label,
+          help: "Choose pi-footer event, pi-footer status key (default), or Pi status only. ID: subagent_cost. pi-footer modes: settled subagent-only USD. Pi status: main session + all settled subagents; publishes on session start and as soon as a subagent starts. Save to apply immediately.",
         },
         {
           id: "nerdFontIcons",
@@ -306,6 +331,12 @@ async function configureAgentsDialog(
         });
         if (WIDGET_MODE_OPTIONS.some((option) => option.id === mode))
           draft.widgetMode = mode as WidgetMode;
+      } else if (action === "costDisplay") {
+        const mode = await dialogMenu(ctx, "[labs] Cost display", [...COST_DISPLAY_OPTIONS], {
+          selectedId: draft.costDisplay,
+        });
+        if (COST_DISPLAY_OPTIONS.some((option) => option.id === mode))
+          draft.costDisplay = mode as CostDisplayMode;
       } else if (action === "nerdFontIcons") {
         draft.nerdFontIcons = !draft.nerdFontIcons;
       } else if (action === "loaderStyle") {

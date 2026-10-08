@@ -133,6 +133,7 @@ test("external footer receives only its cost slot; never install or clear its fo
     publisher,
     () => cost,
     () => nerdFont,
+    () => "pi-footer-event",
   );
   footer.refresh(ctx);
   cost = 0.5;
@@ -171,6 +172,7 @@ test("without a footer extension, install fallback only once cost exists and res
     publisher,
     () => cost,
     () => false,
+    () => "pi-footer-event",
   );
   footer.refresh(ctx);
   assert.equal(installed.length, 0);
@@ -219,6 +221,7 @@ test("an external footer taking ownership is never cleared by a previous fallbac
     publisher,
     () => 0.5,
     () => false,
+    () => "pi-footer-event",
   );
   footer.refresh(ctx);
   assert.equal(setCalls, 1);
@@ -226,4 +229,76 @@ test("an external footer taking ownership is never cleared by a previous fallbac
   footer.reset(ctx);
   footer.refresh(ctx);
   assert.equal(setCalls, 1);
+});
+
+
+test("status-key mode registers zero cost for discovery and Pi status mode is labeled", () => {
+  const statuses = new Map<string, string>();
+  let cost = 0;
+  const manager = SessionManager.inMemory();
+  manager.appendMessage(message);
+  let mode: "pi-footer-status" | "pi-status" = "pi-footer-status";
+  const ctx = {
+    hasUI: true, mode: "tui",
+    sessionManager: manager,
+    ui: {
+      setStatus(key: string, value: string | undefined) {
+        if (value === undefined) statuses.delete(key);
+        else statuses.set(key, value);
+      },
+      setFooter() { assert.fail("status modes must not replace Pi’s footer"); },
+    },
+  } as unknown as ExtensionContext;
+  const footer = new CostFooterController({
+    getCommands: () => [],
+    events: { emit() { assert.fail("status modes must not emit pi-footer events"); } },
+  } as any, () => cost, () => false, () => mode);
+  footer.refresh(ctx);
+  assert.equal(statuses.get(COST_WIDGET_ID), "$0.0000");
+  cost = 0.5;
+  footer.refresh(ctx);
+  assert.equal(statuses.get(COST_WIDGET_ID), "$0.5000");
+  mode = "pi-status";
+  footer.refresh(ctx);
+  assert.equal(statuses.get(COST_WIDGET_ID), "Total: $0.8300");
+  footer.reset(ctx);
+  cost = 0;
+  footer.refresh(ctx);
+  assert.equal(statuses.get(COST_WIDGET_ID), "Total: $0.3300");
+  footer.clear();
+  assert.equal(statuses.has(COST_WIDGET_ID), false);
+});
+
+test("switching transports clears old values and removes only our own fallback footer", () => {
+  const statuses = new Map<string, string>();
+  const updates: unknown[] = [];
+  const footers: unknown[] = [];
+  let mode: "pi-footer-event" | "pi-footer-status" = "pi-footer-event";
+  const ctx = {
+    hasUI: true, mode: "tui",
+    ui: {
+      setStatus(key: string, value: string | undefined) {
+        if (value === undefined) statuses.delete(key);
+        else statuses.set(key, value);
+      },
+      setFooter(factory: unknown) { footers.push(factory); },
+    },
+  } as unknown as ExtensionContext;
+  const footer = new CostFooterController({
+    getCommands: () => [],
+    events: { emit: (_: string, payload: unknown) => updates.push(payload) },
+  } as any, () => 0.5, () => false, () => mode);
+  footer.refresh(ctx);
+  assert.equal(typeof footers[0], "function");
+  mode = "pi-footer-status";
+  footer.refresh(ctx);
+  assert.equal(footers[1], undefined);
+  assert.deepEqual(updates.at(-1), { widgetId: COST_WIDGET_ID, value: null });
+  assert.equal(statuses.get(COST_WIDGET_ID), "$0.5000");
+  mode = "pi-footer-event";
+  footer.refresh(ctx);
+  assert.equal(statuses.has(COST_WIDGET_ID), false);
+  assert.deepEqual(updates.at(-1), { widgetId: COST_WIDGET_ID, value: "$0.5000" });
+  footer.clear();
+  assert.deepEqual(updates.at(-1), { widgetId: COST_WIDGET_ID, value: null });
 });

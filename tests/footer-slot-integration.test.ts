@@ -68,7 +68,7 @@ test(
     await withOfflineHarness(
       {
         agentFiles: { worker },
-        managerSettings: { nerdFontIcons: false },
+        managerSettings: { costDisplay: "pi-footer-event", nerdFontIcons: false },
         extensionFactories: [footerObserver(updates)],
         onRequest(request) {
           if (!request.path) return answer(0.1);
@@ -150,7 +150,7 @@ test(
     await withOfflineHarness(
       {
         agentFiles: { worker },
-        managerSettings: { nerdFontIcons: false },
+        managerSettings: { costDisplay: "pi-footer-event", nerdFontIcons: false },
         extensionFactories: [footerObserver(updates)],
         onRequest(request) {
           assert.equal(request.path, "/root/worker");
@@ -197,7 +197,7 @@ test(
     await withOfflineHarness(
       {
         agentFiles: { worker },
-        managerSettings: { nerdFontIcons: true },
+        managerSettings: { costDisplay: "pi-footer-event", nerdFontIcons: true },
         extensionFactories: [footerObserver(updates)],
         onRequest(request) {
           assert.equal(request.path, "/root/worker");
@@ -223,13 +223,13 @@ test(
         );
         await writeFile(
           path.join(directory, "subagent-manager", "settings.json"),
-          JSON.stringify({ nerdFontIcons: false }),
+          JSON.stringify({ costDisplay: "pi-footer-event", nerdFontIcons: false }),
         );
         await reloadSettings(session);
         assert.equal(lastValue(updates), "$0.5000", "disabling labs removes the icon immediately");
         await writeFile(
           path.join(directory, "subagent-manager", "settings.json"),
-          JSON.stringify({ nerdFontIcons: true }),
+          JSON.stringify({ costDisplay: "pi-footer-event", nerdFontIcons: true }),
         );
         await reloadSettings(session);
         assert.equal(
@@ -251,7 +251,7 @@ test(
     await withOfflineHarness(
       {
         agentFiles: { worker },
-        managerSettings: { nerdFontIcons: false },
+        managerSettings: { costDisplay: "pi-footer-event", nerdFontIcons: false },
         extensionFactories: [footerObserver(updates, false)],
         onRequest(request) {
           assert.equal(request.path, "/root/worker");
@@ -274,3 +274,45 @@ test(
     );
   },
 );
+
+
+test("default status key publishes before startup completes and Pi status includes root spend", { timeout: 30000 }, async () => {
+  const statuses = new Map<string, string>();
+  const updates: WidgetUpdate[] = [];
+  await withOfflineHarness({
+    agentFiles: { worker },
+    extensionFactories: [footerObserver(updates)],
+    onRequest(request) {
+      if (request.path) assert.equal(statuses.get(WIDGET_ID), "$0.0000", "key is selectable before child returns");
+      return answer(request.path ? 0.5 : 0.1);
+    },
+  }, async ({ cwd, directory, errors, open, close, tool }) => {
+    const session = await open(SessionManager.create(cwd));
+    const base = session.extensionRunner.createCommandContext();
+    session.extensionRunner.setUIContext({
+      ...base.ui,
+      setStatus(key: string, value: string | undefined) {
+        if (value === undefined) statuses.delete(key);
+        else statuses.set(key, value);
+      },
+      setWidget() {},
+      setFooter() { assert.fail("status modes must not replace footer"); },
+      notify() {},
+    }, "tui");
+    await reloadSettings(session);
+    assert.equal(statuses.get(WIDGET_ID), "$0.0000");
+    statuses.clear(); // Startup must republish even if a consumer lost the initial update.
+    await tool(session, "agent_spawn", { path: "worker", type: "worker", task: "Cost", wait: true });
+    await tool(session, "agent_wait", { path: "worker" });
+    assert.equal(statuses.get(WIDGET_ID), "$0.5000");
+    await writeFile(path.join(directory, "subagent-manager", "settings.json"), JSON.stringify({ costDisplay: "pi-status" }));
+    await reloadSettings(session);
+    assert.equal(statuses.get(WIDGET_ID), "Total: $0.5000");
+    await session.prompt("Root work");
+    assert.equal(statuses.get(WIDGET_ID), "Total: $0.6000", "root agent_end refreshes total cost");
+    assert.deepEqual(updates, [], "status transports do not publish event widgets");
+    await close(session);
+    assert.equal(statuses.has(WIDGET_ID), false);
+    assert.deepEqual(errors, []);
+  });
+});

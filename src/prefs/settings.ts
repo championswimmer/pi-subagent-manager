@@ -19,6 +19,9 @@ export type SubagentMode = (typeof SUBAGENT_MODES)[number];
 export const WIDGET_MODES = ["full", "minimal"] as const;
 export type WidgetMode = (typeof WIDGET_MODES)[number];
 
+export const COST_DISPLAY_MODES = ["pi-footer-event", "pi-footer-status", "pi-status"] as const;
+export type CostDisplayMode = (typeof COST_DISPLAY_MODES)[number];
+
 export const LOADER_STYLES = ["circle", "braille", "hourglass"] as const;
 export type LoaderStyle = (typeof LOADER_STYLES)[number];
 
@@ -36,6 +39,7 @@ export interface ManagerSettings {
   subagentMode: SubagentMode;
   toolFiltering: ToolFilteringMode;
   widgetMode: WidgetMode;
+  costDisplay: CostDisplayMode;
   nerdFontIcons: boolean;
   loaderStyle: LoaderStyle;
   finalRecap: boolean;
@@ -53,13 +57,14 @@ export const DEFAULT_MANAGER_SETTINGS: ManagerSettings = {
   subagentMode: "opportunistic",
   toolFiltering: "allowed",
   widgetMode: "full",
+  costDisplay: "pi-footer-status",
   nerdFontIcons: false,
   loaderStyle: "circle",
   finalRecap: false,
 };
 
 const KEYS = [
-  "maxLevels", "maxConcurrent", "maxThreads", "modelSelection", "subagentMode", "toolFiltering", "widgetMode", "nerdFontIcons", "loaderStyle", "finalRecap",
+  "maxLevels", "maxConcurrent", "maxThreads", "modelSelection", "subagentMode", "toolFiltering", "widgetMode", "costDisplay", "nerdFontIcons", "loaderStyle", "finalRecap",
 ] as const;
 const MAX_LEVELS = 32;
 
@@ -100,6 +105,7 @@ function requirement(key: (typeof KEYS)[number]): string {
   if (key === "nerdFontIcons" || key === "finalRecap") return `${key} must be a boolean`;
   if (key === "subagentMode") return "subagentMode must be off, opportunistic or orchestration";
   if (key === "widgetMode") return "widgetMode must be full or minimal";
+  if (key === "costDisplay") return "costDisplay must be pi-footer-event, pi-footer-status or pi-status";
   if (key === "loaderStyle") return "loaderStyle must be circle, braille or hourglass";
   if (key === "toolFiltering") return "toolFiltering must be allowed, all-except-blocked or all";
   if (key === "modelSelection")
@@ -152,6 +158,11 @@ function parseSettings(content: string): Partial<ManagerSettings> {
     if (key === "widgetMode") {
       if (!WIDGET_MODES.includes(value as WidgetMode)) throw new Error(requirement(key));
       layer.widgetMode = value as WidgetMode;
+      continue;
+    }
+    if (key === "costDisplay") {
+      if (!COST_DISPLAY_MODES.includes(value as CostDisplayMode)) throw new Error(requirement(key));
+      layer.costDisplay = value as CostDisplayMode;
       continue;
     }
     if (key === "loaderStyle") {
