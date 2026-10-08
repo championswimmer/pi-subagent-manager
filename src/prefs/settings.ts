@@ -294,7 +294,10 @@ export function loadManagerSettings(options: SettingsScopeOptions): {
 export interface RequiredChildExtensions {
   /** Resolved extension paths, global entries first, without duplicates. */
   paths: string[];
-  /** Set while any layer holds an invalid value; no subagent may start then. */
+  /**
+   * Set while any layer holds an invalid value, or cannot be parsed and mentions the key;
+   * no subagent may start then.
+   */
   error?: string;
 }
 
@@ -302,17 +305,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-/** Raw JSON object of a layer; missing, unreadable or unparseable files yield undefined. */
-function readLayerRecord(entry: SettingsLayer): Record<string, unknown> | undefined {
+/** Raw text of a layer; missing files and files that cannot be read yield undefined. */
+function readLayerText(entry: SettingsLayer): string | undefined {
   try {
-    const content = readLayerContent(entry);
-    if (content === undefined) return undefined;
-    const parsed: unknown = JSON.parse(content);
-    return isRecord(parsed) ? parsed : undefined;
+    return readLayerContent(entry);
   } catch {
     // loadManagerSettings reports these files; they contribute nothing here.
     return undefined;
   }
+}
+
+/** The JSON object in a layer's text; text that is not one yields undefined. */
+function parseLayerRecord(content: string): Record<string, unknown> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(content);
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    // loadManagerSettings reports invalid JSON for every key.
+    return undefined;
+  }
+}
+
+function readLayerRecord(entry: SettingsLayer): Record<string, unknown> | undefined {
+  const content = readLayerText(entry);
+  return content === undefined ? undefined : parseLayerRecord(content);
 }
 
 /** Git Bash, MSYS, Cygwin and WSL drive paths (`/c/x`, `/mnt/c/x`) as Windows paths. */
@@ -349,8 +365,18 @@ export function loadRequiredChildExtensions(
   const paths: string[] = [];
   const errors: string[] = [];
   for (const entry of settingsLayers(options)) {
-    const record = readLayerRecord(entry);
-    if (!record || !Object.hasOwn(record, REQUIRED_CHILD_EXTENSIONS)) continue;
+    const content = readLayerText(entry);
+    if (content === undefined) continue;
+    const record = parseLayerRecord(content);
+    if (!record) {
+      // A typo must not silently drop a guard the file lists, so any mention of the key counts.
+      if (content.includes(REQUIRED_CHILD_EXTENSIONS))
+        errors.push(
+          `${entry.filePath}: could not be parsed as a JSON object and mentions ${REQUIRED_CHILD_EXTENSIONS}; subagents will not start until it is fixed`,
+        );
+      continue;
+    }
+    if (!Object.hasOwn(record, REQUIRED_CHILD_EXTENSIONS)) continue;
     const value = record[REQUIRED_CHILD_EXTENSIONS];
     if (
       !Array.isArray(value) ||
