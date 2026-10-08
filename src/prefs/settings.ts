@@ -59,7 +59,16 @@ export const DEFAULT_MANAGER_SETTINGS: ManagerSettings = {
 };
 
 const KEYS = [
-  "maxLevels", "maxConcurrent", "maxThreads", "modelSelection", "subagentMode", "toolFiltering", "widgetMode", "nerdFontIcons", "loaderStyle", "finalRecap",
+  "maxLevels",
+  "maxConcurrent",
+  "maxThreads",
+  "modelSelection",
+  "subagentMode",
+  "toolFiltering",
+  "widgetMode",
+  "nerdFontIcons",
+  "loaderStyle",
+  "finalRecap",
 ] as const;
 const MAX_LEVELS = 32;
 
@@ -69,9 +78,7 @@ function errorCode(error: unknown): string | undefined {
     : undefined;
 }
 
-function lstatIfPresent(
-  path: string,
-): ReturnType<typeof lstatSync> | undefined {
+function lstatIfPresent(path: string): ReturnType<typeof lstatSync> | undefined {
   try {
     return lstatSync(path);
   } catch (error) {
@@ -80,9 +87,7 @@ function lstatIfPresent(
   }
 }
 
-function assertNotSymlinkPath(
-  path: string,
-): ReturnType<typeof lstatSync> | undefined {
+function assertNotSymlinkPath(path: string): ReturnType<typeof lstatSync> | undefined {
   const stat = lstatIfPresent(path);
   if (stat?.isSymbolicLink()) throw new Error(`Unsafe symlink path: ${path}`);
   return stat;
@@ -128,7 +133,9 @@ function parseSettings(content: string): Partial<ManagerSettings> {
     if (typeof record.scopedModelFiltering !== "boolean")
       throw new Error("scopedModelFiltering must be a boolean");
     if (!Object.hasOwn(record, "modelSelection"))
-      layer.modelSelection = record.scopedModelFiltering ? "pick-first-scoped" : "pick-first-available";
+      layer.modelSelection = record.scopedModelFiltering
+        ? "pick-first-scoped"
+        : "pick-first-available";
   }
   for (const key of KEYS) {
     if (!Object.hasOwn(record, key)) continue;
@@ -196,8 +203,7 @@ function readLayerContent(entry: SettingsLayer): string | undefined {
   }
   const stat = assertNotSymlinkPath(entry.filePath);
   if (!stat) return undefined;
-  if (!stat.isFile())
-    throw new Error(`Settings must be a regular file: ${entry.filePath}`);
+  if (!stat.isFile()) throw new Error(`Settings must be a regular file: ${entry.filePath}`);
   return readFileSync(entry.filePath, "utf8");
 }
 
@@ -224,9 +230,13 @@ export function loadManagerSaveScope(options: {
     if (content !== undefined) {
       const state: unknown = JSON.parse(content);
       if (
-        state && typeof state === "object" && !Array.isArray(state) &&
-        "saveScope" in state && state.saveScope === "user"
-      ) return "user";
+        state &&
+        typeof state === "object" &&
+        !Array.isArray(state) &&
+        "saveScope" in state &&
+        state.saveScope === "user"
+      )
+        return "user";
     }
   } catch {
     // Missing, invalid or unsafe UI state must not prevent opening settings.
@@ -253,8 +263,7 @@ export function loadManagerSettings(options: {
   const diagnostics: string[] = [];
   const settings: ManagerSettings = { ...DEFAULT_MANAGER_SETTINGS };
   const layers = [layer(options.agentDir, ["subagent-manager"])];
-  if (options.includeProject)
-    layers.push(layer(options.cwd, [".pi", "agent", "subagent-manager"]));
+  if (options.includeProject) layers.push(layer(options.cwd, [".pi", "agent", "subagent-manager"]));
   for (const entry of layers) {
     try {
       const parsed = readLayer(entry);
@@ -267,11 +276,7 @@ export function loadManagerSettings(options: {
 }
 
 function serializedSettings(settings: ManagerSettings): string {
-  if (
-    settings === null ||
-    typeof settings !== "object" ||
-    Array.isArray(settings)
-  ) {
+  if (settings === null || typeof settings !== "object" || Array.isArray(settings)) {
     throw new Error("Settings must be a JSON object");
   }
   for (const key of Object.keys(settings)) {
@@ -317,8 +322,7 @@ function ensureScopeDirectories(directories: string[]): void {
 
 function assertRegularFileOrAbsent(filePath: string): void {
   const stat = assertNotSymlinkPath(filePath);
-  if (stat && !stat.isFile())
-    throw new Error(`Settings must be a regular file: ${filePath}`);
+  if (stat && !stat.isFile()) throw new Error(`Settings must be a regular file: ${filePath}`);
 }
 
 function exclusiveCreateFlags(): number {
@@ -343,8 +347,7 @@ function writeAtomically(entry: SettingsLayer, content: string): void {
     for (const directory of entry.directories) assertExistingDirectory(directory);
     assertRegularFileOrAbsent(filePath);
     const tempStat = assertNotSymlinkPath(temporary);
-    if (!tempStat?.isFile())
-      throw new Error(`Settings must be a regular file: ${temporary}`);
+    if (!tempStat?.isFile()) throw new Error(`Settings must be a regular file: ${temporary}`);
     renameSync(temporary, filePath);
   } finally {
     if (created) {

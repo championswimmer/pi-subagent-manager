@@ -49,10 +49,10 @@ How much the main model is encouraged to delegate.
 
 Controls the subagent status display above the input box. Choose **Status Widget** in `/agents` settings and save with **Ctrl+S**.
 
-| Option             | Display |
-| ------------------ | ------- |
-| `full` (default)   | A compact tree with one row per agent, task/state, metrics and navigation hints. |
-| `minimal`          | One line of theme-colored status counts plus cumulative input `↑` / output `↓` tokens for agents currently starting or running. |
+| Option           | Display                                                                                                                         |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `full` (default) | A compact tree with one row per agent, task/state, metrics and navigation hints.                                                |
+| `minimal`        | One line of theme-colored status counts plus cumulative input `↑` / output `↓` tokens for agents currently starting or running. |
 
 Minimal mode groups starting agents with running agents and excludes the main conversation. Token totals exclude completed, stopped, failed and paused agents. The fullscreen tree remains available via `/agents tree` in either mode. In full mode, press **Right (→)** at the end of the main draft (or in an empty input) to collapse to one line for this session only, without saving preferences. Session startup/switch/reload restores the configured mode. **Left (←)** at the start of the draft still opens the full dialog while agents are active.
 

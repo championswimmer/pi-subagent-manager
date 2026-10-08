@@ -388,7 +388,10 @@ export function createDriverFactory(
     const rootActive = new Set(inherited.activeNames);
     // Preserve deferred/codemode exposure rather than flooding model declarations with MCP tools.
     const activeToolNames = toolNames.filter(
-      (name) => localNames.has(name) || rootActive.has(name) || options.type.tools?.allow?.includes(name) && toolFiltering === "allowed",
+      (name) =>
+        localNames.has(name) ||
+        rootActive.has(name) ||
+        (options.type.tools?.allow?.includes(name) && toolFiltering === "allowed"),
     );
     const customTools = [...options.tools, ...externalTools].filter(
       (tool) => allowed.has(tool.name) && tool.name !== "codemode" && tool.name !== "tool_search",

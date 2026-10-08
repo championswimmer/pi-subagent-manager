@@ -70,7 +70,18 @@ const settings = (
   widgetMode: WidgetMode = "full",
   nerdFontIcons = false,
   finalRecap = false,
-) => ({ maxLevels, maxConcurrent, maxThreads, modelSelection, subagentMode, toolFiltering, widgetMode, nerdFontIcons, loaderStyle: "circle", finalRecap });
+) => ({
+  maxLevels,
+  maxConcurrent,
+  maxThreads,
+  modelSelection,
+  subagentMode,
+  toolFiltering,
+  widgetMode,
+  nerdFontIcons,
+  loaderStyle: "circle",
+  finalRecap,
+});
 
 const escape = (path: string) => new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
@@ -89,7 +100,8 @@ function assertNoTempFiles(directory: string): void {
 
 test("save-scope preference persists separately from manager settings with trust fallback", (t) => {
   const f = fixture(t);
-  const scope = (includeProject = true) => loadManagerSaveScope({ agentDir: f.agentDir, includeProject });
+  const scope = (includeProject = true) =>
+    loadManagerSaveScope({ agentDir: f.agentDir, includeProject });
   assert.equal(scope(), "project");
   assert.equal(scope(false), "user");
   saveManagerSaveScope(f.agentDir, "user");
@@ -184,10 +196,12 @@ test("invalid layer content is rejected with a diagnostic naming the file", (t) 
     ['{"maxLevels":33}', /maxLevels must be <= 32/],
     ['{"scopedModelFiltering":"true"}', /scopedModelFiltering must be a boolean/],
     ['{"scopedModelFiltering":0}', /scopedModelFiltering must be a boolean/],
-    ...["automatic", "Pick First (scoped)", true, null, 1, [], {}].map((modelSelection): [string, RegExp] => [
-      JSON.stringify({ modelSelection }),
-      /modelSelection must be pick-first-available, pick-first-scoped or use-current/,
-    ]),
+    ...["automatic", "Pick First (scoped)", true, null, 1, [], {}].map(
+      (modelSelection): [string, RegExp] => [
+        JSON.stringify({ modelSelection }),
+        /modelSelection must be pick-first-available, pick-first-scoped or use-current/,
+      ],
+    ),
     ['{"subagentMode":"automatic"}', /subagentMode must be off, opportunistic or orchestration/],
     ['{"subagentMode":"Off"}', /subagentMode must be off, opportunistic or orchestration/],
     ['{"subagentMode":false}', /subagentMode must be off, opportunistic or orchestration/],
@@ -224,7 +238,11 @@ test("an invalid layer is ignored atomically while other layers still apply", (t
   writeJson(f.globalFile, { maxLevels: 5, modelSelection: "pick-first-available" });
   writeJson(f.projectFile, { maxLevels: 2, scopedModelFiltering: "no" });
   result = load(f);
-  assert.deepEqual(result.settings, { ...DEFAULTS, maxLevels: 5, modelSelection: "pick-first-available" });
+  assert.deepEqual(result.settings, {
+    ...DEFAULTS,
+    maxLevels: 5,
+    modelSelection: "pick-first-available",
+  });
   assert.equal(result.diagnostics.length, 1);
   assert.match(result.diagnostics[0], escape(f.projectFile));
 
@@ -242,7 +260,10 @@ test("all subagent modes save and load with trusted-project precedence", (t) => 
     assert.equal(JSON.parse(readFileSync(f.globalFile, "utf8")).subagentMode, mode);
     for (const projectMode of SUBAGENT_MODES) {
       writeJson(f.projectFile, { subagentMode: projectMode });
-      assert.deepEqual(load(f), { settings: { ...user, subagentMode: projectMode }, diagnostics: [] });
+      assert.deepEqual(load(f), {
+        settings: { ...user, subagentMode: projectMode },
+        diagnostics: [],
+      });
       assert.equal(load(f, false).settings.subagentMode, mode);
     }
   }
@@ -413,14 +434,13 @@ test("invalid save input never creates or mutates files", (t) => {
       /maxThreads must be a positive safe integer/,
     ],
     [{ maxLevels: 1, maxConcurrent: 1, maxThreads: 1 }, /modelSelection must be/],
-    [
-      { ...settings(1, 1, 1), modelSelection: "invalid" },
-      /modelSelection must be/,
-    ],
-    ...["automatic", "Pick First (scoped)", true, null, 1, [], {}].map((modelSelection): [unknown, RegExp] => [
-      { ...settings(1, 1, 1), modelSelection },
-      /modelSelection must be pick-first-available, pick-first-scoped or use-current/,
-    ]),
+    [{ ...settings(1, 1, 1), modelSelection: "invalid" }, /modelSelection must be/],
+    ...["automatic", "Pick First (scoped)", true, null, 1, [], {}].map(
+      (modelSelection): [unknown, RegExp] => [
+        { ...settings(1, 1, 1), modelSelection },
+        /modelSelection must be pick-first-available, pick-first-scoped or use-current/,
+      ],
+    ),
     [
       { ...settings(1, 1, 1), subagentMode: "automatic" },
       /subagentMode must be off, opportunistic or orchestration/,
@@ -511,7 +531,10 @@ test("all model selection modes save and load with trusted-project precedence", 
     assert.equal(Object.hasOwn(stored, "scopedModelFiltering"), false);
     for (const projectMode of MODEL_SELECTION_MODES) {
       writeJson(f.projectFile, { modelSelection: projectMode });
-      assert.deepEqual(load(f), { settings: { ...user, modelSelection: projectMode }, diagnostics: [] });
+      assert.deepEqual(load(f), {
+        settings: { ...user, modelSelection: projectMode },
+        diagnostics: [],
+      });
       assert.equal(load(f, false).settings.modelSelection, mode);
     }
   }
@@ -519,10 +542,16 @@ test("all model selection modes save and load with trusted-project precedence", 
 
 test("legacy filtering migrates per layer; explicit model selection wins and saves canonically", (t) => {
   const f = fixture(t);
-  for (const [legacy, mode] of [[true, "pick-first-scoped"], [false, "pick-first-available"]] as const) {
+  for (const [legacy, mode] of [
+    [true, "pick-first-scoped"],
+    [false, "pick-first-available"],
+  ] as const) {
     writeJson(f.globalFile, { scopedModelFiltering: legacy });
     const migrated = load(f, false);
-    assert.deepEqual(migrated, { settings: { ...DEFAULTS, modelSelection: mode }, diagnostics: [] });
+    assert.deepEqual(migrated, {
+      settings: { ...DEFAULTS, modelSelection: mode },
+      diagnostics: [],
+    });
     save(f, "user", migrated.settings);
     const stored = JSON.parse(readFileSync(f.globalFile, "utf8"));
     assert.equal(stored.modelSelection, mode);
@@ -549,7 +578,10 @@ test("invalid model selection rejects its entire layer and does not fall back to
   assert.deepEqual(result.settings, { ...DEFAULTS, modelSelection: "use-current", maxLevels: 5 });
   assert.equal(result.diagnostics.length, 1);
   assert.match(result.diagnostics[0], escape(f.projectFile));
-  assert.match(result.diagnostics[0], /modelSelection must be pick-first-available, pick-first-scoped or use-current/);
+  assert.match(
+    result.diagnostics[0],
+    /modelSelection must be pick-first-available, pick-first-scoped or use-current/,
+  );
 });
 
 test("both widget modes save and load with trusted-project precedence", (t) => {
@@ -593,7 +625,11 @@ test("Final Recap defaults off, layers by key, and saves in both scopes", (t) =>
   assert.equal(load(f).settings.finalRecap, true, "missing project key inherits global");
   writeJson(f.projectFile, { finalRecap: false });
   assert.deepEqual(load(f), { settings: { ...DEFAULTS, nerdFontIcons: true }, diagnostics: [] });
-  assert.equal(load(f, false).settings.finalRecap, true, "untrusted project does not override global");
+  assert.equal(
+    load(f, false).settings.finalRecap,
+    true,
+    "untrusted project does not override global",
+  );
   save(f, "project", { ...DEFAULTS, finalRecap: true });
   assert.equal(JSON.parse(readFileSync(f.projectFile, "utf8")).finalRecap, true);
   assert.equal(load(f).settings.finalRecap, true);
@@ -612,7 +648,10 @@ test("Final Recap rejects non-booleans atomically when loading and saving", (t) 
     assert.equal(result.diagnostics.length, 1);
     assert.match(result.diagnostics[0], escape(f.projectFile));
     assert.match(result.diagnostics[0], /finalRecap must be a boolean/);
-    rejects(() => save(f, "user", { ...DEFAULTS, finalRecap: invalid }), /finalRecap must be a boolean/);
+    rejects(
+      () => save(f, "user", { ...DEFAULTS, finalRecap: invalid }),
+      /finalRecap must be a boolean/,
+    );
     assert.equal(readFileSync(f.globalFile, "utf8"), before);
   }
 });
