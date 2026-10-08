@@ -740,3 +740,56 @@ test(
     );
   },
 );
+
+for (const [failure, source, message] of [
+  [
+    "session_start",
+    `export default function (pi: any) {
+  pi.on("session_start", () => {
+    throw new Error("shared guard failed");
+  });
+}
+`,
+    "failed in session_start: shared guard failed",
+  ],
+  ["load", "export default 42;\n", "failed to load: "],
+] as const) {
+  test(
+    `a required directory fails closed when its manifest entry outside the directory fails to ${failure}`,
+    { timeout: 30000 },
+    async () => {
+      await withOfflineHarness(
+        { agentFiles: AGENTS, builtinTools: true, onRequest: () => answer("must not run") },
+        async (harness) => {
+          const { directory, cwd, requests, open, tool } = harness;
+          const shared = path.join(directory, "shared", "guard.ts");
+          await mkdir(path.dirname(shared), { recursive: true });
+          await writeFile(shared, source);
+          const bundle = path.join(directory, "guard-bundle");
+          await mkdir(bundle);
+          await writeFile(path.join(bundle, "ok.ts"), "export default function () {}\n");
+          await writeFile(
+            path.join(bundle, "package.json"),
+            JSON.stringify({
+              name: "guard-bundle",
+              pi: { extensions: ["./ok.ts", "../shared/guard.ts"] },
+            }),
+          );
+          await writeSettings(globalSettings(harness), { requiredChildExtensions: [bundle] });
+          const session = await open(SessionManager.create(cwd, path.join(directory, "parents")));
+          const failed = await tool<ThreadView>(session, "agent_spawn", {
+            path: "worker",
+            type: "guarded",
+            task: "Run",
+          });
+          assert.equal(failed.state, "failed");
+          assert.ok(
+            failed.error?.startsWith(`Required child extension ${bundle} ${message}`),
+            failed.error,
+          );
+          assert.equal(requests.length, 0);
+        },
+      );
+    },
+  );
+}
