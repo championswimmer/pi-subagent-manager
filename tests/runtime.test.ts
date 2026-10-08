@@ -174,6 +174,7 @@ test("isolated real SDK driver without credentials", async (t) => {
         return scopedModels;
       },
       thinkingLevel: "low",
+      isProjectTrusted: () => false,
     } as unknown as ExtensionContext;
     const setScopedModels = (...identities: string[]) => {
       scopedModels = identities.map((identity) => {

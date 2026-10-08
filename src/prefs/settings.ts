@@ -11,7 +11,9 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export const SUBAGENT_MODES = ["off", "opportunistic", "orchestration"] as const;
 export type SubagentMode = (typeof SUBAGENT_MODES)[number];
@@ -70,6 +72,8 @@ const KEYS = [
   "loaderStyle",
   "finalRecap",
 ] as const;
+/** File-only key, read separately from ManagerSettings: layers are unioned, never overridden. */
+const REQUIRED_CHILD_EXTENSIONS = "requiredChildExtensions";
 const MAX_LEVELS = 32;
 
 function errorCode(error: unknown): string | undefined {
@@ -125,7 +129,7 @@ function parseSettings(content: string): Partial<ManagerSettings> {
   }
   const record = parsed as Record<string, unknown>;
   for (const key of Object.keys(record)) {
-    if (!isSupportedKey(key) && key !== "scopedModelFiltering")
+    if (!isSupportedKey(key) && key !== "scopedModelFiltering" && key !== REQUIRED_CHILD_EXTENSIONS)
       throw new Error(`Unknown settings key: ${key}`);
   }
   const layer: Partial<ManagerSettings> = {};
@@ -255,16 +259,26 @@ function detail(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function loadManagerSettings(options: {
+interface SettingsScopeOptions {
   cwd: string;
   agentDir: string;
   includeProject: boolean;
-}): { settings: ManagerSettings; diagnostics: string[] } {
-  const diagnostics: string[] = [];
-  const settings: ManagerSettings = { ...DEFAULT_MANAGER_SETTINGS };
+}
+
+/** Global layer first, then the project layer when the project is trusted. */
+function settingsLayers(options: SettingsScopeOptions): SettingsLayer[] {
   const layers = [layer(options.agentDir, ["subagent-manager"])];
   if (options.includeProject) layers.push(layer(options.cwd, [".pi", "agent", "subagent-manager"]));
-  for (const entry of layers) {
+  return layers;
+}
+
+export function loadManagerSettings(options: SettingsScopeOptions): {
+  settings: ManagerSettings;
+  diagnostics: string[];
+} {
+  const diagnostics: string[] = [];
+  const settings: ManagerSettings = { ...DEFAULT_MANAGER_SETTINGS };
+  for (const entry of settingsLayers(options)) {
     try {
       const parsed = readLayer(entry);
       if (parsed !== undefined) Object.assign(settings, parsed);
@@ -272,7 +286,73 @@ export function loadManagerSettings(options: {
       diagnostics.push(`${entry.filePath}: ${detail(error)}`);
     }
   }
+  const required = loadRequiredChildExtensions(options);
+  if (required.error) diagnostics.push(required.error);
   return { settings, diagnostics };
+}
+
+export interface RequiredChildExtensions {
+  /** Resolved extension paths, global entries first, without duplicates. */
+  paths: string[];
+  /** Set while any layer holds an invalid value; no subagent may start then. */
+  error?: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Raw JSON object of a layer; missing, unreadable or unparseable files yield undefined. */
+function readLayerRecord(entry: SettingsLayer): Record<string, unknown> | undefined {
+  try {
+    const content = readLayerContent(entry);
+    if (content === undefined) return undefined;
+    const parsed: unknown = JSON.parse(content);
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    // loadManagerSettings reports these files; they contribute nothing here.
+    return undefined;
+  }
+}
+
+/** Same rules as pi's `-e`: trimmed, `~` from $HOME, `file://` URLs, relative to cwd. */
+function resolveExtensionPath(source: string, cwd: string): string {
+  const trimmed = source.trim();
+  const home = process.env.HOME || homedir();
+  if (trimmed === "~") return home;
+  if (trimmed.startsWith("~/")) return join(home, trimmed.slice(2));
+  if (trimmed.startsWith("file://")) return fileURLToPath(trimmed);
+  return resolve(cwd, trimmed);
+}
+
+/**
+ * Extensions every subagent must load. Unlike other keys, the global and project lists are
+ * combined, so a repository can add required extensions but never remove the user's own.
+ */
+export function loadRequiredChildExtensions(
+  options: SettingsScopeOptions,
+): RequiredChildExtensions {
+  const paths: string[] = [];
+  const errors: string[] = [];
+  for (const entry of settingsLayers(options)) {
+    const record = readLayerRecord(entry);
+    if (!record || !Object.hasOwn(record, REQUIRED_CHILD_EXTENSIONS)) continue;
+    const value = record[REQUIRED_CHILD_EXTENSIONS];
+    if (
+      !Array.isArray(value) ||
+      !value.every((source) => typeof source === "string" && source.trim() !== "")
+    ) {
+      errors.push(
+        `${entry.filePath}: ${REQUIRED_CHILD_EXTENSIONS} must be an array of non-empty strings; subagents will not start until it is fixed`,
+      );
+      continue;
+    }
+    for (const source of value as string[]) {
+      const resolved = resolveExtensionPath(source, options.cwd);
+      if (!paths.includes(resolved)) paths.push(resolved);
+    }
+  }
+  return errors.length ? { paths, error: errors.join("\n") } : { paths };
 }
 
 function serializedSettings(settings: ManagerSettings): string {
@@ -379,6 +459,19 @@ export function saveManagerSettings(options: {
       ? layer(options.agentDir, ["subagent-manager"])
       : layer(options.cwd, [".pi", "agent", "subagent-manager"]);
   ensureScopeDirectories(entry.directories);
-  writeAtomically(entry, content);
+  writeAtomically(entry, withRequiredChildExtensions(content, readLayerRecord(entry)));
   return entry.filePath;
+}
+
+/** The settings dialog does not edit this key, so a save keeps the file's own value verbatim. */
+function withRequiredChildExtensions(
+  content: string,
+  existing: Record<string, unknown> | undefined,
+): string {
+  if (!existing || !Object.hasOwn(existing, REQUIRED_CHILD_EXTENSIONS)) return content;
+  const merged = {
+    ...JSON.parse(content),
+    [REQUIRED_CHILD_EXTENSIONS]: existing[REQUIRED_CHILD_EXTENSIONS],
+  };
+  return `${JSON.stringify(merged, null, 2)}\n`;
 }

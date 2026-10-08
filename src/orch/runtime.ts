@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { clampThinkingLevel } from "@earendil-works/pi-ai/compat";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, readFile, realpath } from "node:fs/promises";
 import {
   createAgentSession,
@@ -13,6 +13,8 @@ import {
   SessionManager,
   SettingsManager,
   type ExtensionContext,
+  type ExtensionError,
+  type LoadExtensionsResult,
 } from "@earendil-works/pi-coding-agent";
 import {
   BOOTSTRAP_MESSAGE,
@@ -24,7 +26,11 @@ import {
 import { selectTools } from "../prefs/config.ts";
 import { TranscriptChannel } from "./transcript.ts";
 import type { InheritedToolSource } from "./inherited-tools.ts";
-import type { ModelSelectionMode, ToolFilteringMode } from "../prefs/settings.ts";
+import {
+  loadRequiredChildExtensions,
+  type ModelSelectionMode,
+  type ToolFilteringMode,
+} from "../prefs/settings.ts";
 import {
   modelIdentity,
   getModelPreferences,
@@ -143,6 +149,56 @@ async function assertAcceptedSessionFile(
   }
 }
 
+function canonicalPath(target: string): string {
+  try {
+    return realpathSync(target);
+  } catch {
+    return path.resolve(target);
+  }
+}
+
+/** A required file matches itself; a required directory matches the entry points inside it. */
+function belongsToRequired(requiredPath: string, candidate: string): boolean {
+  // Inline factories carry synthetic paths such as "<inline:1>", never a file.
+  if (candidate.startsWith("<")) return false;
+  const required = canonicalPath(requiredPath);
+  const resolved = canonicalPath(candidate);
+  return resolved === required || resolved.startsWith(`${required}${path.sep}`);
+}
+
+function assertRequiredExtensionsLoaded(
+  loaded: LoadExtensionsResult,
+  requiredPaths: readonly string[],
+): void {
+  for (const requiredPath of requiredPaths) {
+    const failure = loaded.errors.find((error) => belongsToRequired(requiredPath, error.path));
+    if (failure)
+      throw new Error(`Required child extension ${requiredPath} failed to load: ${failure.error}`);
+    if (
+      !loaded.extensions.some((extension) =>
+        belongsToRequired(requiredPath, extension.resolvedPath),
+      )
+    )
+      throw new Error(`Required child extension ${requiredPath} did not load an extension`);
+  }
+}
+
+function assertRequiredExtensionsStarted(
+  errors: readonly ExtensionError[],
+  requiredPaths: readonly string[],
+): void {
+  for (const error of errors) {
+    if (error.event !== "session_start") continue;
+    const requiredPath = requiredPaths.find((candidate) =>
+      belongsToRequired(candidate, error.extensionPath),
+    );
+    if (requiredPath)
+      throw new Error(
+        `Required child extension ${requiredPath} failed in session_start: ${error.error}`,
+      );
+  }
+}
+
 /** Isolated SDK sessions with filtered root tool bridges, not reloaded root extensions. */
 export function createDriverFactory(
   getRootContext: () => ExtensionContext,
@@ -244,6 +300,14 @@ export function createDriverFactory(
   const createDriver: DriverFactory = async (options) => {
     options.signal.throwIfAborted();
     const ctx = getRootContext();
+    // Read at every driver start, so a settings edit applies to the next spawn or resume.
+    const requiredExtensions = loadRequiredChildExtensions({
+      cwd: ctx.cwd,
+      agentDir: getAgentDir(),
+      includeProject: ctx.isProjectTrusted(),
+    });
+    if (requiredExtensions.error)
+      throw new Error(`Subagent ${options.path} not started: ${requiredExtensions.error}`);
     // Tool policy is a startup snapshot; retained live sessions keep their selected set.
     const toolFiltering = getToolFiltering();
     const rootId = ctx.sessionManager.getSessionId();
@@ -408,6 +472,8 @@ export function createDriverFactory(
       agentDir,
       settingsManager,
       noExtensions: true,
+      // Still loaded with noExtensions: pi treats them like `-e` paths.
+      additionalExtensionPaths: requiredExtensions.paths,
       noSkills: true,
       noPromptTemplates: true,
       noContextFiles: true,
@@ -445,6 +511,8 @@ export function createDriverFactory(
     });
     options.signal.throwIfAborted();
     await loader.reload();
+    // Fail closed: a child must never run without an extension the user marked required.
+    assertRequiredExtensionsLoaded(loader.getExtensions(), requiredExtensions.paths);
     options.signal.throwIfAborted();
     const { session } = await createAgentSession({
       cwd: ctx.cwd,
@@ -527,7 +595,15 @@ export function createDriverFactory(
     try {
       await enforceScopedModelPolicy();
       options.signal.throwIfAborted();
-      await session.bindExtensions({ mode: "print" });
+      // session_start handler errors are reported, not thrown; collect them to fail closed.
+      const startErrors: ExtensionError[] = [];
+      const stopCollecting = session.extensionRunner.onError((error) => startErrors.push(error));
+      try {
+        await session.bindExtensions({ mode: "print" });
+      } finally {
+        stopCollecting();
+      }
+      assertRequiredExtensionsStarted(startErrors, requiredExtensions.paths);
       session.setActiveToolsByName(activeToolNames);
       options.signal.throwIfAborted();
     } catch (error) {
