@@ -7,6 +7,7 @@ import {
   createAgentSession,
   createCodemodeExtension,
   createToolSearchExtension,
+  DefaultPackageManager,
   DefaultResourceLoader,
   getAgentDir,
   ModelRuntime,
@@ -157,37 +158,53 @@ function canonicalPath(target: string): string {
   }
 }
 
-function isWithin(parent: string, child: string): boolean {
-  return child === parent || child.startsWith(`${parent}${path.sep}`);
-}
+/** For each required path: its entry points, each as written and as realpath. */
+type RequiredEntryPoints = ReadonlyMap<string, ReadonlySet<string>>;
 
 /**
- * A required file matches itself; a required directory matches the entry points inside it.
- * Loader paths keep symlinks unresolved while its de-duplication compares realpaths, so a
- * match in either form counts.
+ * Expands required paths into entry points with the same package-manager call the resource
+ * loader makes for `-e` paths, so a manifest entry outside its directory stays attributed.
  */
-function belongsToRequired(requiredPath: string, candidate: string): boolean {
+async function resolveRequiredEntryPoints(
+  requiredPaths: readonly string[],
+  packageManager: DefaultPackageManager,
+): Promise<RequiredEntryPoints> {
+  const entryPoints = new Map<string, Set<string>>();
+  for (const requiredPath of requiredPaths) {
+    const resolved = await packageManager.resolveExtensionSources([requiredPath], {
+      temporary: true,
+    });
+    const paths = [requiredPath, ...resolved.extensions.map((resource) => resource.path)];
+    // Loader paths keep symlinks while its de-duplication compares realpaths; accept both.
+    entryPoints.set(
+      requiredPath,
+      new Set(paths.flatMap((entry) => [path.resolve(entry), canonicalPath(entry)])),
+    );
+  }
+  return entryPoints;
+}
+
+function isEntryPointOf(entryPoints: ReadonlySet<string>, candidate: string): boolean {
   // Inline factories carry synthetic paths such as "<inline:1>", never a file.
   if (candidate.startsWith("<")) return false;
-  return (
-    isWithin(path.resolve(requiredPath), path.resolve(candidate)) ||
-    isWithin(canonicalPath(requiredPath), canonicalPath(candidate))
-  );
+  return entryPoints.has(path.resolve(candidate)) || entryPoints.has(canonicalPath(candidate));
+}
+
+function requiredPathOf(required: RequiredEntryPoints, candidate: string): string | undefined {
+  for (const [requiredPath, entryPoints] of required)
+    if (isEntryPointOf(entryPoints, candidate)) return requiredPath;
+  return undefined;
 }
 
 function assertRequiredExtensionsLoaded(
   loaded: LoadExtensionsResult,
-  requiredPaths: readonly string[],
+  required: RequiredEntryPoints,
 ): void {
-  for (const requiredPath of requiredPaths) {
-    const failure = loaded.errors.find((error) => belongsToRequired(requiredPath, error.path));
+  for (const [requiredPath, entryPoints] of required) {
+    const failure = loaded.errors.find((error) => isEntryPointOf(entryPoints, error.path));
     if (failure)
       throw new Error(`Required child extension ${requiredPath} failed to load: ${failure.error}`);
-    if (
-      !loaded.extensions.some((extension) =>
-        belongsToRequired(requiredPath, extension.resolvedPath),
-      )
-    )
+    if (!loaded.extensions.some((extension) => isEntryPointOf(entryPoints, extension.resolvedPath)))
       throw new Error(`Required child extension ${requiredPath} did not load an extension`);
   }
 }
@@ -195,12 +212,10 @@ function assertRequiredExtensionsLoaded(
 /** Names of the non-hidden tools the required extensions registered. */
 function requiredExtensionTools(
   loaded: LoadExtensionsResult,
-  requiredPaths: readonly string[],
+  required: RequiredEntryPoints,
 ): string[] {
   return loaded.extensions
-    .filter((extension) =>
-      requiredPaths.some((requiredPath) => belongsToRequired(requiredPath, extension.resolvedPath)),
-    )
+    .filter((extension) => requiredPathOf(required, extension.resolvedPath) !== undefined)
     .flatMap((extension) => [...extension.tools.values()])
     .filter((tool) => tool.definition.exposure !== "hidden")
     .map((tool) => tool.definition.name);
@@ -208,13 +223,11 @@ function requiredExtensionTools(
 
 function assertRequiredExtensionsStarted(
   errors: readonly ExtensionError[],
-  requiredPaths: readonly string[],
+  required: RequiredEntryPoints,
 ): void {
   for (const error of errors) {
     if (error.event !== "session_start") continue;
-    const requiredPath = requiredPaths.find((candidate) =>
-      belongsToRequired(candidate, error.extensionPath),
-    );
+    const requiredPath = requiredPathOf(required, error.extensionPath);
     if (requiredPath)
       throw new Error(
         `Required child extension ${requiredPath} failed in session_start: ${error.error}`,
@@ -531,9 +544,13 @@ export function createDriverFactory(
     options.signal.throwIfAborted();
     await loader.reload();
     // Fail closed: a child must never run without an extension the user marked required.
-    assertRequiredExtensionsLoaded(loader.getExtensions(), requiredExtensions.paths);
+    const requiredEntryPoints = await resolveRequiredEntryPoints(
+      requiredExtensions.paths,
+      new DefaultPackageManager({ cwd: ctx.cwd, agentDir, settingsManager }),
+    );
+    assertRequiredExtensionsLoaded(loader.getExtensions(), requiredEntryPoints);
     const requiredToolNames = new Set(
-      requiredExtensionTools(loader.getExtensions(), requiredExtensions.paths).filter(
+      requiredExtensionTools(loader.getExtensions(), requiredEntryPoints).filter(
         (name) => !knownNames.includes(name),
       ),
     );
@@ -645,7 +662,7 @@ export function createDriverFactory(
       } finally {
         stopCollecting();
       }
-      assertRequiredExtensionsStarted(startErrors, requiredExtensions.paths);
+      assertRequiredExtensionsStarted(startErrors, requiredEntryPoints);
       session.setActiveToolsByName(activeToolNames);
       options.signal.throwIfAborted();
     } catch (error) {
