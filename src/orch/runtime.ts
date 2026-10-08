@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { clampThinkingLevel } from "@earendil-works/pi-ai/compat";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { mkdir, readFile, realpath } from "node:fs/promises";
 import {
   createAgentSession,
@@ -158,6 +158,30 @@ function canonicalPath(target: string): string {
   }
 }
 
+/**
+ * pi skips manifest entries that do not exist (package-manager collectFilesFromPaths), so a
+ * required directory could otherwise lose its guard while a sibling entry point still loads.
+ */
+function assertManifestEntriesExist(requiredPath: string): void {
+  let entries: unknown;
+  try {
+    const manifest = JSON.parse(readFileSync(path.join(requiredPath, "package.json"), "utf8"));
+    entries = manifest?.pi?.extensions;
+  } catch {
+    return; // Not a directory with a readable manifest: pi decides what loads.
+  }
+  if (!Array.isArray(entries)) return;
+  for (const entry of entries) {
+    // Globs may match nothing and `!`/`+`/`-` entries are filters, as in pi's manifest rules.
+    if (typeof entry !== "string" || /^[!+-]/.test(entry) || /[*?]/.test(entry)) continue;
+    const entryPath = path.resolve(requiredPath, entry);
+    if (!existsSync(entryPath))
+      throw new Error(
+        `Required child extension ${requiredPath} failed to load: manifest entry ${entryPath} does not exist`,
+      );
+  }
+}
+
 /** For each required path: its entry points, each as written and as realpath. */
 type RequiredEntryPoints = ReadonlyMap<string, ReadonlySet<string>>;
 
@@ -171,6 +195,7 @@ async function resolveRequiredEntryPoints(
 ): Promise<RequiredEntryPoints> {
   const entryPoints = new Map<string, Set<string>>();
   for (const requiredPath of requiredPaths) {
+    assertManifestEntriesExist(requiredPath);
     const resolved = await packageManager.resolveExtensionSources([requiredPath], {
       temporary: true,
     });

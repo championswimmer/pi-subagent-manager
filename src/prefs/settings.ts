@@ -315,12 +315,26 @@ function readLayerRecord(entry: SettingsLayer): Record<string, unknown> | undefi
   }
 }
 
-/** Same rules as pi's `-e`: trimmed, `~` from $HOME, `file://` URLs, relative to cwd. */
+/** Git Bash, MSYS, Cygwin and WSL drive paths (`/c/x`, `/mnt/c/x`) as Windows paths. */
+function normalizeWindowsShellPath(filePath: string): string {
+  if (!filePath.startsWith("/") || filePath.startsWith("//") || filePath.includes("\\"))
+    return filePath;
+  const match = filePath.match(/^\/(?:mnt\/|cygdrive\/)?([a-z])(?:\/(.*))?$/i);
+  if (!match) return filePath;
+  return `${match[1].toUpperCase()}:\\${match[2]?.replaceAll("/", "\\") ?? ""}`;
+}
+
+/**
+ * Same steps as pi's `-e` path resolution (`resolvePath` in pi's utils/paths, not exported):
+ * trim, Windows shell paths, `~` from $HOME, `file://` URLs, relative to cwd.
+ */
 function resolveExtensionPath(source: string, cwd: string): string {
-  const trimmed = source.trim();
+  const windows = process.platform === "win32";
+  const trimmed = windows ? normalizeWindowsShellPath(source.trim()) : source.trim();
   const home = process.env.HOME || homedir();
   if (trimmed === "~") return home;
-  if (trimmed.startsWith("~/")) return join(home, trimmed.slice(2));
+  if (trimmed.startsWith("~/") || (windows && trimmed.startsWith("~\\")))
+    return join(home, trimmed.slice(2));
   if (trimmed.startsWith("file://")) return fileURLToPath(trimmed);
   return resolve(cwd, trimmed);
 }
