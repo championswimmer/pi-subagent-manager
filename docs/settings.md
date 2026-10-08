@@ -128,11 +128,11 @@ Subagents run in their own sessions and do not load your pi extensions. An exten
 
 - File-only: not shown in the `/agents` dialog. Saving from the dialog keeps the value already in that file.
 - Each entry is an extension path in the form `pi -e` accepts: `~` expands to your home directory, and relative paths resolve against the working directory (prefer absolute or `~/` paths). A directory loads the way `pi -e <directory>` loads it.
-- Applies to every child: forked and independent, nested at any depth, and resumed ones (`/reload`, `pi --resume`, steering a paused or finished agent). The files are read each time a child session starts, so edits apply to the next spawn or resume without `/agents reload`.
+- Applies to every child: forked and independent, nested at any depth, and resumed ones (`/reload`, `pi --resume`, steering a paused or finished agent). The files are read each time a child starts or resumes, so edits apply without `/agents reload`. An agent still open from before you added an entry cannot load it in place: resuming it fails until you reload the session (`/reload`), which restarts it with the extension.
 - **Global and project lists are combined**, unlike every other key. A project file can add required extensions but cannot remove or replace a global one, so a repository cannot switch off a guard you installed.
 - **Fails closed.** A child does not start when a required extension is missing, fails to load, or throws in its `session_start` handler; the spawn or resume fails with an error naming the path. A value that is not an array of non-empty strings, in either file, refuses every spawn and resume with an error naming the file and key until it is fixed, even if other keys in that file are valid.
 - An invalid value for another key does not drop this one; an unparseable or unreadable settings file is still ignored as a whole (with a warning), including its `requiredChildExtensions`.
-- Required extensions contribute their event hooks (`tool_call`, `tool_result`, `session_start`, ...). Tools they register are not added to a child's tool list; a child gets one only when its [Tool Filtering](#tool-filtering-toolfiltering) policy already permits a tool of that name.
+- Required extensions contribute their event hooks (`tool_call`, `tool_result`, `session_start`, ...). Tools they register are not auto-allowed: [Tool Filtering](#tool-filtering-toolfiltering) and the type's `tools.allow` / `tools.block` lists decide, as for any other tool.
 
 ## Max Levels (`maxLevels`)
 
