@@ -3,7 +3,11 @@ import { buildSessionContext, getAgentDir } from "@earendil-works/pi-coding-agen
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { fuzzyFilter } from "@earendil-works/pi-tui";
 import { ConfigStore } from "./prefs/config.ts";
-import { IMPORT_REQUEST_PREFIX, markImportOffered, offerAgentImport } from "./prefs/agent-import.ts";
+import {
+  IMPORT_REQUEST_PREFIX,
+  markImportOffered,
+  offerAgentImport,
+} from "./prefs/agent-import.ts";
 import { ThreadManager } from "./orch/manager.ts";
 import { loadManagerSettings } from "./prefs/settings.ts";
 import { configureAgents } from "./ui/settings-ui.ts";
@@ -15,7 +19,9 @@ import { subagentPrompt } from "./orch/prompt.ts";
 import { agentTools } from "./orch/tools.ts";
 import { editAgentTypes, updateWidget } from "./ui/ui.ts";
 import { canOpenDialog, dialogMenu } from "./ui/dialog.ts";
-import type { SavedThread, ThreadEvent } from "./types.ts";
+import type { SavedThread, ThreadEvent, ThreadView } from "./types.ts";
+import { COST_ENTRY, CostLedger } from "./orch/cost-ledger.ts";
+import { CostFooterController } from "./ui/cost-footer.ts";
 
 const REGISTRY_ENTRY = "pi-subagent:registry:v1";
 const ROOT_MAILBOX_ENTRY = "pi-subagent:root-mailbox:v1";
@@ -39,6 +45,17 @@ export default function piSubagent(pi: ExtensionAPI): void {
     includeProject: false,
   });
   let manager: ThreadManager | undefined;
+  let costLedger = new CostLedger();
+  const costFooter = new CostFooterController(
+    pi,
+    () => costLedger.totalUsd,
+    () => limits.nerdFontIcons,
+  );
+  const refreshCostFooter = (ctx: ExtensionContext) => costFooter.refresh(ctx);
+  const rollupCost = (thread: ThreadView) => {
+    costLedger.settle(thread, (record) => pi.appendEntry(COST_ENTRY, record));
+    if (context) refreshCostFooter(context);
+  };
   let limits = loadManagerSettings({
     cwd: process.cwd(),
     agentDir: getAgentDir(),
@@ -51,6 +68,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
       includeProject: ctx.isProjectTrusted(),
     });
     limits = loaded.settings;
+    refreshCostFooter(ctx);
     return loaded.diagnostics;
   };
   let generation = 0;
@@ -92,32 +110,61 @@ export default function piSubagent(pi: ExtensionAPI): void {
     if (existingFactory && existingFactory !== navigationEditorFactory) return;
     // The host only transfers raw text, not cursor/undo/expanded-paste state.
     if (ctx.ui.getEditorText?.()) return;
-    const history = buildSessionContext(ctx.sessionManager.getBranch()).messages.flatMap((message) => {
-      if (message.role !== "user") return [];
-      const content = message.content;
-      return [typeof content === "string" ? content : content
-        .filter((block) => block.type === "text").map((block) => block.text).join("")];
-    });
+    const history = buildSessionContext(ctx.sessionManager.getBranch()).messages.flatMap(
+      (message) => {
+        if (message.role !== "user") return [];
+        const content = message.content;
+        return [
+          typeof content === "string"
+            ? content
+            : content
+                .filter((block) => block.type === "text")
+                .map((block) => block.text)
+                .join(""),
+        ];
+      },
+    );
     navigationEditorFactory = (tui, theme, keys) => {
       const editor = new AgentNavigationEditor(tui, theme, keys, {
         // Initial startup hydrates after session_start; replacement editors do not.
         initialHistory: seedHistory ? history : undefined,
         generation: () => navigationGeneration,
-        canOpen: () => manager !== undefined && context?.mode === "tui" &&
-          limits.subagentMode !== "off" && !navigation.isOpen &&
-          manager.list().some((thread) => thread.path !== "/root" &&
-            (thread.state === "starting" || thread.state === "running")),
-        openTree: () => manager && context
-          ? navigation.open(context, manager.scope("/root"), undefined, limits.nerdFontIcons, limits.loaderStyle) : undefined,
-        canCollapse: () => manager !== undefined && context?.mode === "tui" &&
-          limits.subagentMode !== "off" && !navigation.isOpen && !widgetCollapsed &&
-          limits.widgetMode === "full" && widgetThreads().some((thread) => thread.path !== "/root"),
+        canOpen: () =>
+          manager !== undefined &&
+          context?.mode === "tui" &&
+          limits.subagentMode !== "off" &&
+          !navigation.isOpen &&
+          manager
+            .list()
+            .some(
+              (thread) =>
+                thread.path !== "/root" &&
+                (thread.state === "starting" || thread.state === "running"),
+            ),
+        openTree: () =>
+          manager && context
+            ? navigation.open(
+                context,
+                manager.scope("/root"),
+                undefined,
+                limits.nerdFontIcons,
+                limits.loaderStyle,
+              )
+            : undefined,
+        canCollapse: () =>
+          manager !== undefined &&
+          context?.mode === "tui" &&
+          limits.subagentMode !== "off" &&
+          !navigation.isOpen &&
+          !widgetCollapsed &&
+          limits.widgetMode === "full" &&
+          widgetThreads().some((thread) => thread.path !== "/root"),
         collapseWidget: () => {
           widgetCollapsed = true;
           if (context) refreshWidget(context);
         },
-        onError: (error) => context?.ui.notify(
-          error instanceof Error ? error.message : String(error), "error"),
+        onError: (error) =>
+          context?.ui.notify(error instanceof Error ? error.message : String(error), "error"),
       });
       navigationEditor = editor;
       return editor;
@@ -131,7 +178,10 @@ export default function piSubagent(pi: ExtensionAPI): void {
     // Migration requires the root's file tools and must not delegate source prompts.
     if (limits.subagentMode === "orchestration") {
       if (!firstRun)
-        ctx.ui.notify("Agent import requires Opportunistic mode. Change Subagent Mode in /agents settings.", "info");
+        ctx.ui.notify(
+          "Agent import requires Opportunistic mode. Change Subagent Mode in /agents settings.",
+          "info",
+        );
       return;
     }
     if (importInProgress) return;
@@ -151,12 +201,15 @@ export default function piSubagent(pi: ExtensionAPI): void {
     if (!manager) throw new Error("Subagent threads are not initialized; start a Pi session first");
     return manager;
   };
-  const widgetThreads = () => requireManager().list().filter((thread) => {
-    // Resuming a retained session makes it visible for this task, even after it settles again.
-    if (thread.state === "starting" || thread.state === "running")
-      hiddenWidgetThreads.delete(thread.path);
-    return !hiddenWidgetThreads.has(thread.path);
-  });
+  const widgetThreads = () =>
+    requireManager()
+      .list()
+      .filter((thread) => {
+        // Resuming a retained session makes it visible for this task, even after it settles again.
+        if (thread.state === "starting" || thread.state === "running")
+          hiddenWidgetThreads.delete(thread.path);
+        return !hiddenWidgetThreads.has(thread.path);
+      });
   const requireContext = () => {
     if (!context) throw new Error("No active Pi session");
     return context;
@@ -203,18 +256,28 @@ export default function piSubagent(pi: ExtensionAPI): void {
     const currentGeneration = generation;
     wakeTimer = setTimeout(() => {
       wakeTimer = undefined;
-      if (currentGeneration !== generation || context?.sessionManager !== ctx.sessionManager ||
-          limits.subagentMode === "off" || suspendingSummaries || !wakeRequested) return;
+      if (
+        currentGeneration !== generation ||
+        context?.sessionManager !== ctx.sessionManager ||
+        limits.subagentMode === "off" ||
+        suspendingSummaries ||
+        !wakeRequested
+      )
+        return;
       if (ctx.isIdle() === false) return; // agent_settled reschedules
       wakeRequested = false;
       try {
-        pi.sendMessage({
-          customType: ROOT_WAKE_MESSAGE,
-          content: "Asynchronous subagent event(s) arrived (see the preceding subagent notifications). " +
-            "React: collect results with agent_output, and for a timeout event decide to wait, steer, stop or re-arm with agent_steer timeoutMs.",
-          display: false,
-          details: {},
-        }, { triggerTurn: true });
+        pi.sendMessage(
+          {
+            customType: ROOT_WAKE_MESSAGE,
+            content:
+              "Asynchronous subagent event(s) arrived (see the preceding subagent notifications). " +
+              "React: collect results with agent_output, and for a timeout event decide to wait, steer, stop or re-arm with agent_steer timeoutMs.",
+            display: false,
+            details: {},
+          },
+          { triggerTurn: true },
+        );
       } catch (error) {
         warnDelivery(error);
       }
@@ -222,45 +285,74 @@ export default function piSubagent(pi: ExtensionAPI): void {
   };
   const pendingSummaries = (ctx: ExtensionContext) => {
     const entries = ctx.sessionManager.getBranch();
-    const summarized = new Set(entries.flatMap((entry) => {
-      if (entry.type !== "custom_message" || entry.customType !== ROOT_SUMMARY_MESSAGE) return [];
-      const ids = (entry.details as { mailboxIds?: unknown } | undefined)?.mailboxIds;
-      return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
-    }));
+    const summarized = new Set(
+      entries.flatMap((entry) => {
+        if (entry.type !== "custom_message" || entry.customType !== ROOT_SUMMARY_MESSAGE) return [];
+        const ids = (entry.details as { mailboxIds?: unknown } | undefined)?.mailboxIds;
+        return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
+      }),
+    );
     return entries.flatMap((entry) => {
       if (entry.type !== "custom" || entry.customType !== ROOT_MAILBOX_ENTRY) return [];
       const notification = entry.data as RootNotification | undefined;
       return notification?.rootSessionId === ctx.sessionManager.getSessionId() &&
-        notification.finalRecap === true && typeof notification.content === "string" &&
+        notification.finalRecap === true &&
+        typeof notification.content === "string" &&
         typeof notification.details?.mailboxId === "string" &&
-        !summarized.has(notification.details.mailboxId) ? [notification] : [];
+        !summarized.has(notification.details.mailboxId)
+        ? [notification]
+        : [];
     });
   };
   const scheduleSummary = (ctx: ExtensionContext) => {
-    if (!limits.finalRecap || limits.subagentMode === "off" || summaryRunning || suspendingSummaries ||
-        summaryTimer !== undefined || ctx.isIdle() === false || (manager?.outstandingAsync() ?? 0) > 0 || !pendingSummaries(ctx).length) return;
+    if (
+      !limits.finalRecap ||
+      limits.subagentMode === "off" ||
+      summaryRunning ||
+      suspendingSummaries ||
+      summaryTimer !== undefined ||
+      ctx.isIdle() === false ||
+      (manager?.outstandingAsync() ?? 0) > 0 ||
+      !pendingSummaries(ctx).length
+    )
+      return;
     const currentGeneration = generation;
     // Coalesce siblings finishing together and leave the settlement boundary before
     // starting a new turn. Recheck settings/session/idle state after the deferral.
     summaryTimer = setTimeout(() => {
       summaryTimer = undefined;
-      if (currentGeneration !== generation || context?.sessionManager !== ctx.sessionManager ||
-          !limits.finalRecap || limits.subagentMode === "off" || suspendingSummaries || ctx.isIdle() === false ||
-          (manager?.outstandingAsync() ?? 0) > 0) return;
+      if (
+        currentGeneration !== generation ||
+        context?.sessionManager !== ctx.sessionManager ||
+        !limits.finalRecap ||
+        limits.subagentMode === "off" ||
+        suspendingSummaries ||
+        ctx.isIdle() === false ||
+        (manager?.outstandingAsync() ?? 0) > 0
+      )
+        return;
       const notifications = pendingSummaries(ctx);
       if (!notifications.length) return;
       summaryRunning = true;
       try {
-        pi.sendMessage({
-          customType: ROOT_SUMMARY_MESSAGE,
-          content: "Summarize the newly finished asynchronous subagent results for the user. " +
-            "Their results are in the preceding subagent notifications; use agent_output if more detail is needed. " +
-            "Give a concise main-thread answer covering results and any failures. " +
-            "Do not spawn or resume agents solely to summarize.\nAgents: " +
-            [...new Set(notifications.map((notification) => notification.details.path))].join(", "),
-          display: false,
-          details: { mailboxIds: notifications.map((notification) => notification.details.mailboxId) },
-        }, { triggerTurn: true });
+        pi.sendMessage(
+          {
+            customType: ROOT_SUMMARY_MESSAGE,
+            content:
+              "Summarize the newly finished asynchronous subagent results for the user. " +
+              "Their results are in the preceding subagent notifications; use agent_output if more detail is needed. " +
+              "Give a concise main-thread answer covering results and any failures. " +
+              "Do not spawn or resume agents solely to summarize.\nAgents: " +
+              [...new Set(notifications.map((notification) => notification.details.path))].join(
+                ", ",
+              ),
+            display: false,
+            details: {
+              mailboxIds: notifications.map((notification) => notification.details.mailboxId),
+            },
+          },
+          { triggerTurn: true },
+        );
       } catch (error) {
         summaryRunning = false;
         warnDelivery(error);
@@ -303,7 +395,8 @@ export default function piSubagent(pi: ExtensionAPI): void {
     if (event.kind === "change" || event.kind === "metrics") return;
     const thread = event.thread;
     const fmtMs = (ms: number) => `${Math.round(ms / 1000)}s`;
-    const elapsed = (thread.elapsedMs ?? 0) + (thread.startedAt ? Date.now() - thread.startedAt : 0);
+    const elapsed =
+      (thread.elapsedMs ?? 0) + (thread.startedAt ? Date.now() - thread.startedAt : 0);
     const message =
       event.kind === "update"
         ? `Progress from ${thread.path}: ${event.message}`
@@ -313,13 +406,17 @@ export default function piSubagent(pi: ExtensionAPI): void {
             `tokens: ${thread.inputTokens ?? 0} in / ${thread.outputTokens ?? 0} out.\n` +
             `Recent output:\n${event.recentOutput || "(none yet)"}\n` +
             "Decide: agent_steer with timeoutMs only (no message) to be notified again later without disturbing it, agent_wait for it, agent_steer to redirect, agent_stop to cancel, or let it continue."
-        : thread.state === "completed"
-          ? `Agent ${thread.path} completed. Final answer:\n${thread.output?.slice(0, 16000) ?? "(no text)"}${(thread.output?.length ?? 0) > 16000 ? "\n[Output truncated; use agent_output for more.]" : ""}`
-          : `Agent ${thread.path} is ${thread.state}: ${thread.status}. ${thread.state === "paused" ? "No answer handback; send input to resume the same session." : "Session retained for further input."}`;
+          : thread.state === "completed"
+            ? `Agent ${thread.path} completed. Final answer:\n${thread.output?.slice(0, 16000) ?? "(no text)"}${(thread.output?.length ?? 0) > 16000 ? "\n[Output truncated; use agent_output for more.]" : ""}`
+            : `Agent ${thread.path} is ${thread.state}: ${thread.status}. ${thread.state === "paused" ? "No answer handback; send input to resume the same session." : "Session retained for further input."}`;
     try {
       if (event.recipient === "/root") {
-        const recap = limits.finalRecap && !suspendingSummaries && event.kind === "settled" &&
-          event.async && ["completed", "failed", "stopped"].includes(thread.state);
+        const recap =
+          limits.finalRecap &&
+          !suspendingSummaries &&
+          event.kind === "settled" &&
+          event.async &&
+          ["completed", "failed", "stopped"].includes(thread.state);
         const notification: RootNotification = {
           rootSessionId: requireContext().sessionManager.getSessionId(),
           content: message,
@@ -327,8 +424,9 @@ export default function piSubagent(pi: ExtensionAPI): void {
           // another turn. Completions during a summary do need a follow-up summary.
           finalRecap: recap,
           // Recap mode defers the turn until every outstanding async agent has reported.
-          trigger: !suspendingSummaries && (event.kind === "timeout" ||
-            (event.kind === "settled" && event.async && !recap)),
+          trigger:
+            !suspendingSummaries &&
+            (event.kind === "timeout" || (event.kind === "settled" && event.async && !recap)),
           details: {
             mailboxId: randomUUID(),
             path: thread.path,
@@ -383,8 +481,15 @@ export default function piSubagent(pi: ExtensionAPI): void {
   const refreshWidget = (ctx: ExtensionContext) => {
     if (limits.subagentMode === "off") {
       if (ctx.hasUI) ctx.ui.setWidget("pi-subagent", undefined);
-    } else updateWidget(ctx, widgetThreads(), widgetCollapsed ? "minimal" : limits.widgetMode,
-      limits.nerdFontIcons, rootTurnEnded, limits.loaderStyle);
+    } else
+      updateWidget(
+        ctx,
+        widgetThreads(),
+        widgetCollapsed ? "minimal" : limits.widgetMode,
+        limits.nerdFontIcons,
+        rootTurnEnded,
+        limits.loaderStyle,
+      );
   };
   pi.on("agent_start", async (_event, ctx) => {
     // A new task must not resurrect the previous task's settled agents. Automatic
@@ -422,7 +527,11 @@ export default function piSubagent(pi: ExtensionAPI): void {
     };
   });
 
-  const attachSession = async (ctx: ExtensionContext, installEditor = false, seedHistory = true) => {
+  const attachSession = async (
+    ctx: ExtensionContext,
+    installEditor = false,
+    seedHistory = true,
+  ) => {
     cancelSummary();
     const token = ++generation;
     closeNavigation(installEditor);
@@ -431,6 +540,9 @@ export default function piSubagent(pi: ExtensionAPI): void {
     if (manager) await manager.shutdown();
     inheritedTools.reset();
     context = ctx;
+    costLedger = new CostLedger();
+    costLedger.restore(ctx.sessionManager.getEntries());
+    costFooter.reset(ctx);
     rootTurnEnded = false;
     if (installEditor) {
       widgetCollapsed = false;
@@ -459,6 +571,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
         if (token !== generation) return;
         refreshWidget(requireContext());
         if (event.kind !== "metrics") persist();
+        if (event.kind === "settled") rollupCost(event.thread);
         delivery(event);
       },
     });
@@ -486,6 +599,8 @@ export default function piSubagent(pi: ExtensionAPI): void {
           ctx.ui.notify(`Could not restore subagent registry: ${String(error)}`, "error");
       }
     }
+    // Recover a persisted settlement whose ledger append was interrupted, including runs paused on reload.
+    for (const saved of instance.saved()) rollupCost({ ...saved.view, updatedAt: Date.now() });
     restoreRootMailbox(ctx);
     refreshWidget(ctx);
     const diagnostics = [...store.diagnostics, ...settingsDiagnostics];
@@ -518,6 +633,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
   pi.on("session_before_fork", stopWorkingThreads);
   pi.on("session_shutdown", async () => {
     cancelSummary();
+    costFooter.clear();
     generation++;
     closeNavigation(true);
     await manager?.shutdown();
@@ -596,10 +712,15 @@ export default function piSubagent(pi: ExtensionAPI): void {
         if (!canOpenDialog(ctx)) return;
         closeNavigation();
         const warning = `${candidates.length} completed agent${candidates.length === 1 ? "" : "s"} will be reaped.\nYou will not be able to resume them anymore.`;
-        const choice = await dialogMenu(ctx, "Reap completed agents?", [
-          { id: "confirm", label: "Confirm", help: warning },
-          { id: "cancel", label: "Cancel", help: warning },
-        ], { selectedId: "cancel" });
+        const choice = await dialogMenu(
+          ctx,
+          "Reap completed agents?",
+          [
+            { id: "confirm", label: "Confirm", help: warning },
+            { id: "cancel", label: "Cancel", help: warning },
+          ],
+          { selectedId: "cancel" },
+        );
         if (choice !== "confirm" || manager !== current) return;
         const reaped = current.reap(candidates);
         persist();
@@ -611,7 +732,13 @@ export default function piSubagent(pi: ExtensionAPI): void {
           "info",
         );
       } else if (command === "tree") {
-        await navigation.open(ctx, requireManager().scope("/root"), rest.join(" ") || undefined, limits.nerdFontIcons, limits.loaderStyle);
+        await navigation.open(
+          ctx,
+          requireManager().scope("/root"),
+          rest.join(" ") || undefined,
+          limits.nerdFontIcons,
+          limits.loaderStyle,
+        );
       } else
         ctx.ui.notify(
           "Usage: /agents [tree [path] | settings | types | import | reload | reap]",

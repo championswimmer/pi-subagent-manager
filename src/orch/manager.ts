@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type {
   AgentDriver,
@@ -30,10 +31,11 @@ interface Record {
   started?: Promise<void>;
   sessionLeafId?: string | null;
   /** Last authoritative cumulative usage applied from the current driver. */
-  usageCursor?: { input: number; output: number };
+  usageCursor?: { input: number; output: number; costUsd?: number };
   /** In-progress message usage. Shown live, never persisted. */
   liveInputTokens?: number;
   liveOutputTokens?: number;
+  liveCostUsd?: number;
   /** Detached (spawned with wait:false): completion is reported as an event. */
   async?: boolean;
   timeoutTimer?: ReturnType<typeof setTimeout>;
@@ -106,11 +108,14 @@ export class ThreadManager {
     const eligible = new Set(
       records
         .filter((record) => !only || only.includes(record.view.path))
-        .filter((record) => record.view.state === "completed" && (!record.initializing || record.driver))
-        .filter((record) =>
-          !records.some(
-            (other) => active(other.view) && isDescendant(record.view.path, other.view.path),
-          ),
+        .filter(
+          (record) => record.view.state === "completed" && (!record.initializing || record.driver),
+        )
+        .filter(
+          (record) =>
+            !records.some(
+              (other) => active(other.view) && isDescendant(record.view.path, other.view.path),
+            ),
         )
         .map((record) => record.view.path),
     );
@@ -198,6 +203,8 @@ export class ThreadManager {
         type: current.type,
         color: current.color,
         icon: current.icon,
+        model: current.model,
+        thinkingLevel: current.thinkingLevel,
         state: current.state,
         task: current.task,
         status: current.status,
@@ -210,6 +217,8 @@ export class ThreadManager {
         elapsedMs: record.view.elapsedMs ?? 0,
         inputTokens: record.view.inputTokens ?? 0,
         outputTokens: record.view.outputTokens ?? 0,
+        costUsd: record.view.costUsd,
+        costId: record.view.costId,
       };
       const sessionLeafId = this.sessionLeafId(record);
       if (sessionLeafId !== undefined) view.sessionLeafId = sessionLeafId;
@@ -240,6 +249,9 @@ export class ThreadManager {
       const { sessionLeafId, ...storedView } = savedView;
       const view: ThreadView = {
         ...storedView,
+        costId:
+          storedView.costId ??
+          `legacy:${storedView.sessionFile ?? `${storedView.path}:${storedView.createdAt}`}`,
         icon: storedView.icon ?? item.definition.icon,
         updatedAt: Date.now(),
         elapsedMs: storedView.elapsedMs ?? 0,
@@ -333,6 +345,7 @@ export class ThreadManager {
         task: args.task,
         status: "Starting",
         createdAt: now,
+        costId: randomUUID(),
         updatedAt: now,
         elapsedMs: 0,
         inputTokens: 0,
@@ -660,6 +673,7 @@ export class ThreadManager {
         this.freezeElapsed(record);
         record.liveInputTokens = 0;
         record.liveOutputTokens = 0;
+        record.liveCostUsd = undefined;
         markStarted(); // Failed/cancelled initialization must also release callers waiting to steer.
         this.touch(record);
         if (!this.disposed && epoch === this.epoch)
@@ -699,6 +713,17 @@ export class ThreadManager {
             signal,
             shouldPause: () => record.pauseRequested,
             onEvent: (event) => {
+              if (event.kind === "settings") {
+                if (
+                  record.view.model !== event.model ||
+                  record.view.thinkingLevel !== event.thinkingLevel
+                ) {
+                  record.view.model = event.model;
+                  record.view.thinkingLevel = event.thinkingLevel;
+                  this.touch(record);
+                }
+                return;
+              }
               if (event.kind === "usage") {
                 this.applyUsage(record, event);
                 return;
@@ -730,6 +755,7 @@ export class ThreadManager {
           record.usageCursor = { input: 0, output: 0 };
           record.liveInputTokens = 0;
           record.liveOutputTokens = 0;
+          record.liveCostUsd = undefined;
           record.view.sessionFile = driver.sessionFile;
           if (driver.sessionLeafId !== undefined) record.sessionLeafId = driver.sessionLeafId;
           this.touch(record);
@@ -806,15 +832,25 @@ export class ThreadManager {
   /** Fold driver-cumulative usage into persisted totals. Partials only refresh the live view. */
   private applyUsage(
     record: Record,
-    event: { inputTokens: number; outputTokens: number; partial?: boolean },
+    event: { inputTokens: number; outputTokens: number; costUsd?: number; partial?: boolean },
   ): void {
     const cursor = record.usageCursor ?? { input: 0, output: 0 };
+    const costUsd =
+      event.costUsd !== undefined && Number.isFinite(event.costUsd) && event.costUsd >= 0
+        ? Math.max(0, event.costUsd - (cursor.costUsd ?? 0))
+        : undefined;
     if (event.partial) {
       const input = Math.max(0, event.inputTokens - cursor.input);
       const output = Math.max(0, event.outputTokens - cursor.output);
-      if (input === record.liveInputTokens && output === record.liveOutputTokens) return;
+      if (
+        input === record.liveInputTokens &&
+        output === record.liveOutputTokens &&
+        costUsd === record.liveCostUsd
+      )
+        return;
       record.liveInputTokens = input;
       record.liveOutputTokens = output;
+      record.liveCostUsd = costUsd;
       if (!this.disposed) this.emit({ kind: "metrics", thread: this.view(record) });
       return;
     }
@@ -822,9 +858,15 @@ export class ThreadManager {
       (record.view.inputTokens ?? 0) + Math.max(0, event.inputTokens - cursor.input);
     record.view.outputTokens =
       (record.view.outputTokens ?? 0) + Math.max(0, event.outputTokens - cursor.output);
-    record.usageCursor = { input: event.inputTokens, output: event.outputTokens };
+    if (costUsd !== undefined) record.view.costUsd = (record.view.costUsd ?? 0) + costUsd;
+    record.usageCursor = {
+      input: event.inputTokens,
+      output: event.outputTokens,
+      costUsd: event.costUsd ?? cursor.costUsd,
+    };
     record.liveInputTokens = 0;
     record.liveOutputTokens = 0;
+    record.liveCostUsd = undefined;
     this.touch(record);
   }
   private freezeElapsed(record: Record): void {
@@ -878,6 +920,7 @@ export class ThreadManager {
     if (record.liveInputTokens) view.inputTokens = (view.inputTokens ?? 0) + record.liveInputTokens;
     if (record.liveOutputTokens)
       view.outputTokens = (view.outputTokens ?? 0) + record.liveOutputTokens;
+    if (record.liveCostUsd !== undefined) view.costUsd = (view.costUsd ?? 0) + record.liveCostUsd;
     return view;
   }
   private record(path: string): Record {

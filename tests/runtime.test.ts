@@ -666,6 +666,12 @@ test("isolated real SDK driver without credentials", async (t) => {
         await driver.prompt("task");
         assert.equal(driver.output(), "child answer");
         assertModel("runtime-test/model/with/slashes");
+        assert.ok(
+          events.some(
+            (event) =>
+              event.kind === "settings" && event.model === "runtime-test/model/with/slashes",
+          ),
+        );
         const system = requests.at(-1)!.system;
         for (const marker of [
           "ONLY CHILD PROMPT",
@@ -1067,7 +1073,10 @@ test("isolated real SDK driver without credentials", async (t) => {
       assert.ok(
         events.every(
           (event) =>
-            event.kind === "usage" || event.kind === "checkpoint" || event.text.length <= 1000,
+            event.kind === "settings" ||
+            event.kind === "usage" ||
+            event.kind === "checkpoint" ||
+            event.text.length <= 1000,
         ),
       );
     });
@@ -1157,7 +1166,13 @@ test("isolated real SDK driver without credentials", async (t) => {
         cacheRead,
         cacheWrite,
         totalTokens: input + output + cacheRead + cacheWrite,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: (input + output + cacheRead + cacheWrite) / 1000,
+        },
       });
       const assistant = (
         tokens: AssistantMessage["usage"],
@@ -1180,12 +1195,15 @@ test("isolated real SDK driver without credentials", async (t) => {
         };
       };
       let rows: [number, number, boolean][] = [];
+      let costs: number[] = [];
       const metricsOptions = (overrides: Partial<DriverOptions>) =>
         options({
           path: "/root/metrics",
           onEvent: (event) => {
-            if (event.kind === "usage")
+            if (event.kind === "usage") {
               rows.push([event.inputTokens, event.outputTokens, event.partial ?? false]);
+              costs.push(Number(event.costUsd?.toFixed(3)));
+            }
           },
           ...overrides,
         });
@@ -1209,22 +1227,27 @@ test("isolated real SDK driver without credentials", async (t) => {
         [7, 2, true],
         [11, 4, false],
       ]);
+      assert.deepEqual(costs, [0.006, 0.009, 0.015]);
 
       rows = [];
+      costs = [];
       const failed = assistant(usage(2, 1, 1, 0), "error");
       script(failed, { type: "error", reason: "error", error: failed });
       await assert.rejects(driver.prompt("fail"), /model failed/);
       assert.deepEqual(rows, [[14, 5, false]]);
+      assert.deepEqual(costs, [0.019]);
 
       // A reopened driver reports only usage produced after reopening.
       const file = driver.sessionFile!;
       driver.dispose();
       rows = [];
+      costs = [];
       const reopened = await create(metricsOptions({ sessionFile: file, inherited: [] }));
       const resumed = assistant(usage(3, 2));
       script(resumed, { type: "done", reason: "stop", message: resumed });
       await reopened.prompt("resume");
       assert.deepEqual(rows, [[3, 2, false]]);
+      assert.deepEqual(costs, [0.005]);
     });
 
     await t.test(

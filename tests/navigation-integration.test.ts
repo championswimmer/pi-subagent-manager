@@ -94,6 +94,8 @@ async function fixture(
   let widget: { render(width: number): string[]; dispose?(): void } | undefined;
   let command: any;
   const pi = {
+    getCommands: () => [],
+    events: { emit() {} },
     on: (event: string, handler: Function) => hooks.set(event, handler),
     registerTool() {},
     registerCommand: (_name: string, definition: any) => { command = definition; },

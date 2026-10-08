@@ -49,6 +49,9 @@ export interface ThreadView {
   type: string;
   color?: string;
   icon?: string;
+  /** Actual runtime selection, not the type's model preferences. */
+  model?: string;
+  thinkingLevel?: ThinkingLevel;
   state: ThreadState;
   task: string;
   status: string;
@@ -67,8 +70,13 @@ export interface ThreadView {
   inputTokens?: number;
   /** Cumulative output tokens. Live views include the in-progress message. */
   outputTokens?: number;
+  /** Cumulative estimated USD cost for this agent's own messages. */
+  costUsd?: number;
+  /** Stable lifetime identity for cost accounting, retained across resumes/reloads. */
+  costId?: string;
 }
 export type DriverEvent =
+  | { kind: "settings"; model: string; thinkingLevel: ThinkingLevel }
   | { kind: "activity" | "error"; text: string }
   | {
       kind: "checkpoint";
@@ -81,6 +89,8 @@ export type DriverEvent =
       /** Cumulative own-assistant tokens for this driver instance, excluding inherited history. */
       inputTokens: number;
       outputTokens: number;
+      /** Cumulative estimated USD cost, when reported by the runtime. */
+      costUsd?: number;
       /** Streaming message_update snapshot. Omit for authoritative message_end. */
       partial?: boolean;
     };
@@ -144,6 +154,8 @@ export interface SavedThreadView {
   type: string;
   color?: string;
   icon?: string;
+  model?: string;
+  thinkingLevel?: ThinkingLevel;
   state: ThreadState;
   task: string;
   status: string;
@@ -157,6 +169,8 @@ export interface SavedThreadView {
   lastStartedAt?: number;
   inputTokens?: number;
   outputTokens?: number;
+  costUsd?: number;
+  costId?: string;
 }
 export interface SavedThread {
   view: SavedThreadView;
@@ -189,7 +203,13 @@ export type ThreadEvent =
   | { kind: "update"; thread: ThreadView; message: string; recipient: string }
   | { kind: "settled"; thread: ThreadView; recipient: string; async: boolean }
   /** A spawn timeout elapsed while the child is still running. The child is NOT stopped. */
-  | { kind: "timeout"; thread: ThreadView; recipient: string; timeoutMs: number; recentOutput: string };
+  | {
+      kind: "timeout";
+      thread: ThreadView;
+      recipient: string;
+      timeoutMs: number;
+      recentOutput: string;
+    };
 export interface ManagerOptions {
   createDriver: DriverFactory;
   rootSnapshot(): AgentMessage[];

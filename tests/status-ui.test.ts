@@ -359,7 +359,7 @@ test("status dialog renders live, sanitized hierarchy and keeps the selected pat
   const updated = dialog.render(100);
   const selected = selectedLine(updated);
   assert.ok(showsPath(selected, "/root/run/pause"), "selection follows path, not index");
-  assert.match(selected, /Still waiting/);
+  assert.match(plain(updated), /Still waiting/);
   assert.match(plain(updated), /\/root\/aaa/);
   assert.match(plain(updated), /Read the diff/);
   assert.match(plain(updated), /1m5s ↑1\.2k ↓34/);
@@ -617,10 +617,13 @@ test("showAgentTree uses one dialog session, shows live updates, and returns to 
 
 test("tree inspection steers a nested agent in place and preserves tree navigation", async () => {
   const path = "/root/team/worker";
-  const tree = launchTree(() => [
-    thread("/root/team", { parent: "/root" }),
-    thread(path, { parent: "/root/team", state: "paused" }),
-  ], path);
+  const tree = launchTree(
+    () => [
+      thread("/root/team", { parent: "/root" }),
+      thread(path, { parent: "/root/team", state: "paused" }),
+    ],
+    path,
+  );
   try {
     const dialog = await until(() => tree.mounted[0], "tree");
     assert.ok(showsPath(selectedLine(dialog.render(100)), path));
@@ -629,7 +632,10 @@ test("tree inspection steers a nested agent in place and preserves tree navigati
     assert.ok(viewer instanceof LiveAgentView);
     viewer.handleInput("continue with the failing tests");
     viewer.handleInput(ENTER);
-    await until(() => plain(viewer.render(100)).includes("Steering sent") ? true : undefined, "steer completion");
+    await until(
+      () => (plain(viewer.render(100)).includes("Steering sent") ? true : undefined),
+      "steer completion",
+    );
     assert.deepEqual(tree.steers, [{ path, message: "continue with the failing tests" }]);
     assert.equal(tree.mounted.at(-1), viewer, "steering does not switch sessions or views");
     assert.equal(tree.selectTitles.length, 0, "no extra prompt dialog is required");
@@ -958,11 +964,41 @@ test("agent tree shows the type badge and mutes inactive agents with the pi mute
     thread("/root/a", { parent: "/root", type: "coder", state: "running" }),
     thread("/root/b", { parent: "/root", type: "reviewer", state: "stopped" }),
   ];
-  const dialog = new StatusDialog(host(24, () => {}), tagged, service(() => threads), () => {});
+  const dialog = new StatusDialog(
+    host(24, () => {}),
+    tagged,
+    service(() => threads),
+    () => {},
+  );
   const out = dialog.render(100).join("\n");
-  assert.match(out, /\[coder\] \/root\/a/);
+  assert.match(out, /\[coder\]<text>  \/root\/a/);
   assert.match(out, /<muted>[^\n]*reviewer[^\n]*\/root\/b[^\n]*<\/muted>/);
   assert.equal(out.includes("[reviewer]"), false);
+});
+test("agent tree uses two lines for model identity and activity with metrics", () => {
+  const threads = [
+    thread("/root/a", {
+      parent: "/root",
+      model: "anthropic/claude-sonnet",
+      thinkingLevel: "high",
+      status: "Reading src/app.ts",
+      inputTokens: 120,
+      outputTokens: 45,
+      costUsd: 0.0123,
+    }),
+  ];
+  const dialog = new StatusDialog(
+    host(18, () => {}),
+    theme,
+    service(() => threads),
+    () => {},
+  );
+  const lines = dialog.render(100).map((line) => plain([line]));
+  const identityIndex = lines.findIndex((line) => line.includes("/root/a"));
+  assert.ok(identityIndex >= 0);
+  assert.match(lines[identityIndex], /anthropic\/claude-sonnet:high/);
+  assert.ok(!lines[identityIndex].includes("Reading src/app.ts"));
+  assert.match(lines[identityIndex + 1], /Reading src\/app.ts.*↑120 ↓45 \$0\.0123/);
 });
 
 test("Ctrl+C in the tree stops every live agent once via its top-most live ancestor and is hinted", async () => {

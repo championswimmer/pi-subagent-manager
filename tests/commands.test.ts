@@ -63,6 +63,8 @@ async function withCommands(
   let command: any;
   const tools = new Map<string, any>();
   const pi = {
+    getCommands: () => [],
+    events: { emit() {} },
     registerTool(tool: any) { tools.set(tool.name, tool); },
     registerCommand: (name: string, definition: any) => {
       assert.equal(name, "agents");
