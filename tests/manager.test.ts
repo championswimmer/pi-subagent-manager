@@ -480,13 +480,19 @@ test("partial usage is live-only; final usage persists and elapsed freezes acros
       gated({
         prompt: async () => {
           if (++run === 1) {
-            options.onEvent({ kind: "usage", inputTokens: 11, outputTokens: 2, partial: true });
+            options.onEvent({
+              kind: "usage",
+              inputTokens: 11,
+              outputTokens: 2,
+              costUsd: 0.01,
+              partial: true,
+            });
             await new Promise<void>((resolve) => (emitPartialDone = resolve));
-            options.onEvent({ kind: "usage", inputTokens: 15, outputTokens: 4 });
+            options.onEvent({ kind: "usage", inputTokens: 15, outputTokens: 4, costUsd: 0.02 });
             await new Promise<void>((resolve) => (releaseFinal = resolve));
             return;
           }
-          options.onEvent({ kind: "usage", inputTokens: 21, outputTokens: 7 });
+          options.onEvent({ kind: "usage", inputTokens: 21, outputTokens: 7, costUsd: 0.03 });
         },
         abort: async () => {
           emitPartialDone();
@@ -499,15 +505,18 @@ test("partial usage is live-only; final usage persists and elapsed freezes acros
   await tick();
   const live = manager.get("worker");
   assert.equal(live.inputTokens, 11);
+  assert.equal(live.costUsd, 0.01);
   assert.equal(typeof live.startedAt, "number");
   assert.ok(events.some((event) => event.kind === "metrics" && event.thread.inputTokens === 11));
   const persisted = manager.saved()[0].view;
   assert.equal(persisted.inputTokens, 0);
+  assert.equal(persisted.costUsd, undefined);
   assert.equal(Object.hasOwn(persisted, "startedAt"), false);
 
   emitPartialDone();
   await tick();
   assert.equal(manager.saved()[0].view.inputTokens, 15);
+  assert.equal(manager.saved()[0].view.costUsd, 0.02);
   await delay(20);
   releaseFinal();
   const completed = await manager.wait("/root", "worker");
@@ -522,6 +531,7 @@ test("partial usage is live-only; final usage persists and elapsed freezes acros
   await tick();
   const resumed = await manager.wait("/root", "worker");
   assert.equal(resumed.inputTokens, 21);
+  assert.equal(resumed.costUsd, 0.03);
   assert.ok((resumed.elapsedMs ?? 0) >= frozen);
   const snapshot = manager.saved();
   await manager.shutdown();
@@ -531,6 +541,7 @@ test("partial usage is live-only; final usage persists and elapsed freezes acros
   await delay(20);
   assert.equal(restored.manager.get("worker").elapsedMs, snapshot[0].view.elapsedMs);
   assert.equal(restored.manager.get("worker").inputTokens, 21);
+  assert.equal(restored.manager.get("worker").costUsd, 0.03);
   assert.equal(restored.manager.get("worker").startedAt, undefined);
   await restored.manager.shutdown();
 });
@@ -540,7 +551,7 @@ test("restore defaults missing metrics to zero and resumed usage adds to saved t
   for (const [view, expected] of [
     [{}, { elapsedMs: 0, inputTokens: 4, outputTokens: 2 }],
     [
-      { elapsedMs: 80, inputTokens: 10, outputTokens: 3 },
+      { elapsedMs: 80, inputTokens: 10, outputTokens: 3, costUsd: 0.05 },
       { elapsedMs: 80, inputTokens: 14, outputTokens: 5 },
     ],
   ] as const) {
@@ -549,7 +560,8 @@ test("restore defaults missing metrics to zero and resumed usage adds to saved t
       createDriver: async (options) =>
         gated({
           prompt: async () => {
-            emit = () => options.onEvent({ kind: "usage", inputTokens: 4, outputTokens: 2 });
+            emit = () =>
+              options.onEvent({ kind: "usage", inputTokens: 4, outputTokens: 2, costUsd: 0.01 });
           },
         }).driver,
     });
@@ -562,6 +574,8 @@ test("restore defaults missing metrics to zero and resumed usage adds to saved t
     const thread = manager.get("worker");
     assert.equal(thread.inputTokens, expected.inputTokens);
     assert.equal(thread.outputTokens, expected.outputTokens);
+    assert.ok(Math.abs(thread.costUsd! - (("costUsd" in view ? view.costUsd : 0) + 0.01)) < 1e-10);
+    assert.equal(manager.saved()[0].view.costUsd, thread.costUsd);
     assert.equal(manager.saved()[0].view.inputTokens, expected.inputTokens);
     assert.equal(thread.elapsedMs, expected.elapsedMs);
     await manager.shutdown();
@@ -731,11 +745,16 @@ test("reap preserves non-completed threads and their completed ancestors", async
     saved("/root/tree/child", { state: "completed", createdAt: 4 }),
   ]);
   assert.deepEqual(manager.reap(), [
-    "/root/older", "/root/parent/done", "/root/tree", "/root/tree/child", "/root/newer",
+    "/root/older",
+    "/root/parent/done",
+    "/root/tree",
+    "/root/tree/child",
+    "/root/newer",
   ]);
-  assert.deepEqual(manager.list().map((thread) => thread.path), [
-    "/root/parent", "/root/parent/paused", "/root/stopped", "/root/failed",
-  ]);
+  assert.deepEqual(
+    manager.list().map((thread) => thread.path),
+    ["/root/parent", "/root/parent/paused", "/root/stopped", "/root/failed"],
+  );
   await manager.shutdown();
 });
 
@@ -743,7 +762,12 @@ test("reap keeps completed children available to an active parent", async () => 
   const { manager, drivers } = fixture();
   await manager.spawn("/root", { path: "parent", type: "worker", task: "parent", wait: false });
   await tick();
-  await manager.spawn("/root/parent", { path: "child", type: "worker", task: "child", wait: false });
+  await manager.spawn("/root/parent", {
+    path: "child",
+    type: "worker",
+    task: "child",
+    wait: false,
+  });
   await tick();
   drivers.get("/root/parent/child")!.finish();
   await manager.wait("/root", "/root/parent/child");
@@ -776,7 +800,12 @@ test("confirmed reap revalidates resumed descendants and preserves their ancesto
   const { manager, drivers } = fixture();
   await manager.spawn("/root", { path: "parent", type: "worker", task: "parent", wait: false });
   await tick();
-  await manager.spawn("/root/parent", { path: "child", type: "worker", task: "child", wait: false });
+  await manager.spawn("/root/parent", {
+    path: "child",
+    type: "worker",
+    task: "child",
+    wait: false,
+  });
   await tick();
   drivers.get("/root/parent/child")!.finish();
   await manager.wait("/root", "/root/parent/child");

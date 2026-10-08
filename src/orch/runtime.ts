@@ -388,7 +388,10 @@ export function createDriverFactory(
     const rootActive = new Set(inherited.activeNames);
     // Preserve deferred/codemode exposure rather than flooding model declarations with MCP tools.
     const activeToolNames = toolNames.filter(
-      (name) => localNames.has(name) || rootActive.has(name) || options.type.tools?.allow?.includes(name) && toolFiltering === "allowed",
+      (name) =>
+        localNames.has(name) ||
+        rootActive.has(name) ||
+        (options.type.tools?.allow?.includes(name) && toolFiltering === "allowed"),
     );
     const customTools = [...options.tools, ...externalTools].filter(
       (tool) => allowed.has(tool.name) && tool.name !== "codemode" && tool.name !== "tool_search",
@@ -466,6 +469,11 @@ export function createDriverFactory(
         provider: currentModel.provider,
         id: currentModel.id,
         thinking: session.thinkingLevel,
+      });
+      options.onEvent({
+        kind: "settings",
+        model: modelIdentity(currentModel),
+        thinkingLevel: session.thinkingLevel,
       });
     };
     const assertScopedRequestAuthorized = (
@@ -606,6 +614,7 @@ export function createDriverFactory(
     // Subscribe after inherited/restored history is loaded; only new assistant events are counted.
     let settledInput = 0;
     let settledOutput = 0;
+    let settledCost: number | undefined;
     const countedUsage = new WeakSet<object>();
     let finalOutput = "";
     let abortPromise: Promise<void> | undefined;
@@ -616,7 +625,14 @@ export function createDriverFactory(
       const input = usage.input + usage.cacheRead + usage.cacheWrite;
       const output = usage.output;
       if (!Number.isFinite(input) || !Number.isFinite(output)) return;
-      return { input, output, reported: input + output + usage.totalTokens > 0 };
+      const total = usage.cost?.total;
+      const costUsd = Number.isFinite(total) && total >= 0 ? total : undefined;
+      return {
+        input,
+        output,
+        costUsd,
+        reported: input + output + usage.totalTokens > 0 || (costUsd ?? 0) > 0,
+      };
     };
 
     const ownership = sessionManager
@@ -657,6 +673,8 @@ export function createDriverFactory(
               kind: "usage",
               inputTokens: settledInput + usage.input,
               outputTokens: settledOutput + usage.output,
+              costUsd:
+                usage.costUsd === undefined ? settledCost : (settledCost ?? 0) + usage.costUsd,
               partial: true,
             });
         } else {
@@ -664,11 +682,13 @@ export function createDriverFactory(
           if (usage) {
             settledInput += usage.input;
             settledOutput += usage.output;
+            if (usage.costUsd !== undefined) settledCost = (settledCost ?? 0) + usage.costUsd;
           }
           options.onEvent({
             kind: "usage",
             inputTokens: settledInput,
             outputTokens: settledOutput,
+            costUsd: settledCost,
           });
           const text = event.message.content
             .filter((block) => block.type === "text")

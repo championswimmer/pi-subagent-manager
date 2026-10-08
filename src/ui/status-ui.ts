@@ -11,6 +11,7 @@ import {
   matchesKey,
   type Keybinding,
 } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
   canOpenDialog,
   DIALOG_OPTIONS,
@@ -27,7 +28,12 @@ import type { ThreadService } from "../types.ts";
 import type { LoaderStyle } from "../prefs/settings.ts";
 import { buildStatusTree, type StatusRow } from "./thread-tree.ts";
 import {
-  AGENT_PROGRESS_INTERVAL, agentProgressIcon, agentTypeBadge, agentTypeLabel, showThreads, threadMetrics,
+  AGENT_PROGRESS_INTERVAL,
+  agentProgressIcon,
+  agentTypeBadge,
+  agentTypeLabel,
+  showThreads,
+  threadMetrics,
 } from "./ui.ts";
 import { LiveAgentView, fillViewport, type AgentViewportState } from "./live-agent-view.ts";
 
@@ -132,9 +138,16 @@ export class StatusDialog {
 
   private syncRefresh(): void {
     if (!this.refreshing) return;
-    const delay = this.nerdFontIcons && this.service.list().some((thread) =>
-      thread.path !== ROOT && (thread.state === "starting" || thread.state === "running"))
-      ? AGENT_PROGRESS_INTERVAL : 1000;
+    const delay =
+      this.nerdFontIcons &&
+      this.service
+        .list()
+        .some(
+          (thread) =>
+            thread.path !== ROOT && (thread.state === "starting" || thread.state === "running"),
+        )
+        ? AGENT_PROGRESS_INTERVAL
+        : 1000;
     if (this.timer !== undefined && this.refreshDelay === delay) return;
     this.stopRefresh();
     this.refreshDelay = delay;
@@ -156,7 +169,10 @@ export class StatusDialog {
   private stopAll(): void {
     const live = this.service
       .list()
-      .filter((thread) => thread.path !== ROOT && (thread.state === "starting" || thread.state === "running"))
+      .filter(
+        (thread) =>
+          thread.path !== ROOT && (thread.state === "starting" || thread.state === "running"),
+      )
       .map((thread) => thread.path);
     const tops = live.filter((path) => !live.some((other) => path.startsWith(`${other}/`)));
     for (const path of tops) {
@@ -243,38 +259,65 @@ export class StatusDialog {
     this.host.requestRender();
   }
 
-  private line(row: StatusRow, selected: boolean): string {
+  private line(row: StatusRow, selected: boolean, width: number): string[] {
     const marker = row.hasChildren ? (this.collapsed.has(row.path) ? "▸ " : "▾ ") : "";
     const head = ` ${row.prefix}${selected ? "›" : " "} ${marker}`;
     const thread = row.thread;
     if (!thread) {
       const text = `${head}${label(row)}`;
-      return selected ? this.theme.fg("accent", text) : text;
+      return [selected ? this.theme.fg("accent", text) : text, ""];
     }
     const inactive = INACTIVE_STATES.has(thread.state);
-    if (inactive) {
-      // Completed fades furthest (dim); the state word keeps a theme hint for done/failed.
-      const base = thread.state === "completed" ? "dim" : "muted";
-      const hint =
-        thread.state === "completed" ? "success" : thread.state === "failed" ? "error" : base;
-      const state = dialogText(thread.state);
-      const path = dialogText(thread.path);
-      const status = dialogText(thread.status);
-      return [
-        this.theme.fg(selected ? "accent" : base, head),
-        this.theme.fg(base, `${agentTypeLabel(thread.type, thread.icon, this.nerdFontIcons, agentProgressIcon(thread, this.nerdFontIcons, Date.now(), true, this.loaderStyle))}  ${path}  `),
-        this.theme.fg(hint, state),
-        this.theme.fg(base, `  ${status}`),
-      ].join("");
-    }
-    const rest = [thread.path, thread.state, thread.status]
+    const base = thread.state === "completed" ? "dim" : "muted";
+    const hint =
+      thread.state === "completed" ? "success" : thread.state === "failed" ? "error" : base;
+    const progress = agentProgressIcon(
+      thread,
+      this.nerdFontIcons,
+      Date.now(),
+      true,
+      this.loaderStyle,
+    );
+    const badge = inactive
+      ? this.theme.fg(base, agentTypeLabel(thread.type, thread.icon, this.nerdFontIcons, progress))
+      : agentTypeBadge(
+          thread.type,
+          thread.color,
+          this.theme,
+          thread.icon,
+          this.nerdFontIcons,
+          progress,
+        );
+    const identity = [
+      thread.path,
+      `${thread.model ?? "model pending"}${thread.thinkingLevel ? `:${thread.thinkingLevel}` : ""}`,
+    ]
       .map((part) => dialogText(part))
       .join("  ");
-    const badge = agentTypeBadge(thread.type, thread.color, this.theme, thread.icon, this.nerdFontIcons,
-      agentProgressIcon(thread, this.nerdFontIcons, Date.now(), true, this.loaderStyle));
-    if (selected)
-      return `${this.theme.fg("accent", head)}${badge} ${this.theme.fg("accent", rest)}`;
-    return `${head}${badge} ${rest}`;
+    const first = [
+      selected ? this.theme.fg("accent", head) : head,
+      badge,
+      this.theme.fg(inactive ? base : selected ? "accent" : "text", `  ${identity}  `),
+      this.theme.fg(inactive ? hint : "muted", dialogText(thread.state)),
+    ].join("");
+    // Continue the tree's vertical guides without repeating the branch or selection marker.
+    const stem = row.prefix.replace("├─ ", "│  ").replace("└─ ", "   ");
+    const activity = ` ${stem}  ${dialogText(thread.status || thread.task)}`;
+    const metrics = this.theme.fg(base, threadMetrics(thread));
+    const metricWidth = visibleWidth(metrics);
+    const second =
+      metricWidth >= width
+        ? truncateToWidth(metrics, width, "")
+        : (() => {
+            const left = truncateToWidth(
+              this.theme.fg(inactive ? base : selected ? "accent" : "muted", activity),
+              width - metricWidth - 1,
+            );
+            return (
+              left + " ".repeat(Math.max(1, width - visibleWidth(left) - metricWidth)) + metrics
+            );
+          })();
+    return [first, second];
   }
 
   private detail(row: StatusRow | undefined): string[] {
@@ -297,7 +340,7 @@ export class StatusDialog {
     if (rows[index]) this.selectedPath = rows[index].path;
     const budget = Math.max(0, height - 4);
     const detail = budget > 2 ? this.detail(rows[index]) : [];
-    const treeCount = Math.max(0, budget - detail.length);
+    const treeCount = Math.max(0, Math.floor((budget - detail.length) / 2));
     this.viewport = Math.max(1, treeCount);
     const start = treeCount
       ? Math.max(0, Math.min(index - treeCount + 1, Math.max(0, rows.length - treeCount)))
@@ -305,7 +348,7 @@ export class StatusDialog {
     const body = [
       ...rows
         .slice(start, start + treeCount)
-        .map((row) => this.line(row, row.path === this.selectedPath)),
+        .flatMap((row) => this.line(row, row.path === this.selectedPath, Math.max(0, width - 2))),
       ...detail,
     ];
     return frameDialog(
@@ -314,9 +357,7 @@ export class StatusDialog {
       height,
       this.heading(rows, start, treeCount),
       body,
-      this.navigation
-        ? "Esc main · ↑↓ select · ←→ fold · i Actions · Ctrl+C stop all"
-        : FOOTER,
+      this.navigation ? "Esc main · ↑↓ select · ←→ fold · i Actions · Ctrl+C stop all" : FOOTER,
     );
   }
 
@@ -350,7 +391,17 @@ async function showAgentDialog(
     let dialog: StatusDialog | undefined;
     try {
       const chosen = await ctx.ui.custom<string | undefined>((host, theme, _keys, done) => {
-        dialog = new StatusDialog(host, theme, service, done, selected, options.title, undefined, options.nerdFontIcons, options.loaderStyle);
+        dialog = new StatusDialog(
+          host,
+          theme,
+          service,
+          done,
+          selected,
+          options.title,
+          undefined,
+          options.nerdFontIcons,
+          options.loaderStyle,
+        );
         dialog.startRefresh();
         return dialog;
       }, DIALOG_OPTIONS);
@@ -394,7 +445,13 @@ export class AgentNavigationController {
     this.session = undefined;
   }
 
-  open(ctx: ExtensionContext, service: ThreadService, selectedPath?: string, nerdFontIcons = false, loaderStyle: LoaderStyle = "circle"): Promise<void> {
+  open(
+    ctx: ExtensionContext,
+    service: ThreadService,
+    selectedPath?: string,
+    nerdFontIcons = false,
+    loaderStyle: LoaderStyle = "circle",
+  ): Promise<void> {
     if (this.opening) return this.opening;
     if (!canOpenDialog(ctx)) return Promise.resolve();
     if (selectedPath) this.tree.selectedPath = selectedPath;
@@ -493,7 +550,16 @@ export class AgentNavigationController {
               }
               const result = await session.mount<"back" | "main">(
                 (tui, activeTheme, _keys, finish) =>
-                  new LiveAgentView(tui, activeTheme, service, chosen.path, viewport!, finish, nerdFontIcons, loaderStyle),
+                  new LiveAgentView(
+                    tui,
+                    activeTheme,
+                    service,
+                    chosen.path,
+                    viewport!,
+                    finish,
+                    nerdFontIcons,
+                    loaderStyle,
+                  ),
               );
               if (result !== "back") break;
             }
