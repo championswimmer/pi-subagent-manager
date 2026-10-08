@@ -4,6 +4,18 @@ Generated from version tags and merged GitHub pull requests. Do not edit this fi
 
 ## 0.x — Pre-1.0 releases
 
+### [v0.19.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.19.0) — Minor release (2026-10-08)
+
+<!-- Release notes generated using configuration in .github/release.yml at v0.19.0 -->
+
+#### What's Changed
+##### Merged pull requests
+* Fix subagent cost discovery and add lab display modes by @championswimmer in https://github.com/championswimmer/pi-subagent-manager/pull/37
+* Clarify timer-only background agent rearming by @championswimmer in https://github.com/championswimmer/pi-subagent-manager/pull/38
+
+
+**Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v0.18.0...v0.19.0
+
 ### [v0.18.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.18.0) — Minor release (2026-10-08)
 
 <!-- Release notes generated using configuration in .github/release.yml at v0.18.0 -->
