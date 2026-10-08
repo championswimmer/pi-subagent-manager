@@ -18,6 +18,7 @@ import {
   DEFAULT_MANAGER_SETTINGS as DEFAULTS,
   loadManagerSettings,
   loadManagerSaveScope,
+  loadRequiredChildExtensions,
   saveManagerSaveScope,
   saveManagerSettings,
   SUBAGENT_MODES,
@@ -654,4 +655,98 @@ test("Final Recap rejects non-booleans atomically when loading and saving", (t) 
     );
     assert.equal(readFileSync(f.globalFile, "utf8"), before);
   }
+});
+
+const required = (paths: Paths, includeProject = true) =>
+  loadRequiredChildExtensions({ ...paths, includeProject });
+const INVALID_REQUIRED = "requiredChildExtensions must be an array of non-empty strings";
+
+test("requiredChildExtensions is a known key that leaves other keys of its file in effect", (t) => {
+  const f = fixture(t);
+  writeJson(f.globalFile, { maxLevels: 5, requiredChildExtensions: ["/opt/guard.ts"] });
+  assert.deepEqual(load(f), { settings: { ...DEFAULTS, maxLevels: 5 }, diagnostics: [] });
+});
+
+test("requiredChildExtensions resolves like pi -e and unions global then project entries", (t) => {
+  const f = fixture(t);
+  const home = join(f.root, "home");
+  const previousHome = process.env.HOME;
+  process.env.HOME = home;
+  t.after(() => {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+  });
+  writeJson(f.globalFile, { requiredChildExtensions: ["~/guards/global.ts", " /opt/shared.ts "] });
+  writeJson(f.projectFile, {
+    requiredChildExtensions: ["guards/project.ts", "/opt/shared.ts", "file:///opt/url.ts", "~"],
+  });
+  assert.deepEqual(required(f), {
+    paths: [
+      join(home, "guards", "global.ts"),
+      "/opt/shared.ts",
+      join(f.cwd, "guards", "project.ts"),
+      "/opt/url.ts",
+      home,
+    ],
+  });
+  assert.deepEqual(required(f, false), {
+    paths: [join(home, "guards", "global.ts"), "/opt/shared.ts"],
+  });
+  writeJson(f.projectFile, { requiredChildExtensions: [] });
+  assert.deepEqual(required(f), { paths: [join(home, "guards", "global.ts"), "/opt/shared.ts"] });
+});
+
+test("requiredChildExtensions survives an invalid sibling key; an unparseable file drops it", (t) => {
+  const f = fixture(t);
+  writeJson(f.globalFile, { maxLevels: 0, requiredChildExtensions: ["/opt/guard.ts"] });
+  assert.deepEqual(required(f), { paths: ["/opt/guard.ts"] });
+  const loaded = load(f);
+  assert.deepEqual(loaded.settings, DEFAULTS);
+  assert.deepEqual(loaded.diagnostics, [
+    `${f.globalFile}: maxLevels must be a positive safe integer`,
+  ]);
+  writeJson(f.globalFile, '{"requiredChildExtensions": ["/opt/guard.ts"],');
+  assert.deepEqual(required(f), { paths: [] });
+  assert.equal(load(f).diagnostics.length, 1);
+});
+
+test("an invalid requiredChildExtensions value in either layer is an error naming file and key", (t) => {
+  const f = fixture(t);
+  writeJson(f.globalFile, { requiredChildExtensions: ["/opt/guard.ts"] });
+  for (const invalid of ["/opt/guard.ts", [""], ["  "], [1], [null], {}, null, true]) {
+    writeJson(f.projectFile, { maxLevels: 4, requiredChildExtensions: invalid });
+    const expected = `${f.projectFile}: ${INVALID_REQUIRED}; subagents will not start until it is fixed`;
+    assert.deepEqual(required(f), { paths: ["/opt/guard.ts"], error: expected });
+    assert.deepEqual(load(f), { settings: { ...DEFAULTS, maxLevels: 4 }, diagnostics: [expected] });
+  }
+  writeJson(f.projectFile, {});
+  writeJson(f.globalFile, { requiredChildExtensions: "/opt/guard.ts" });
+  assert.deepEqual(required(f), {
+    paths: [],
+    error: `${f.globalFile}: ${INVALID_REQUIRED}; subagents will not start until it is fixed`,
+  });
+});
+
+test("saving settings keeps the file's own requiredChildExtensions value", (t) => {
+  const f = fixture(t);
+  writeJson(f.globalFile, { maxLevels: 5, requiredChildExtensions: ["~/guard.ts"] });
+  writeJson(f.projectFile, { requiredChildExtensions: ["project-guard.ts"] });
+  save(f, "user", { ...DEFAULTS, maxLevels: 7 });
+  save(f, "project", { ...DEFAULTS, maxLevels: 2 });
+  assert.deepEqual(JSON.parse(readFileSync(f.globalFile, "utf8")), {
+    ...DEFAULTS,
+    maxLevels: 7,
+    requiredChildExtensions: ["~/guard.ts"],
+  });
+  assert.deepEqual(JSON.parse(readFileSync(f.projectFile, "utf8")), {
+    ...DEFAULTS,
+    maxLevels: 2,
+    requiredChildExtensions: ["project-guard.ts"],
+  });
+  writeJson(f.globalFile, { requiredChildExtensions: "not-an-array" });
+  save(f, "user", DEFAULTS);
+  assert.equal(
+    JSON.parse(readFileSync(f.globalFile, "utf8")).requiredChildExtensions,
+    "not-an-array",
+  );
 });
