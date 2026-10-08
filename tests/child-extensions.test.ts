@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AssistantMessage, JsonObject } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -555,6 +555,187 @@ test(
         assert.equal(done.state, "completed");
         assert.equal(existsSync(path.join(cwd, "worker.txt")), false);
         assert.deepEqual(await loggedCommands(guard.logPath), [markedCommand(cwd, "worker")]);
+      },
+    );
+  },
+);
+
+test(
+  "a required directory fails closed when an entry point symlinked from outside it fails",
+  { timeout: 30000 },
+  async () => {
+    await withOfflineHarness(
+      { agentFiles: AGENTS, builtinTools: true, onRequest: () => answer("must not run") },
+      async (harness) => {
+        const { directory, cwd, requests, open, tool } = harness;
+        const outside = path.join(directory, "shared", "failing-start.ts");
+        await mkdir(path.dirname(outside), { recursive: true });
+        await writeFile(
+          outside,
+          `export default function (pi: any) {
+  pi.on("session_start", () => {
+    throw new Error("linked guard failed");
+  });
+}
+`,
+        );
+        const bundle = path.join(directory, "guard-bundle");
+        await mkdir(bundle);
+        await writeFile(path.join(bundle, "ok.ts"), "export default function () {}\n");
+        await symlink(outside, path.join(bundle, "linked.ts"));
+        await writeFile(
+          path.join(bundle, "package.json"),
+          JSON.stringify({ name: "guard-bundle", pi: { extensions: ["./ok.ts", "./linked.ts"] } }),
+        );
+        await writeSettings(globalSettings(harness), { requiredChildExtensions: [bundle] });
+        const session = await open(SessionManager.create(cwd, path.join(directory, "parents")));
+        const failed = await tool<ThreadView>(session, "agent_spawn", {
+          path: "worker",
+          type: "guarded",
+          task: "Run",
+        });
+        assert.equal(failed.state, "failed");
+        assert.equal(
+          failed.error,
+          `Required child extension ${bundle} failed in session_start: linked guard failed`,
+        );
+        assert.equal(requests.length, 0);
+      },
+    );
+  },
+);
+
+test(
+  "a live paused child is not resumed while the value is invalid or a new required extension is missing",
+  { timeout: 30000 },
+  async () => {
+    let cwdPath = "";
+    await withOfflineHarness(
+      {
+        agentFiles: AGENTS,
+        builtinTools: true,
+        onRequest(request) {
+          if (request.pathCall === 1)
+            return toolUse("pause-1", "agent_pause", { reason: "Wait for the parent" });
+          if (request.pathCall === 2)
+            return toolUse("bash-worker", "bash", { command: markedCommand(cwdPath, "worker") });
+          return answer("worker finished");
+        },
+      },
+      async (harness) => {
+        const { directory, cwd, requests, open, close, tool } = harness;
+        cwdPath = cwd;
+        const guard = await writeGuard(directory);
+        const file = globalSettings(harness);
+        const root = SessionManager.create(cwd, path.join(directory, "parents"));
+        root.appendMessage({ role: "user", content: "Parent context", timestamp: Date.now() });
+        root.appendMessage(answer("Parent answer"));
+        let session = await open(root);
+        const paused = await tool<ThreadView>(session, "agent_spawn", {
+          path: "worker",
+          type: "guarded",
+          task: "Pause first",
+        });
+        assert.equal(paused.state, "paused");
+
+        await writeSettings(file, { requiredChildExtensions: "not-a-list" });
+        await tool(session, "agent_steer", { path: "worker", message: "Now run the command" });
+        const invalid = await tool<ThreadView>(session, "agent_wait", { path: "worker" });
+        assert.equal(invalid.state, "failed");
+        assert.equal(
+          invalid.error,
+          `Subagent /root/worker not resumed: ${file}: requiredChildExtensions must be an array of non-empty strings; subagents will not start until it is fixed`,
+        );
+
+        await writeSettings(file, { requiredChildExtensions: [guard.extensionPath] });
+        await tool(session, "agent_steer", { path: "worker", message: "Now run the command" });
+        const unguarded = await tool<ThreadView>(session, "agent_wait", { path: "worker" });
+        assert.equal(unguarded.state, "failed");
+        assert.equal(
+          unguarded.error,
+          `Subagent /root/worker was started without required child extension ${guard.extensionPath}; reload the session to resume it with that extension`,
+        );
+        assert.equal(requests.length, 1, "neither refused resume made a model request");
+        assert.equal(existsSync(path.join(cwd, "worker.txt")), false);
+
+        await close(session);
+        session = await open(SessionManager.open(root.getSessionFile()!));
+        await tool(session, "agent_steer", { path: "worker", message: "Now run the command" });
+        const done = await tool<ThreadView>(session, "agent_wait", { path: "worker" });
+        assert.equal(done.state, "completed");
+        assert.equal(existsSync(path.join(cwd, "worker.txt")), false);
+        assert.deepEqual(await loggedCommands(guard.logPath), [markedCommand(cwd, "worker")]);
+      },
+    );
+  },
+);
+
+for (const [mode, allow] of [
+  ["allowed", ["bash", "agent_pause", "guard_probe"]],
+  ["all", ["bash"]],
+] as const) {
+  test(
+    `a tool registered only by a required extension follows ${mode} tool filtering like any other`,
+    { timeout: 30000 },
+    async () => {
+      await withOfflineHarness(
+        {
+          agentFiles: { prober: agent("prober", [...allow]) },
+          builtinTools: true,
+          onRequest: (request) =>
+            request.pathCall === 1 ? toolUse("probe-1", "guard_probe", {}) : answer("done"),
+        },
+        async (harness) => {
+          const { directory, cwd, requests, open, tool } = harness;
+          const guard = await writeGuard(directory);
+          await writeSettings(globalSettings(harness), {
+            toolFiltering: mode,
+            requiredChildExtensions: [guard.extensionPath],
+          });
+          const session = await open(SessionManager.create(cwd, path.join(directory, "parents")));
+          const done = await tool<ThreadView>(session, "agent_spawn", {
+            path: "worker",
+            type: "prober",
+            task: "Call the probe",
+          });
+          assert.equal(done.state, "completed");
+          assert.ok(requests[0].toolNames.includes("guard_probe"), "probe is active");
+          assert.equal(bashResult(requests, "/root/worker"), "probe ran");
+          assert.equal(
+            await readFile(guard.logPath, "utf8").then((log) => log.includes("probe executed")),
+            true,
+          );
+        },
+      );
+    },
+  );
+}
+
+test(
+  "allowing a tool that neither the root nor a required extension provides still fails the spawn",
+  { timeout: 30000 },
+  async () => {
+    await withOfflineHarness(
+      {
+        agentFiles: { prober: agent("prober", ["bash", "missing_tool"]) },
+        builtinTools: true,
+        onRequest: () => answer("must not run"),
+      },
+      async (harness) => {
+        const { directory, cwd, requests, open, tool } = harness;
+        const guard = await writeGuard(directory);
+        await writeSettings(globalSettings(harness), {
+          requiredChildExtensions: [guard.extensionPath],
+        });
+        const session = await open(SessionManager.create(cwd, path.join(directory, "parents")));
+        const failed = await tool<ThreadView>(session, "agent_spawn", {
+          path: "worker",
+          type: "prober",
+          task: "Run",
+        });
+        assert.equal(failed.state, "failed");
+        assert.equal(failed.error, "Unavailable tool name: missing_tool");
+        assert.equal(requests.length, 0);
       },
     );
   },
