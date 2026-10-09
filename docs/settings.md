@@ -83,6 +83,8 @@ Choose the cost output in `/agents settings` and save. The stable ID/key is **`s
 
 Both status modes use the same public Pi status API: third-party footers may also display Pi status-only output. These modes never replace your footer. The pi-footer modes show the **settled subagent-only** USD subtotal; Pi status shows **main session + all settled subagents**. In all modes, running costs settle on completion, pause, stop, or failure. It publishes on session start/reload, immediately when a subagent starts (even at zero), and after settlement/settings changes. Switching modes clears the previous output; shutdown clears the published value. Nerd Font icons apply when enabled.
 
+See [Subagent dollar totals in pi-footer](pi-footer.md) for step-by-step setup and copy-paste widget configuration, status-key, and event snippets.
+
 ## [labs] Final Recap (`finalRecap`)
 
 **[labs] Final Recap** is an experimental on/off toggle, **off by default**. Enable it in `/agents` and save with **Ctrl+S**, or set `"finalRecap": true` in your settings file.
