@@ -145,7 +145,7 @@ test("live viewer shows assistant/tool streams and browsing never sends input", 
   );
   content = live.view.render(120).join("\n");
   assert.match(content, /partial assistant/);
-  assert.match(content, /\$ build — running/);
+  assert.match(content, /\$ build/);
   assert.match(content, /partial tool output/);
   // Preview detail shows the first three rendered thinking rows.
   assert.match(content, /private thinking 0/);
@@ -461,7 +461,7 @@ test("streaming, inherited, custom and visible thinking text use Markdown too", 
   }
 });
 
-test("tool calls and results show only three preview rows while messages stay complete", async () => {
+test("tool calls pair with results using native previews while messages stay complete", async () => {
   const fullText = (prefix: string) =>
     Array.from({ length: 6 }, (_, index) => `${prefix} ${index}`).join("\n");
   const toolResult = {
@@ -526,32 +526,28 @@ test("tool calls and results show only three preview rows while messages stay co
     100,
   );
   await tick();
-  const content = live.view.render(120).join("\n");
+  const content = stripTerminalSequences(live.view.render(120).join("\n"));
   for (const prefix of ["steer", "agent", "update", "stream"])
     for (let index = 0; index < 6; index++) assert.ok(content.includes(`${prefix} ${index}`));
   assert.match(content, /read file\.ts:1-100/);
-  assert.match(content, /Tool result: read/);
-  assert.match(content, /\$ build — completed \(error\) \(nested\)/);
-  for (const prefix of ["output", "running output"]) {
-    for (let index = 0; index < 3; index++) assert.ok(content.includes(`${prefix} ${index}`));
-    assert.ok(!content.includes(`${prefix} 3`));
-  }
+  assert.doesNotMatch(content, /Tool result:/);
+  assert.equal(content.match(/read file\.ts:1-100/g)?.length, 1);
+  assert.match(content, /\$ build/);
+  // Pi hides successful reads when collapsed and shows the last five shell output rows.
+  assert.doesNotMatch(content, / output 0|running output 0/);
+  for (let index = 1; index < 6; index++) assert.ok(content.includes(`running output ${index}`));
+  assert.match(content, /1 earlier lines/);
   assert.doesNotMatch(content, /hiddenArgument|duplicate result/);
-  // Only the two result previews overflow three rows; pi-style call lines never print JSON.
-  assert.equal(content.split("\n").filter((line) => line.trim() === "...").length, 2);
+  live.view.handleInput("\x0f"); // Ctrl+O works even while the steer input is focused.
+  const expanded = stripTerminalSequences(live.view.render(120).join("\n"));
+  for (let index = 0; index < 5; index++) assert.ok(expanded.includes(`output ${index}`));
+  assert.match(expanded, /running output 0/);
+  live.view.handleInput("\x0f");
+  assert.doesNotMatch(stripTerminalSequences(live.view.render(120).join("\n")), /running output 0/);
   live.view.dispose();
 });
 
 test("transcript has one column of side padding; tool calls and results use pi's tool backgrounds", async () => {
-  const codes: Record<string, string> = {
-    toolSuccessBg: "42",
-    customMessageBg: "45",
-    toolErrorBg: "41",
-  };
-  const tagged = {
-    fg: (_token: string, text: string) => text,
-    bg: (token: string, text: string) => `\x1b[${codes[token] ?? "40"}m${text}\x1b[49m`,
-  } as unknown as Theme;
   const live = launch(
     snapshot({
       messages: [
@@ -581,8 +577,6 @@ test("transcript has one column of side padding; tool calls and results use pi's
       ],
     }),
     30,
-    undefined,
-    { theme: tagged },
   );
   await tick();
   try {
@@ -590,15 +584,16 @@ test("transcript has one column of side padding; tool calls and results use pi's
     const find = (needle: string) =>
       raw.find((line) => stripTerminalSequences(line).includes(needle)) ?? "";
     assert.match(stripTerminalSequences(find("hello")), /^ hello/);
-    // Bands span the full row, padding columns included, in pi's tool colors.
-    for (const [needle, code] of [
-      ["$ ls", "42"],
-      ["listing", "45"],
-      ["boom", "41"],
+    // Actual native components use pi's active theme, including one shared success box.
+    for (const [needle, token] of [
+      ["$ ls", "toolSuccessBg"],
+      ["listing", "toolSuccessBg"],
+      ["boom", "toolErrorBg"],
     ] as const) {
       const line = find(needle);
-      assert.ok(line.startsWith(`\x1b[${code}m `), `${needle} uses band ${code}`);
-      assert.ok(line.endsWith(" \x1b[49m"), `${needle} band reaches the right edge`);
+      const expected = token === "toolSuccessBg" ? find("$ ls") : find("boom");
+      const bg = expected.match(/\x1b\[48;[^m]*m/)?.[0];
+      assert.ok(bg && line.startsWith(bg), `${needle} uses native ${token}`);
       assert.equal(visibleWidth(line), 40);
     }
     for (const line of raw.map(stripTerminalSequences).filter((line) => line.trim()))
@@ -630,18 +625,18 @@ test("t cycles preview, compact and full detail for tool calls and thinking", as
   );
   await tick();
   try {
-    // Default preview: three wrapped rows of the call and of the rendered thinking.
+    // Native shell commands stay complete; only thinking is previewed.
     let content = live.view.render(80).join("\n");
     assert.match(content, /\$ build/);
     assert.match(content, /npm test/);
-    assert.doesNotMatch(content, /final step/);
+    assert.match(content, /final step/);
     assert.match(content, /thought 0/);
     assert.doesNotMatch(content, /thought 3/);
     live.view.handleInput("\t");
     assert.match(live.view.render(80).join("\n"), /t view:preview/);
     live.view.handleInput("t"); // Compact: one call line, thinking fully hidden.
     content = live.view.render(80).join("\n");
-    assert.match(content, /\$ build \(timeout 30s\)/);
+    assert.match(content, /\$ build/);
     assert.doesNotMatch(content, /echo done|thought 0/);
     assert.match(content, /Thinking hidden/);
     assert.match(content, /t view:compact/);
@@ -652,7 +647,8 @@ test("t cycles preview, compact and full detail for tool calls and thinking", as
     assert.match(content, /t view:full/);
     live.view.handleInput("t"); // Cycle wraps back to preview.
     content = live.view.render(80).join("\n");
-    assert.doesNotMatch(content, /final step|thought 3/);
+    assert.match(content, /final step/);
+    assert.doesNotMatch(content, /thought 3/);
     assert.match(content, /t view:preview/);
   } finally {
     live.view.dispose();
@@ -665,11 +661,11 @@ test("previews count wrapped rows, keep short results intact, and sanitize tool 
       tools: [
         {
           toolCallId: "long",
-          toolName: "read",
+          toolName: "unknown",
           args: {},
           state: "running",
           result: {
-            content: [{ type: "text", text: "\x1b[31m" + "界".repeat(100000) + "hidden tail" }],
+            content: [{ type: "text", text: "\x1b[31m" + "界".repeat(1000) + "\nhidden tail" }],
           },
         },
         {
@@ -686,8 +682,8 @@ test("previews count wrapped rows, keep short results intact, and sanitize tool 
   await tick();
   for (const width of [20, 40]) {
     const lines = live.view.render(width);
-    assert.equal(lines.filter((line) => line.includes("界")).length, 3);
-    assert.equal(lines.filter((line) => line.trim() === "...").length, 1);
+    assert.equal(lines.filter((line) => line.includes("界")).length, 5);
+    assert.match(stripTerminalSequences(lines.join("\n")), /more lines/);
     const content = lines.join("\n");
     assert.match(content, /short 0/);
     assert.match(content, /short 1/);
@@ -840,4 +836,120 @@ test("retry ignores old callbacks and close cleans up late async attachment", as
   });
   await tick();
   assert.equal(unsubscribed, 2);
+});
+
+test("nested tool notifications group beneath parents even when arriving out of order", async () => {
+  const live = launch(
+    snapshot({
+      tools: [
+        {
+          toolCallId: "child",
+          parentToolCallId: "parent",
+          toolName: "bash",
+          args: { command: "child-command" },
+          state: "completed",
+          result: { content: [{ type: "text", text: "child-output" }] },
+        },
+        {
+          toolCallId: "parent",
+          toolName: "unknown",
+          args: { label: "parent-call" },
+          state: "running",
+        },
+      ],
+    }),
+    40,
+  );
+  await tick();
+  const rows = stripTerminalSequences(live.view.render(100).join("\n"));
+  assert.ok(rows.indexOf("parent-call") < rows.indexOf("child-command"));
+  assert.match(rows, /↳ nested tool/);
+  assert.equal(rows.match(/child-command/g)?.length, 1);
+  assert.equal(rows.match(/child-output/g)?.length, 1);
+  live.view.dispose();
+});
+
+test("paired tools refresh from partial to committed results without stale output or duplication", async () => {
+  const call = {
+    role: "assistant",
+    content: [{ type: "toolCall", id: "shell", name: "bash", arguments: { command: "build" } }],
+  } as unknown as AgentMessage;
+  const live = launch(
+    snapshot({
+      messages: [call],
+      tools: [
+        {
+          toolCallId: "shell",
+          toolName: "bash",
+          args: { command: "build" },
+          state: "running",
+          result: { content: [{ type: "text", text: "partial-output" }] },
+        },
+      ],
+    }),
+    40,
+  );
+  await tick();
+  assert.match(stripTerminalSequences(live.view.render(80).join("\n")), /partial-output/);
+  live.emit(
+    snapshot({
+      revision: 1,
+      messages: [
+        call,
+        {
+          role: "toolResult",
+          toolCallId: "shell",
+          toolName: "bash",
+          content: [{ type: "text", text: "committed-output" }],
+          isError: false,
+        } as AgentMessage,
+      ],
+    }),
+  );
+  const output = stripTerminalSequences(live.view.render(80).join("\n"));
+  assert.doesNotMatch(output, /partial-output/);
+  assert.equal(output.match(/committed-output/g)?.length, 1);
+  assert.equal(output.match(/\$ build/g)?.length, 1);
+  live.view.dispose();
+});
+
+test("collapsed inherited tool results cannot reappear through retained live-tool state", async () => {
+  const call = {
+    role: "assistant",
+    content: [
+      { type: "toolCall", id: "shell", name: "bash", arguments: { command: "inherited-command" } },
+    ],
+  } as unknown as AgentMessage;
+  const result = {
+    role: "toolResult",
+    toolCallId: "shell",
+    toolName: "bash",
+    content: [{ type: "text", text: "inherited-output" }],
+    isError: false,
+  } as AgentMessage;
+  const live = launch(
+    snapshot({
+      messages: [call, result],
+      inheritedCount: 2,
+      tools: [
+        {
+          toolCallId: "shell",
+          toolName: "bash",
+          args: { command: "inherited-command" },
+          state: "completed",
+          result,
+        },
+      ],
+    }),
+    40,
+  );
+  await tick();
+  assert.doesNotMatch(
+    stripTerminalSequences(live.view.render(80).join("\n")),
+    /inherited-command|inherited-output/,
+  );
+  live.view.handleInput("\t");
+  live.view.handleInput("c");
+  assert.match(stripTerminalSequences(live.view.render(80).join("\n")), /inherited-command/);
+  live.view.dispose();
 });

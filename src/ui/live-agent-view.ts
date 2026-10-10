@@ -11,12 +11,11 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import type { ThreadService, TranscriptSnapshot } from "../types.ts";
+import type { ThreadService, TranscriptSnapshot, TranscriptToolState } from "../types.ts";
 import { dialogText, type DialogHost } from "./dialog.ts";
 import { AGENT_PROGRESS_INTERVAL, agentProgressIcon, agentTypeLabel } from "./ui.ts";
 import type { LoaderStyle } from "../prefs/settings.ts";
-
-type ThemeBg = Parameters<Theme["bg"]>[0];
+import { renderTranscriptTool } from "./transcript-tool.ts";
 
 /** Transcript detail level cycled by the t key: full → preview → compact. */
 export type TranscriptDetail = "full" | "preview" | "compact";
@@ -59,7 +58,7 @@ function json(value: unknown): string {
   }
 }
 
-/** Live transcript and manual steering. Never invoke tools' custom renderers or pass through raw controls. */
+/** Live transcript and manual steering. Reuse trusted pi built-ins; strip untrusted controls. */
 export class LiveAgentView {
   private snapshot: TranscriptSnapshot | undefined;
   private error: string | undefined;
@@ -84,6 +83,22 @@ export class LiveAgentView {
   private steerStatus: string | undefined;
   private steerFailed = false;
 
+  private results = new Map<string, AgentMessage>();
+  private tools = new Map<string, TranscriptToolState>();
+  private renderedTools = new Set<string>();
+  private toolCache = new Map<
+    string,
+    {
+      args: unknown;
+      result: unknown;
+      running: boolean;
+      isError: boolean;
+      name: string;
+      width: number;
+      detail: TranscriptDetail;
+      lines: string[];
+    }
+  >();
   constructor(
     private host: DialogHost,
     private theme: Theme,
@@ -186,6 +201,7 @@ export class LiveAgentView {
           snapshot.revision < this.snapshot.revision))
     )
       return;
+    if (snapshot.generation !== this.snapshot?.generation) this.toolCache.clear();
     this.snapshot = snapshot;
     this.error = snapshot.error;
     this.syncProgress();
@@ -219,6 +235,7 @@ export class LiveAgentView {
 
   invalidate(): void {
     this.cache = new WeakMap();
+    this.toolCache.clear();
     this.input.invalidate();
   }
 
@@ -242,6 +259,12 @@ export class LiveAgentView {
     if (matchesKey(data, Key.escape)) return this.done("back");
     if (matchesKey(data, Key.ctrl("q")) || matchesKey(data, Key.ctrl("c")))
       return this.done("main");
+    if (matchesKey(data, Key.ctrl("o"))) {
+      this.viewport.detail = this.detail === "full" ? "preview" : "full";
+      this.invalidate();
+      this.host.requestRender();
+      return;
+    }
     if (matchesKey(data, Key.tab)) {
       this.editing = !this.editing;
       this.input.focused = this.focused && this.editing;
@@ -288,18 +311,6 @@ export class LiveAgentView {
   /** One column of horizontal padding on each side of the transcript. */
   private pad(lines: string[]): string[] {
     return lines.map((line) => ` ${line}`);
-  }
-
-  /** Full-width themed band with one column of padding, like pi's tool boxes. */
-  private band(lines: string[], token: ThemeBg, width: number): string[] {
-    const inner = Math.max(1, width - 2);
-    return lines.map((line) => {
-      const clipped = truncateToWidth(line, inner, "", true);
-      return this.theme.bg(
-        token,
-        ` ${clipped}${" ".repeat(Math.max(0, inner - visibleWidth(clipped)))} `,
-      );
-    });
   }
 
   private wrap(value: string, width: number): string[] {
@@ -354,11 +365,7 @@ export class LiveAgentView {
     return content.flatMap((value) => {
       const block = object(value);
       if (block?.type === "toolCall")
-        return this.band(
-          this.toolCall(String(block.name), block.arguments, inner),
-          "toolSuccessBg",
-          width,
-        );
+        return this.tool(String(block.id), String(block.name), block.arguments, width);
       return this.pad(this.blockLines(value, inner));
     });
   }
@@ -381,13 +388,17 @@ export class LiveAgentView {
   }
 
   private message(message: AgentMessage, width: number): string[] {
-    const cached = this.cache.get(message);
-    if (cached && cached.width === width && cached.detail === this.detail) return cached.lines;
+    if (message.role === "toolResult") {
+      const result = message as unknown as Record<string, unknown>;
+      return this.tool(String(result.toolCallId), String(result.toolName), {}, width);
+    }
     const data = message as unknown as Record<string, unknown>;
-    const label =
-      message.role === "toolResult"
-        ? `Tool result: ${String(data.toolName)}${data.isError ? " — error" : ""}`
-        : message.role;
+    const hasTools =
+      Array.isArray(data.content) &&
+      data.content.some((block: unknown) => object(block)?.type === "toolCall");
+    const cached = !hasTools && this.cache.get(message);
+    if (cached && cached.width === width && cached.detail === this.detail) return cached.lines;
+    const label = message.role;
     const collapsed = !["user", "assistant", "custom"].includes(message.role);
     const content = data.content ?? data.summary ?? data.output ?? data;
     const inner = Math.max(1, width - 2);
@@ -398,128 +409,64 @@ export class LiveAgentView {
           : this.wrap(String(data.errorMessage), inner)
         ).map((line) => this.theme.fg("error", line))
       : [];
-    const lines =
-      message.role === "toolResult"
-        ? [
-            ...this.band(
-              [heading, ...this.preview(content, inner), ...errors],
-              data.isError ? "toolErrorBg" : "customMessageBg",
-              width,
-            ),
-            "",
-          ]
-        : [
-            ...this.pad([heading]),
-            ...(collapsed ? this.pad(this.preview(content, inner)) : this.blocks(content, width)),
-            ...this.pad(errors),
-            "",
-          ];
-    this.cache.set(message, { width, detail: this.detail, lines });
+    const lines = [
+      ...this.pad([heading]),
+      ...(collapsed ? this.pad(this.preview(content, inner)) : this.blocks(content, width)),
+      ...this.pad(errors),
+      "",
+    ];
+    if (!hasTools) this.cache.set(message, { width, detail: this.detail, lines });
     return lines;
   }
 
-  /**
-   * Pi-style tool call lines, mirroring the main session's built-in renderers (`$ command`,
-   * `read path:range`, `grep /pattern/ in path`, …) instead of bare JSON. All interpolated values
-   * are sanitized; unknown tools fall back to pretty-printed JSON. Shaped by the detail mode:
-   * compact keeps one truncated line, preview keeps three wrapped rows, full keeps everything
-   * (bounded by the preview byte cap for pathological payloads).
-   */
-  private toolCall(name: string, args: unknown, width: number): string[] {
-    const data = object(args);
-    const str = (key: string): string | undefined => {
-      const value = data?.[key];
-      return typeof value === "string" ? text(value) : undefined;
-    };
-    const num = (key: string): number | undefined => {
-      const value = data?.[key];
-      return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-    };
-    const title = (value: string) => this.theme.fg("accent", value);
-    const detail = (value: string) => this.theme.fg("muted", value);
-    const path = str("file_path") ?? str("path");
+  /** Pair a call with its committed result or live partial, then render nested executions in place. */
+  private tool(id: string, name: string, args: unknown, width: number): string[] {
+    if (this.renderedTools.has(id)) return [];
+    this.renderedTools.add(id);
+    const state = this.tools.get(id);
+    const result = this.results.get(id) ?? state?.result;
+    const running =
+      !this.results.has(id) && (state ? state.state === "running" : result === undefined);
+    const isError = Boolean(object(result)?.isError ?? state?.isError);
+    // Committed call arguments are authoritative; orphan results use retained live args if available.
+    if (state && !Object.keys(object(args) ?? {}).length) args = state.args;
+    const cached = this.toolCache.get(id);
     let lines: string[];
-    switch (name) {
-      case "bash":
-      case "powershell": {
-        const prompt = name === "bash" ? "$" : ">";
-        const command = (str("command") ?? "...").split("\n");
-        const timeout = num("timeout");
-        lines = [
-          `${title(`${prompt} ${command[0]}`)}${timeout ? detail(` (timeout ${timeout}s)`) : ""}`,
-          ...command.slice(1),
-        ];
-        break;
-      }
-      case "read": {
-        const offset = num("offset");
-        const limit = num("limit");
-        const range =
-          offset == null && limit == null
-            ? ""
-            : this.theme.fg(
-                "warning",
-                `:${offset ?? 1}${limit != null ? `-${(offset ?? 1) + limit - 1}` : ""}`,
-              );
-        lines = [`${title("read")} ${path ?? "?"}${range}`];
-        break;
-      }
-      case "edit":
-        lines = [`${title("edit")} ${path ?? "?"}`];
-        break;
-      case "write": {
-        lines = [`${title("write")} ${path ?? "?"}`];
-        const content = str("content");
-        if (content) {
-          const contentLines = content.split("\n");
-          while (contentLines.length && contentLines.at(-1) === "") contentLines.pop();
-          lines.push(...contentLines);
-        }
-        break;
-      }
-      case "grep": {
-        const pattern = str("pattern");
-        const glob = str("glob");
-        const limit = num("limit");
-        lines = [
-          `${title("grep")} ${this.theme.fg("accent", `/${pattern ?? ""}/`)}` +
-            `${path ? detail(` in ${path}`) : ""}${glob ? detail(` (${glob})`) : ""}` +
-            `${limit != null ? detail(` limit ${limit}`) : ""}`,
-        ];
-        break;
-      }
-      case "find": {
-        const pattern = str("pattern");
-        const limit = num("limit");
-        lines = [
-          `${title("find")} ${this.theme.fg("accent", pattern ?? "")}` +
-            `${path ? detail(` in ${path}`) : ""}${limit != null ? detail(` (limit ${limit})`) : ""}`,
-        ];
-        break;
-      }
-      case "ls": {
-        const limit = num("limit");
-        lines = [
-          `${title("ls")} ${path ?? "."}${limit != null ? detail(` (limit ${limit})`) : ""}`,
-        ];
-        break;
-      }
-      default:
-        lines = [title(dialogText(name)), ...json(args).split("\n")];
+    if (
+      cached &&
+      cached.args === args &&
+      cached.result === result &&
+      cached.running === running &&
+      cached.isError === isError &&
+      cached.name === name &&
+      cached.width === width &&
+      cached.detail === this.detail
+    ) {
+      lines = cached.lines;
+    } else {
+      lines = renderTranscriptTool(name, id, args, result, isError, running, this.detail, width);
+      this.toolCache.set(id, {
+        args,
+        result,
+        running,
+        isError,
+        name,
+        width,
+        detail: this.detail,
+        lines,
+      });
     }
-    if (this.detail === "compact")
-      return [truncateToWidth(lines[0] ?? "", Math.max(1, width), "…", true)];
-    const wrapped = lines.flatMap((line) => wrapTextWithAnsi(line, Math.max(1, width)));
-    if (this.detail === "preview" && wrapped.length > 3)
-      return [...wrapped.slice(0, 3), this.theme.fg("dim", "...")];
-    const bounded: string[] = [];
-    let chars = 0;
-    for (const line of wrapped) {
-      if (chars > 32768) return [...bounded, this.theme.fg("dim", "...")];
-      bounded.push(line);
-      chars += line.length;
+    const nested: string[] = [];
+    for (const child of this.tools.values()) {
+      if (child.parentToolCallId !== id || this.renderedTools.has(child.toolCallId)) continue;
+      nested.push(
+        ` ${this.theme.fg("dim", "↳ nested tool")}`,
+        ...this.tool(child.toolCallId, child.toolName, child.args, Math.max(3, width - 2)).map(
+          (line) => `  ${line}`,
+        ),
+      );
     }
-    return bounded;
+    return [...lines, ...nested];
   }
 
   render(width: number): string[] {
@@ -534,6 +481,16 @@ export class LiveAgentView {
         `${this.path} · ${agentTypeLabel(thread?.type ?? "agent", thread?.icon, this.nerdFontIcons, thread ? agentProgressIcon(thread, this.nerdFontIcons, Date.now(), true, this.loaderStyle) : undefined)} · ${thread?.state ?? "attaching"} — Watching — main continues`,
       ),
     );
+    this.results = new Map(
+      (snapshot?.messages ?? [])
+        .filter((message) => message.role === "toolResult")
+        .map((message) => [
+          String((message as unknown as Record<string, unknown>).toolCallId),
+          message,
+        ]),
+    );
+    this.tools = new Map((snapshot?.tools ?? []).map((tool) => [tool.toolCallId, tool]));
+    this.renderedTools.clear();
     const body: string[] = [];
     if (this.error)
       body.push(
@@ -559,31 +516,16 @@ export class LiveAgentView {
           ` ${this.theme.fg("warning", "Assistant streaming…")}`,
           ...this.message(snapshot.assistant, columns),
         );
-      const committedResults = new Set(
-        snapshot.messages
-          .filter((message) => message.role === "toolResult")
-          .map((message) => (message.role === "toolResult" ? message.toolCallId : "")),
-      );
-      for (const tool of snapshot.tools) {
-        if (committedResults.has(tool.toolCallId)) continue;
-        const call = this.toolCall(tool.toolName, tool.args, inner);
-        call[0] = `${call[0]} ${this.theme.fg(
-          tool.isError ? "error" : "warning",
-          dialogText(
-            `— ${tool.state}${tool.isError ? " (error)" : ""}${tool.parentToolCallId ? " (nested)" : ""}`,
-          ),
-        )}`;
-        body.push(...this.band(call, "toolSuccessBg", columns));
-        if (tool.result !== undefined && this.detail !== "compact")
-          body.push(
-            ...this.band(
-              this.preview(object(tool.result)?.content ?? tool.result, inner),
-              tool.isError ? "toolErrorBg" : "customMessageBg",
-              columns,
-            ),
-          );
-        body.push("");
-      }
+      // Parents first even when nested notifications arrive before the outer call.
+      for (const tool of snapshot.tools)
+        if (!tool.parentToolCallId && !this.results.has(tool.toolCallId))
+          body.push(...this.tool(tool.toolCallId, tool.toolName, tool.args, columns));
+      // An orphan nested execution still needs to be visible if its parent is unavailable.
+      for (const tool of snapshot.tools)
+        if (!this.renderedTools.has(tool.toolCallId) && !this.results.has(tool.toolCallId))
+          body.push(...this.tool(tool.toolCallId, tool.toolName, tool.args, columns));
+      for (const id of this.toolCache.keys())
+        if (!this.renderedTools.has(id)) this.toolCache.delete(id);
       if (!body.length)
         body.push(
           thread?.state === "starting"
@@ -606,7 +548,7 @@ export class LiveAgentView {
     this.saveViewport();
     const footer = this.error
       ? "Ctrl+R Retry · Tab input/transcript · Esc tree · Ctrl+Q main"
-      : `${this.editing ? "Enter steer · Tab browse" : `Tab steer · Home/End scroll · c context · t view:${this.detail}`} · Esc tree · Ctrl+Q main · ↑↓/PgUp/PgDn scroll · ${this.viewport.follow ? "following" : "scrolled"}`;
+      : `${this.editing ? "Enter steer · Tab browse" : `Tab steer · Home/End scroll · c context · t view:${this.detail}`} · Ctrl+O expand tools · Esc tree · Ctrl+Q main · ↑↓/PgUp/PgDn scroll · ${this.viewport.follow ? "following" : "scrolled"}`;
     const input = ` ${this.input.render(inner)[0]!}`;
     const status = this.theme.fg(
       this.steerStatus ? (this.steerFailed ? "error" : "muted") : this.error ? "error" : "muted",
