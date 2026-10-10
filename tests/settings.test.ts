@@ -70,7 +70,7 @@ const settings = (
   widgetMode: WidgetMode = "full",
   nerdFontIcons = false,
   finalRecap = false,
-) => ({ maxLevels, maxConcurrent, maxThreads, modelSelection, subagentMode, toolFiltering, widgetMode, costDisplay: "pi-footer-status", nerdFontIcons, loaderStyle: "circle", finalRecap });
+) => ({ maxLevels, maxConcurrent, maxThreads, modelSelection, subagentMode, toolFiltering, widgetMode, costDisplay: "pi-footer-status", costValue: "subagents", costIcon: "money", nerdFontIcons, loaderStyle: "circle", finalRecap });
 
 const escape = (path: string) => new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
@@ -132,6 +132,8 @@ test("missing files return a fresh copy of defaults without diagnostics", (t) =>
       toolFiltering: "allowed",
       widgetMode: "full",
       costDisplay: "pi-footer-status",
+      costValue: "subagents",
+      costIcon: "money",
       nerdFontIcons: false,
       loaderStyle: "circle",
       finalRecap: false,
@@ -372,6 +374,8 @@ test("save writes canonical 0600 files, creates owned directories, and reloads w
   const reordered = {
     widgetMode: "full",
       costDisplay: "pi-footer-status",
+      costValue: "subagents",
+      costIcon: "money",
     nerdFontIcons: false,
     loaderStyle: "circle",
     finalRecap: false,
@@ -635,5 +639,40 @@ test("cost display defaults to a discoverable status key and validates all modes
     assert.equal(result.settings.costDisplay, "pi-status");
     assert.match(result.diagnostics[0], /costDisplay must be/);
     rejects(() => save(f, "user", { ...DEFAULTS, costDisplay: invalid }), /costDisplay must be/);
+  }
+});
+
+
+test("cost value and icon settings round-trip independently with per-key precedence", (t) => {
+  const f = fixture(t);
+  assert.equal(load(f).settings.costValue, "subagents");
+  assert.equal(load(f).settings.costIcon, "money");
+  for (const costValue of ["subagents", "total"] as const) {
+    for (const costIcon of ["money", "coins", "wallet"] as const) {
+      for (const scope of ["user", "project"] as const) {
+        save(f, scope, { ...DEFAULTS, costValue, costIcon });
+        const loaded = load(f, scope === "project");
+        assert.equal(loaded.settings.costValue, costValue);
+        assert.equal(loaded.settings.costIcon, costIcon);
+        assert.deepEqual(loaded.diagnostics, []);
+      }
+    }
+  }
+  writeJson(f.globalFile, { costValue: "total", costIcon: "coins" });
+  writeJson(f.projectFile, { costIcon: "wallet" });
+  assert.equal(load(f).settings.costValue, "total");
+  assert.equal(load(f).settings.costIcon, "wallet");
+});
+
+test("invalid cost values and icons reject the entire layer and refuse saving", (t) => {
+  const f = fixture(t);
+  for (const key of ["costValue", "costIcon"] as const) {
+    for (const invalid of ["", "unknown", true, 0, null, [], {}]) {
+      writeJson(f.projectFile, { [key]: invalid, maxThreads: 1 });
+      const loaded = load(f);
+      assert.deepEqual(loaded.settings, DEFAULTS);
+      assert.match(loaded.diagnostics[0], new RegExp(key + " must be"));
+      rejects(() => save(f, "user", { ...DEFAULTS, [key]: invalid }), new RegExp(key + " must be"));
+    }
   }
 });

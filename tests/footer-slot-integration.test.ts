@@ -79,11 +79,11 @@ test(
       async ({ cwd, directory, errors, open, close, tool }) => {
         const manager = SessionManager.create(cwd, path.join(directory, "parents"));
         let session = await open(manager);
-        assert.equal(lastValue(updates), "$0.0000", "session start publishes an empty ledger");
+        assert.equal(lastValue(updates), "💵 $0.0000", "session start publishes an empty ledger");
         // A root assistant flushes SessionManager's initial buffer to disk. Its own
         // .1 native cost must remain outside the standalone subagent widget.
         await session.prompt("Record a main-agent turn before delegated work");
-        assert.equal(lastValue(updates), "$0.0000");
+        assert.equal(lastValue(updates), "💵 $0.0000");
         const first = await tool<ThreadView>(session, "agent_spawn", {
           path: "worker",
           type: "worker",
@@ -92,32 +92,32 @@ test(
         });
         await tool(session, "agent_wait", { path: "worker" });
         assert.equal(first.state, "completed");
-        assert.equal(lastValue(updates), "$0.5000");
+        assert.equal(lastValue(updates), "💵 $0.5000");
         assert.equal(registry(manager).threads[0].view.costUsd, 0.5);
 
         await tool(session, "agent_steer", { path: "worker", message: "Second run" });
         const resumed = await tool<ThreadView>(session, "agent_wait", { path: "worker" });
         assert.equal(resumed.state, "completed");
         assert.equal(resumed.costId, first.costId);
-        assert.equal(lastValue(updates), "$0.8000", "publish .5 + .3, never cumulative .5 + .8");
-        assert.ok(!updates.some((update) => update.value === "$1.3000"));
+        assert.equal(lastValue(updates), "💵 $0.8000", "publish .5 + .3, never cumulative .5 + .8");
+        assert.ok(!updates.some((update) => update.value === "💵 $1.3000"));
 
         for (let i = 0; i < 2; i++) {
           const before = updates.length;
           await reloadSettings(session);
           assert.ok(updates.length > before, "settings reload republishes the widget");
-          assert.equal(lastValue(updates), "$0.8000");
+          assert.equal(lastValue(updates), "💵 $0.8000");
         }
         const beforeReload = updates.length;
         await session.reload();
         assert.ok(updates.length > beforeReload, "extension reload republishes the widget");
-        assert.equal(lastValue(updates), "$0.8000");
+        assert.equal(lastValue(updates), "💵 $0.8000");
         const file = manager.getSessionFile()!;
         await close(session);
         const beforeReopen = updates.length;
         session = await open(SessionManager.open(file));
         assert.ok(updates.length > beforeReopen, "session reopen republishes the widget");
-        assert.equal(lastValue(updates), "$0.8000");
+        assert.equal(lastValue(updates), "💵 $0.8000");
         await close(session);
 
         const beforeFresh = updates.length;
@@ -125,7 +125,7 @@ test(
         assert.ok(updates.length > beforeFresh);
         assert.equal(
           lastValue(updates),
-          "$0.0000",
+          "💵 $0.0000",
           "a replacement session does not retain old dollars",
         );
         assert.deepEqual(errors, []);
@@ -168,18 +168,18 @@ test(
           wait: true,
         });
         await tool(session, "agent_wait", { path: "worker" });
-        assert.equal(lastValue(updates), "$0.5000");
+        assert.equal(lastValue(updates), "💵 $0.5000");
         try {
           await tool(session, "agent_steer", { path: "worker", message: "Wait for more work" });
           await started;
           assert.equal(
             lastValue(updates),
-            "$0.5000",
+            "💵 $0.5000",
             "a running turn has not settled its new usage",
           );
           release(answer(0.3));
           await tool(session, "agent_wait", { path: "worker" });
-          assert.equal(lastValue(updates), "$0.8000");
+          assert.equal(lastValue(updates), "💵 $0.8000");
           assert.deepEqual(errors, []);
         } finally {
           release(answer(0.3));
@@ -226,7 +226,7 @@ test(
           JSON.stringify({ costDisplay: "pi-footer-event", nerdFontIcons: false }),
         );
         await reloadSettings(session);
-        assert.equal(lastValue(updates), "$0.5000", "disabling labs removes the icon immediately");
+        assert.equal(lastValue(updates), "💵 $0.5000", "disabling labs switches to the emoji immediately");
         await writeFile(
           path.join(directory, "subagent-manager", "settings.json"),
           JSON.stringify({ costDisplay: "pi-footer-event", nerdFontIcons: true }),
@@ -260,7 +260,7 @@ test(
       },
       async ({ cwd, errors, open, tool }) => {
         const session = await open(SessionManager.create(cwd));
-        assert.equal(lastValue(updates), "$0.0000");
+        assert.equal(lastValue(updates), "💵 $0.0000");
         await tool(session, "agent_spawn", {
           path: "worker",
           type: "worker",
@@ -268,7 +268,7 @@ test(
           wait: true,
         });
         await tool(session, "agent_wait", { path: "worker" });
-        assert.equal(lastValue(updates), "$0.5000");
+        assert.equal(lastValue(updates), "💵 $0.5000");
         assert.deepEqual(errors, []);
       },
     );
@@ -283,7 +283,7 @@ test("default status key publishes before startup completes and Pi status includ
     agentFiles: { worker },
     extensionFactories: [footerObserver(updates)],
     onRequest(request) {
-      if (request.path) assert.equal(statuses.get(WIDGET_ID), "$0.0000", "key is selectable before child returns");
+      if (request.path) assert.equal(statuses.get(WIDGET_ID), "💵 $0.0000", "key is selectable before child returns");
       return answer(request.path ? 0.5 : 0.1);
     },
   }, async ({ cwd, directory, errors, open, close, tool }) => {
@@ -300,16 +300,16 @@ test("default status key publishes before startup completes and Pi status includ
       notify() {},
     }, "tui");
     await reloadSettings(session);
-    assert.equal(statuses.get(WIDGET_ID), "$0.0000");
+    assert.equal(statuses.get(WIDGET_ID), "💵 $0.0000");
     statuses.clear(); // Startup must republish even if a consumer lost the initial update.
     await tool(session, "agent_spawn", { path: "worker", type: "worker", task: "Cost", wait: true });
     await tool(session, "agent_wait", { path: "worker" });
-    assert.equal(statuses.get(WIDGET_ID), "$0.5000");
-    await writeFile(path.join(directory, "subagent-manager", "settings.json"), JSON.stringify({ costDisplay: "pi-status" }));
+    assert.equal(statuses.get(WIDGET_ID), "💵 $0.5000");
+    await writeFile(path.join(directory, "subagent-manager", "settings.json"), JSON.stringify({ costDisplay: "pi-status", costValue: "total" }));
     await reloadSettings(session);
-    assert.equal(statuses.get(WIDGET_ID), "Total: $0.5000");
+    assert.equal(statuses.get(WIDGET_ID), "Total: 💵 $0.5000");
     await session.prompt("Root work");
-    assert.equal(statuses.get(WIDGET_ID), "Total: $0.6000", "root agent_end refreshes total cost");
+    assert.equal(statuses.get(WIDGET_ID), "Total: 💵 $0.6000", "root agent_end refreshes total cost");
     assert.deepEqual(updates, [], "status transports do not publish event widgets");
     await close(session);
     assert.equal(statuses.has(WIDGET_ID), false);

@@ -51,6 +51,8 @@ export default function piSubagent(pi: ExtensionAPI): void {
     () => costLedger.totalUsd,
     () => limits.nerdFontIcons,
     () => limits.costDisplay,
+    () => limits.costValue,
+    () => limits.costIcon,
   );
   const refreshCostFooter = (ctx: ExtensionContext) => costFooter.refresh(ctx);
   const rollupCost = (thread: ThreadView) => {
