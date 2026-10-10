@@ -6,6 +6,13 @@ Generated from version tags and merged GitHub pull requests. Do not edit this fi
 
 ### [v0.22.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.22.0) — Minor release (2026-10-10)
 
+#### Highlights
+
+- Add **[labs] Enable subagent extensions**, an experimental, default-off option that reloads configured user/trusted-project extension hooks in separate subagent sessions.
+- Prefer child-local extension tools over inherited bridges and await extension shutdown cleanup, including failed or cancelled startup.
+- Add a [limitations guide](https://github.com/championswimmer/pi-subagent-manager/blob/main/docs/subagent-extension-limitations.md) and **Read limitations:** link in the settings hint. CLI-only/inline extensions are not reloaded; durable steering and mailbox replay bypass `input` hooks.
+
+
 <!-- Release notes generated using configuration in .github/release.yml at v0.22.0 -->
 
 
