@@ -975,13 +975,13 @@ test("agent tree shows the type badge and mutes inactive agents with the pi mute
   assert.match(out, /<muted>[^\n]*reviewer[^\n]*\/root\/b[^\n]*<\/muted>/);
   assert.equal(out.includes("[reviewer]"), false);
 });
-test("agent tree uses two lines for model identity and activity with metrics", () => {
+test("agent tree uses two lines for right-aligned identity metrics and full-width activity", () => {
   const threads = [
     thread("/root/a", {
       parent: "/root",
       model: "anthropic/claude-sonnet",
       thinkingLevel: "high",
-      status: "Reading src/app.ts",
+      status: "Reading src/app.ts — " + "x".repeat(55) + " DONE",
       inputTokens: 120,
       outputTokens: 45,
       costUsd: 0.0123,
@@ -998,7 +998,10 @@ test("agent tree uses two lines for model identity and activity with metrics", (
   assert.ok(identityIndex >= 0);
   assert.match(lines[identityIndex], /anthropic\/claude-sonnet:high/);
   assert.ok(!lines[identityIndex].includes("Reading src/app.ts"));
-  assert.match(lines[identityIndex + 1], /Reading src\/app.ts.*↑120 ↓45 \$0\.0123/);
+  assert.match(lines[identityIndex], /↑120 ↓45 \$0\.0123\s*│?$/);
+  assert.match(lines[identityIndex + 1], /Reading src\/app.ts/);
+  assert.doesNotMatch(lines[identityIndex + 1], /↑120|↓45|\$0\.0123/);
+  assert.ok(lines[identityIndex + 1].includes(threads[0]!.status!));
 });
 
 test("Ctrl+C in the tree stops every live agent once via its top-most live ancestor and is hinted", async () => {

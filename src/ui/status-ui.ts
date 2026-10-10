@@ -294,7 +294,7 @@ export class StatusDialog {
     ]
       .map((part) => dialogText(part))
       .join("  ");
-    const first = [
+    const identityLine = [
       selected ? this.theme.fg("accent", head) : head,
       badge,
       this.theme.fg(inactive ? base : selected ? "accent" : "text", `  ${identity}  `),
@@ -305,18 +305,17 @@ export class StatusDialog {
     const activity = ` ${stem}  ${dialogText(thread.status || thread.task)}`;
     const metrics = this.theme.fg(base, threadMetrics(thread));
     const metricWidth = visibleWidth(metrics);
-    const second =
+    const first =
       metricWidth >= width
         ? truncateToWidth(metrics, width, "")
         : (() => {
-            const left = truncateToWidth(
-              this.theme.fg(inactive ? base : selected ? "accent" : "muted", activity),
-              width - metricWidth - 1,
-            );
-            return (
-              left + " ".repeat(Math.max(1, width - visibleWidth(left) - metricWidth)) + metrics
-            );
+            const left = truncateToWidth(identityLine, width - metricWidth - 1);
+            return left + " ".repeat(Math.max(1, width - visibleWidth(left) - metricWidth)) + metrics;
           })();
+    const second = truncateToWidth(
+      this.theme.fg(inactive ? base : selected ? "accent" : "muted", activity),
+      width,
+    );
     return [first, second];
   }
 
