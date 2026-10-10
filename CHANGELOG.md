@@ -4,6 +4,17 @@ Generated from version tags and merged GitHub pull requests. Do not edit this fi
 
 ## 0.x — Pre-1.0 releases
 
+### [v0.21.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.21.0) — Minor release (2026-10-10)
+
+<!-- Release notes generated using configuration in .github/release.yml at v0.21.0 -->
+
+#### What's Changed
+##### Merged pull requests
+* feat: configurable footer display submenu by @championswimmer in https://github.com/championswimmer/pi-subagent-manager/pull/43
+
+
+**Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v0.20.0...v0.21.0
+
 ### [v0.20.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.20.0) — Minor release (2026-10-10)
 
 <!-- Release notes generated using configuration in .github/release.yml at v0.20.0 -->
