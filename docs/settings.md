@@ -21,6 +21,7 @@ All keys are optional. Defaults:
   "costValue": "subagents",
   "costIcon": "money",
   "finalRecap": false,
+  "subagentExtensions": false,
   "modelSelection": "pick-first-scoped",
   "toolFiltering": "allowed",
   "maxLevels": 3,
@@ -89,6 +90,16 @@ Both status modes use the same public Pi status API: third-party footers may als
 
 See [Subagent dollar totals in pi-footer](pi-footer.md) for step-by-step setup and copy-paste widget configuration, status-key, and event snippets.
 
+## [labs] Enable subagent extensions (`subagentExtensions`)
+
+Experimental on/off toggle, **off by default**. Enable **[labs] Enable subagent extensions** in `/agents settings` and save, or set `"subagentExtensions": true`.
+
+When a subagent session opens, it reloads enabled extension files from user configuration and, only when the main project is trusted, project configuration. Pi package resource filters and disabled-extension settings are respected; missing packages are skipped, never installed. This manager is excluded to avoid starting a second subagent manager inside each child. Each factory receives a child-local runtime and its hooks run against that child's session. Reloaded extension tools take precedence over inherited main-session bridges, including tools registered on `session_start`; tool filtering still applies. Other inherited tools keep their existing bridges.
+
+**This is configured-file discovery, not exact main-session inheritance. Bugs and unintended consequences are possible.** Read [subagent extension limitations](subagent-extension-limitations.md) before enabling it: the guide covers excluded extensions, configuration drift, `input` hook bypasses, shared side effects, non-interactive UI, and main-session tool bridges.
+
+Save and apply affects newly opened sessions, including retained sessions reopened after reload. Already-open agents keep their extension runtime until disposed. The main agent's extensions and tool set are not changed. Leave this off unless your extensions are safe to run across separate sessions.
+
 ## [labs] Final Recap (`finalRecap`)
 
 **[labs] Final Recap** is an experimental on/off toggle, **off by default**. Enable it in `/agents` and save with **Ctrl+S**, or set `"finalRecap": true` in your settings file.
@@ -129,7 +140,7 @@ How the type's `tools.allow` / `tools.block` lists are applied.
 
 - "All" includes child-local built-in and manager tools plus the main session's registered non-hidden tools. Exact-name allow/block lists apply to this inventory.
 - Inherited tools retain exposure and active status. Deferred/codemode tools are discoverable through child-local codemode when permitted; direct tools remain model-facing when active.
-- Built-in tools, manager controls, codemode and tool search remain child-local. External calls reuse main-session resources/context rather than loading fresh extensions or MCP connections. Bridged callable tools remain subject to the main session's tool policy; session-mutating external tools are not necessarily isolated to the child. Skills and project context files are not automatically loaded.
+- By default, built-in tools, manager controls, codemode and tool search remain child-local. External calls reuse main-session resources/context rather than loading fresh extensions or MCP connections. With [Enable subagent extensions](#labs-enable-subagent-extensions-subagentextensions), reloaded extension tools execute in the child instead. Bridged callable tools remain subject to the main session's tool policy; session-mutating external tools are not necessarily isolated to the child. Skills and project context files are not automatically loaded.
 - Other custom **model-only** tools fail closed: the SDK cannot bridge them while preserving root permission/result hooks. Run those in the main session.
 - UI/command-driven resumes after reopening the main session need a main-session `agent_*` tool call to establish the execution bridge; use `agent_steer` rather than the thread dialog.
 - Applies to newly started sessions (including retained ones reopened after reload). Already-open sessions keep their selected tools, and the main session's tool set is unchanged.

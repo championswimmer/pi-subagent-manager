@@ -818,3 +818,29 @@ test("confirmed reap revalidates resumed descendants and preserves their ancesto
   assert.equal(manager.list().length, 2);
   await manager.shutdown();
 });
+
+test("shutdown awaits asynchronous driver disposal", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let entered!: () => void;
+  const disposing = new Promise<void>((resolve) => (entered = resolve));
+  const { driver } = gated({
+    async dispose() {
+      entered();
+      await gate;
+    },
+  });
+  const { manager } = fixture({ createDriver: async () => driver });
+  await manager.spawn("/root", { path: "cleanup", type: "worker", task: "work", wait: false });
+  await tick();
+  let finished = false;
+  const shutdown = manager.shutdown().then(() => {
+    finished = true;
+  });
+  await disposing;
+  await tick();
+  assert.equal(finished, false, "cleanup runs before shutdown resolves");
+  release();
+  await shutdown;
+  assert.equal(finished, true);
+});

@@ -70,7 +70,7 @@ const settings = (
   widgetMode: WidgetMode = "full",
   nerdFontIcons = false,
   finalRecap = false,
-) => ({ maxLevels, maxConcurrent, maxThreads, modelSelection, subagentMode, toolFiltering, widgetMode, costDisplay: "pi-footer-status", costValue: "subagents", costIcon: "money", nerdFontIcons, loaderStyle: "circle", finalRecap });
+) => ({ maxLevels, maxConcurrent, maxThreads, modelSelection, subagentMode, toolFiltering, widgetMode, costDisplay: "pi-footer-status", costValue: "subagents", costIcon: "money", nerdFontIcons, loaderStyle: "circle", finalRecap, subagentExtensions: false });
 
 const escape = (path: string) => new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
@@ -137,6 +137,7 @@ test("missing files return a fresh copy of defaults without diagnostics", (t) =>
       nerdFontIcons: false,
       loaderStyle: "circle",
       finalRecap: false,
+      subagentExtensions: false,
     },
     diagnostics: [],
   });
@@ -379,6 +380,7 @@ test("save writes canonical 0600 files, creates owned directories, and reloads w
     nerdFontIcons: false,
     loaderStyle: "circle",
     finalRecap: false,
+    subagentExtensions: false,
     subagentMode: "opportunistic",
     toolFiltering: "allowed",
     modelSelection: "pick-first-scoped",
@@ -675,4 +677,19 @@ test("invalid cost values and icons reject the entire layer and refuse saving", 
       rejects(() => save(f, "user", { ...DEFAULTS, [key]: invalid }), new RegExp(key + " must be"));
     }
   }
+});
+
+test("subagent extensions default off, persist in either scope and require a boolean", (t) => {
+  const f = fixture(t);
+  assert.equal(load(f).settings.subagentExtensions, false);
+  save(f, "user", { ...DEFAULTS, subagentExtensions: true });
+  assert.equal(load(f).settings.subagentExtensions, true);
+  save(f, "project", { ...DEFAULTS, subagentExtensions: false });
+  assert.equal(load(f).settings.subagentExtensions, false);
+  assert.equal(load(f, false).settings.subagentExtensions, true);
+  writeJson(f.projectFile, { subagentExtensions: "true" });
+  const invalid = load(f);
+  assert.equal(invalid.settings.subagentExtensions, true);
+  assert.match(invalid.diagnostics.join("\n"), /subagentExtensions must be a boolean/);
+  rejects(() => save(f, "user", { ...DEFAULTS, subagentExtensions: 1 }), /must be a boolean/);
 });

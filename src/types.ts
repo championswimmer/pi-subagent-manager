@@ -128,7 +128,7 @@ export interface AgentDriver {
   observeTranscript?(listener: TranscriptListener): TranscriptObservation;
   output(): string;
   abort(): Promise<void>;
-  dispose(): void;
+  dispose(): void | Promise<void>;
   sendUpdate(content: string): Promise<void> | void;
   sessionFile?: string;
   sessionLeafId?: string | null;

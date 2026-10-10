@@ -51,6 +51,7 @@ export interface ManagerSettings {
   nerdFontIcons: boolean;
   loaderStyle: LoaderStyle;
   finalRecap: boolean;
+  subagentExtensions: boolean;
   maxLevels: number;
   maxConcurrent: number;
   maxThreads: number;
@@ -71,10 +72,11 @@ export const DEFAULT_MANAGER_SETTINGS: ManagerSettings = {
   nerdFontIcons: false,
   loaderStyle: "circle",
   finalRecap: false,
+  subagentExtensions: false,
 };
 
 const KEYS = [
-  "maxLevels", "maxConcurrent", "maxThreads", "modelSelection", "subagentMode", "toolFiltering", "widgetMode", "costDisplay", "costValue", "costIcon", "nerdFontIcons", "loaderStyle", "finalRecap",
+  "maxLevels", "maxConcurrent", "maxThreads", "modelSelection", "subagentMode", "toolFiltering", "widgetMode", "costDisplay", "costValue", "costIcon", "nerdFontIcons", "loaderStyle", "finalRecap", "subagentExtensions",
 ] as const;
 const MAX_LEVELS = 32;
 
@@ -112,7 +114,7 @@ function positiveSafeInteger(value: unknown): value is number {
 }
 
 function requirement(key: (typeof KEYS)[number]): string {
-  if (key === "nerdFontIcons" || key === "finalRecap") return `${key} must be a boolean`;
+  if (key === "nerdFontIcons" || key === "finalRecap" || key === "subagentExtensions") return `${key} must be a boolean`;
   if (key === "subagentMode") return "subagentMode must be off, opportunistic or orchestration";
   if (key === "widgetMode") return "widgetMode must be full or minimal";
   if (key === "costDisplay") return "costDisplay must be pi-footer-event, pi-footer-status or pi-status";
@@ -151,7 +153,7 @@ function parseSettings(content: string): Partial<ManagerSettings> {
   for (const key of KEYS) {
     if (!Object.hasOwn(record, key)) continue;
     const value = record[key];
-    if (key === "nerdFontIcons" || key === "finalRecap") {
+    if (key === "nerdFontIcons" || key === "finalRecap" || key === "subagentExtensions") {
       if (typeof value !== "boolean") throw new Error(requirement(key));
       layer[key] = value;
       continue;

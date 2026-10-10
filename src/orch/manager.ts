@@ -617,7 +617,7 @@ export class ThreadManager {
         await record.driver?.abort();
         await record.initializing?.catch(() => {});
         await record.run;
-        record.driver?.dispose();
+        await record.driver?.dispose();
       }),
     );
   }
@@ -745,7 +745,7 @@ export class ThreadManager {
         .then(async (driver) => {
           if (this.disposed || signal.aborted) {
             await driver.abort();
-            driver.dispose();
+            await driver.dispose();
             throw new Error("Driver startup cancelled");
           }
           record.driver = driver;

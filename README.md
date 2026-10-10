@@ -83,6 +83,8 @@ A live **Agents** widget sits above the input box. Choose **Full** (the existing
 
 Experimental features are marked **[labs]** in settings. Enable **[labs] Nerd Font icons** in `/agents` to show role-specific icons beside agent names (off by default; requires a Nerd Font in your terminal). Loaders appear **before**, never instead of, the role icon. Choose Circle, Braille, or Hourglass under **[labs] Loader style**, with previews of every animation frame and each family's completed, paused, failed, and stopped icons. Custom agent types can set an optional `icon` or use **[labs] Icon** in `/agents types`. See [icon setup](docs/settings.md#labs-nerd-font-icons-nerdfonticons).
 
+Enable **[labs] Enable subagent extensions** in `/agents settings` to reload configured user and trusted-project extension hooks in each subagent’s separate session. It is off by default and experimental: hooks that assume main-session state can cause bugs or unintended consequences. This is configured-file discovery, **not exact main-session inheritance**; CLI-only, inline, and built-in extensions are not reloaded. See [subagent extension settings](docs/settings.md#labs-enable-subagent-extensions-subagentextensions) and read the [limitations](docs/subagent-extension-limitations.md) before enabling.
+
 Enable **[labs] Final Recap** in `/agents` to automatically ask the idle main agent to summarize detached-agent results, keeping the final response in the main thread. It is off by default and suppressed by Subagent Mode Off. **Enabling it may cause extra model turns and uses more tokens and context.** See [Final Recap](docs/settings.md#labs-final-recap-finalrecap).
 
 ## Docs

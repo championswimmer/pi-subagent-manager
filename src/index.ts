@@ -452,6 +452,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
       () => limits.modelSelection,
       () => limits.toolFiltering,
       () => inheritedTools.snapshot(),
+      () => limits.subagentExtensions,
     );
   let driverFactory = makeDriverFactory();
   const toolsFor = (path: string) =>

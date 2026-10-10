@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -26,6 +26,8 @@ import {
 import { createDriverFactory } from "../src/orch/runtime.ts";
 import type { AgentDriver, DriverEvent, DriverOptions, TranscriptSnapshot } from "../src/types.ts";
 import type { ModelSelectionMode, ToolFilteringMode } from "../src/prefs/settings.ts";
+import type { InheritedToolSource } from "../src/orch/inherited-tools.ts";
+import { fileURLToPath } from "node:url";
 
 const answer = (text: string): AssistantMessage => ({
   role: "assistant",
@@ -174,6 +176,7 @@ test("isolated real SDK driver without credentials", async (t) => {
         return scopedModels;
       },
       thinkingLevel: "low",
+      isProjectTrusted: () => false,
     } as unknown as ExtensionContext;
     const setScopedModels = (...identities: string[]) => {
       scopedModels = identities.map((identity) => {
@@ -221,10 +224,14 @@ test("isolated real SDK driver without credentials", async (t) => {
     };
     let modelSelection: ModelSelectionMode = "pick-first-scoped";
     let toolFiltering: ToolFilteringMode = "allowed";
+    let subagentExtensions = false;
+    let inheritedTools: InheritedToolSource = { tools: [], activeNames: [] };
     const factory = createDriverFactory(
       () => ctx,
       () => modelSelection,
       () => toolFiltering,
+      () => inheritedTools,
+      () => subagentExtensions,
     );
     const events: DriverEvent[] = [];
     let pause = false;
@@ -262,6 +269,337 @@ test("isolated real SDK driver without credentials", async (t) => {
       setScopedModels("runtime-test/model/with/slashes", "runtime-other/backup");
       setRootModel("runtime-test/model/with/slashes");
     };
+
+    await t.test(
+      "configured hooks are opt-in, child-local, filtered and cleaned up on resume",
+      async () => {
+        const extensionDir = path.join(directory, "extensions");
+        await mkdir(extensionDir);
+        const extensionFile = path.join(extensionDir, "hooks.ts");
+        const shutdownLog = path.join(directory, "extension-shutdown.log");
+        await writeFile(shutdownLog, "");
+        const shutdownCount = async () =>
+          (await readFile(shutdownLog, "utf8")).trim().split("\n").filter(Boolean).length;
+        await writeFile(
+          extensionFile,
+          `
+        import { Type } from "@earendil-works/pi-ai";
+        import { appendFile } from "node:fs/promises";
+        export default function(pi) {
+          let count = 0;
+          const record = (event, data = {}) => pi.appendEntry("extension-test", { event, ...data });
+          pi.on("session_start", (_event, ctx) => {
+            count = ctx.sessionManager.getBranch().filter(e => e.type === "custom" && e.customType === "extension-test" && e.data.event === "execute").length;
+            record("start", { sessionId: ctx.sessionManager.getSessionId(), trusted: ctx.isProjectTrusted() });
+          });
+          pi.on("input", (event) => {
+            record("input");
+            return { action: "transform", text: "INPUT TRANSFORM: " + event.text };
+          });
+          pi.on("before_agent_start", (event) => {
+            record("before");
+            event.systemPromptOptions.appendSystemPrompt += "\\nEXTENSION BEFORE START";
+          });
+          pi.on("context", (event) => ({ messages: [...event.messages, { role: "user", content: "EXTENSION CONTEXT", timestamp: Date.now() }] }));
+          pi.on("tool_call", (event) => {
+            if (event.toolName !== "extension_echo") return;
+            record("call");
+            event.input.value = (event.input.value ?? 0) + 1;
+          });
+          pi.on("tool_result", (event) => {
+            if (event.toolName !== "extension_echo") return;
+            record("result");
+            return { content: [...event.content, { type: "text", text: "EXTENSION RESULT" }] };
+          });
+          const echo = {
+            name: "extension_echo", label: "Echo", description: "Echo child session state",
+            parameters: Type.Object({ value: Type.Optional(Type.Number()) }),
+            execute: async (_id, args, _signal, _update, ctx) => {
+              record("execute", { count: ++count, value: args.value, sessionId: ctx.sessionManager.getSessionId() });
+              return { content: [{ type: "text", text: "EXTENSION EXECUTION" }], details: { count } };
+            },
+          };
+          pi.registerTool(echo);
+          pi.on("session_start", () => pi.registerTool({ ...echo, name: "extension_delayed" }));
+          pi.on("session_shutdown", async (_event, ctx) => {
+            await Promise.resolve();
+            record("shutdown");
+            await appendFile(${JSON.stringify(shutdownLog)}, ctx.sessionManager.getSessionId() + "\\n");
+          });
+        }
+      `,
+        );
+        await symlink(
+          fileURLToPath(new URL("../src/index.ts", import.meta.url)),
+          path.join(extensionDir, "manager.ts"),
+        );
+        // Also exercise the SDK loader after discovery with a missing configured package.
+        // A fake local npm executable records any attempt to install (never uses network).
+        const installMarker = path.join(directory, "install-attempted");
+        const fakeNpm = path.join(directory, "fake-npm.cjs");
+        await writeFile(
+          fakeNpm,
+          `
+        const fs = require("node:fs");
+        if (process.argv.includes("install")) {
+          fs.writeFileSync(${JSON.stringify(installMarker)}, "installation attempted");
+          process.exit(1);
+        }
+        console.log(${JSON.stringify(path.join(directory, "empty-global-root"))});
+      `,
+        );
+        await writeFile(
+          path.join(directory, "settings.json"),
+          JSON.stringify({
+            packages: ["npm:pi-subagent-missing-package-fixture@0.0.0"],
+            npmCommand: [process.execPath, fakeNpm],
+          }),
+        );
+        let bridgeCalls = 0;
+        inheritedTools = {
+          activeNames: ["extension_echo", "extension_delayed"],
+          tools: ["extension_echo", "extension_delayed"].map((name) => ({
+            name,
+            label: "Echo",
+            description: "Root bridge",
+            parameters: Type.Object({}),
+            async execute() {
+              bridgeCalls++;
+              return { content: [{ type: "text", text: "ROOT BRIDGE" }], details: undefined };
+            },
+          })),
+        };
+        const extensionOptions = (threadPath: string, overrides: Partial<DriverOptions> = {}) =>
+          options({
+            path: threadPath,
+            type: { ...options().type, tools: { allow: ["extension_echo", "extension_delayed"] } },
+            ...overrides,
+          });
+        const entries = (file: string) =>
+          SessionManager.open(file)
+            .getBranch()
+            .filter((entry) => entry.type === "custom" && entry.customType === "extension-test")
+            .map(
+              (entry) =>
+                (
+                  entry as {
+                    data: {
+                      event: string;
+                      count?: number;
+                      value?: number;
+                      sessionId?: string;
+                      trusted?: boolean;
+                    };
+                  }
+                ).data,
+            );
+        const issueToolCall = (name = "extension_echo") => {
+          const reply = toolCall(`echo-${calls}`, name);
+          next = answer("extension answer");
+          scripted = (stream) => {
+            stream.push({ type: "done", reason: "toolUse", message: reply });
+            stream.end(reply);
+          };
+        };
+        try {
+          const off = await create(extensionOptions("/root/extensions-off"));
+          issueToolCall();
+          await off.prompt("default off");
+          assert.equal(bridgeCalls, 1);
+          assert.deepEqual(entries(off.sessionFile!), []);
+          assert.doesNotMatch(requests.at(-1)!.system, /EXTENSION BEFORE START/);
+          assert.doesNotMatch(JSON.stringify(requests.at(-1)!.messages), /EXTENSION CONTEXT/);
+
+          subagentExtensions = true;
+          const child = await create(extensionOptions("/root/extensions-on"));
+          issueToolCall();
+          await child.prompt("run child hooks");
+          assert.equal(bridgeCalls, 1, "reloaded tool replaces bridge rather than executing twice");
+          const records = entries(child.sessionFile!);
+          assert.deepEqual(
+            records.map(({ event }) => event),
+            ["start", "input", "before", "call", "execute", "result"],
+          );
+          assert.equal(records[0]!.trusted, false);
+          assert.notEqual(records[0]!.sessionId, root.getSessionId());
+          const executed = records.find(({ event }) => event === "execute")!;
+          assert.equal(executed.sessionId, records[0]!.sessionId);
+          assert.equal(executed.count, 1);
+          assert.equal(executed.value, 1, "tool hook transforms arguments once");
+          assert.match(requests.at(-1)!.system, /EXTENSION BEFORE START/);
+          assert.match(JSON.stringify(requests.at(-1)!.messages), /EXTENSION CONTEXT/);
+          assert.match(JSON.stringify(requests.at(-1)!.messages), /EXTENSION RESULT/);
+          assert.deepEqual(requests.at(-1)!.toolNames, ["extension_echo", "extension_delayed"]);
+          assert.equal(
+            events.some(
+              (event) => event.kind === "error" && /conflict|agent_spawn/i.test(event.text),
+            ),
+            false,
+          );
+
+          const other = await create(extensionOptions("/root/extensions-other"));
+          issueToolCall();
+          await other.prompt("separate extension state");
+          assert.equal(
+            entries(other.sessionFile!).find(({ event }) => event === "execute")!.count,
+            1,
+          );
+          issueToolCall("extension_delayed");
+          await other.prompt("session_start tool also replaces bridge");
+          assert.equal(bridgeCalls, 1);
+          assert.equal(
+            entries(other.sessionFile!)
+              .filter(({ event }) => event === "execute")
+              .at(-1)!.count,
+            2,
+          );
+          const otherFile = other.sessionFile!;
+          const previousInputs = entries(otherFile).filter(({ event }) => event === "input").length;
+          await other.steer("DURABLE STEERING STAYS RAW");
+          assert.equal(
+            entries(otherFile).filter(({ event }) => event === "input").length,
+            previousInputs,
+          );
+          await other.dispose();
+          const replayed = await create(
+            extensionOptions("/root/extensions-other", { sessionFile: otherFile, inherited: [] }),
+          );
+          await replayed.prompt("replay pending steering");
+          const replayMessages = JSON.stringify(requests.at(-1)!.messages);
+          assert.match(replayMessages, /INPUT TRANSFORM: replay pending steering/);
+          assert.match(replayMessages, /DURABLE STEERING STAYS RAW/);
+          assert.doesNotMatch(replayMessages, /INPUT TRANSFORM: DURABLE STEERING STAYS RAW/);
+          assert.equal(
+            entries(otherFile).filter(({ event }) => event === "input").length,
+            previousInputs + 1,
+          );
+          await replayed.dispose();
+          const file = child.sessionFile!;
+          await child.dispose();
+          await child.dispose();
+          assert.equal(entries(file).filter(({ event }) => event === "shutdown").length, 1);
+          const reopened = await create(
+            extensionOptions("/root/extensions-on", { sessionFile: file, inherited: [] }),
+          );
+          issueToolCall();
+          await reopened.prompt("restore extension branch state");
+          assert.equal(entries(file).filter(({ event }) => event === "start").length, 2);
+          assert.equal(
+            entries(file)
+              .filter(({ event }) => event === "execute")
+              .at(-1)!.count,
+            2,
+          );
+
+          // The startup snapshot is retained until a session is actually reopened.
+          subagentExtensions = false;
+          await reopened.prompt("keep live hooks");
+          assert.match(requests.at(-1)!.system, /EXTENSION BEFORE START/);
+          await reopened.dispose();
+          const disabledResume = await create(
+            extensionOptions("/root/extensions-on", { sessionFile: file, inherited: [] }),
+          );
+          const previousStarts = entries(file).filter(({ event }) => event === "start").length;
+          issueToolCall();
+          await disabledResume.prompt("resume with extensions disabled");
+          assert.equal(
+            entries(file).filter(({ event }) => event === "start").length,
+            previousStarts,
+          );
+          assert.equal(bridgeCalls, 2);
+
+          subagentExtensions = true;
+          const filtered = await create(options({ path: "/root/extensions-filtered" }));
+          await filtered.prompt("hooks must not add unauthorized tools");
+          assert.deepEqual(requests.at(-1)!.toolNames, []);
+          assert.match(requests.at(-1)!.system, /EXTENSION BEFORE START/);
+          assert.deepEqual(
+            root
+              .getBranch()
+              .filter((entry) => entry.type === "custom" && entry.customType === "extension-test"),
+            [],
+            "main session untouched",
+          );
+          await other.dispose();
+          await filtered.dispose();
+
+          const shutdownsBeforeError = await shutdownCount();
+          ctx.isProjectTrusted = () => true;
+          await assert.rejects(
+            create(options({ path: "/root/extensions-project-error" })),
+            /Subagent extension loading failed:.*External extension loaded/,
+          );
+          assert.equal(
+            await shutdownCount(),
+            shutdownsBeforeError + 1,
+            "successful factories shut down when another extension fails to load",
+          );
+          await writeFile(
+            path.join(cwd, ".pi", "settings.json"),
+            JSON.stringify({ extensions: ["-extensions/bad.ts"] }),
+          );
+          const trusted = await create(options({ path: "/root/extensions-trusted" }));
+          await trusted.prompt("disabled project extension must stay disabled");
+          assert.equal(entries(trusted.sessionFile!)[0]!.trusted, true);
+          await trusted.dispose();
+          ctx.isProjectTrusted = () => false;
+          const cancelKey = "pi-subagent-runtime-abort-during-extension-load";
+          const globals = globalThis as Record<string, unknown>;
+          const duringLoad = new AbortController();
+          globals[cancelKey] = duringLoad;
+          const cancellationFile = path.join(extensionDir, "cancel.ts");
+          await writeFile(
+            cancellationFile,
+            `export default function() { globalThis[${JSON.stringify(cancelKey)}]?.abort(new Error("extension startup cancelled")); }`,
+          );
+          const shutdownsBeforeCancel = await shutdownCount();
+          try {
+            await assert.rejects(
+              create(
+                options({ path: "/root/extensions-load-cancelled", signal: duringLoad.signal }),
+              ),
+              /extension startup cancelled/,
+            );
+            assert.equal(
+              await shutdownCount(),
+              shutdownsBeforeCancel + 1,
+              "loaded factories shut down after startup cancellation",
+            );
+          } finally {
+            delete globals[cancelKey];
+            await rm(cancellationFile, { force: true });
+          }
+
+          const appendModelChange = SessionManager.prototype.appendModelChange;
+          const shutdownsBeforeSdkFailure = await shutdownCount();
+          SessionManager.prototype.appendModelChange = () => {
+            throw new Error("SDK session creation failed");
+          };
+          try {
+            await assert.rejects(
+              create(options({ path: "/root/extensions-sdk-failed", inherited: [] })),
+              /SDK session creation failed/,
+            );
+            assert.equal(
+              await shutdownCount(),
+              shutdownsBeforeSdkFailure + 1,
+              "best-effort shutdown also runs when SDK construction fails",
+            );
+          } finally {
+            SessionManager.prototype.appendModelChange = appendModelChange;
+          }
+          const { access } = await import("node:fs/promises");
+          await assert.rejects(access(installMarker), { code: "ENOENT" });
+        } finally {
+          ctx.isProjectTrusted = () => false;
+          await rm(path.join(cwd, ".pi", "settings.json"), { force: true });
+          await rm(path.join(directory, "settings.json"), { force: true });
+          inheritedTools = { tools: [], activeNames: [] };
+          subagentExtensions = false;
+          await rm(extensionDir, { recursive: true, force: true });
+        }
+      },
+    );
 
     await t.test(
       "discovery resolves the same model and effective thinking as new drivers",

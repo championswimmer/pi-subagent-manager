@@ -5,6 +5,10 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, realpath } from "node:fs/promises";
 import {
   createAgentSession,
+  createExtensionRuntime,
+  ExtensionRunner,
+  ModelRegistry,
+  createSyntheticSourceInfo,
   createCodemodeExtension,
   createToolSearchExtension,
   DefaultResourceLoader,
@@ -23,6 +27,7 @@ import {
 } from "./mailbox.ts";
 import { selectTools } from "../prefs/config.ts";
 import { TranscriptChannel } from "./transcript.ts";
+import { discoverSubagentExtensions } from "./extensions.ts";
 import type { InheritedToolSource } from "./inherited-tools.ts";
 import type { ModelSelectionMode, ToolFilteringMode } from "../prefs/settings.ts";
 import {
@@ -143,12 +148,13 @@ async function assertAcceptedSessionFile(
   }
 }
 
-/** Isolated SDK sessions with filtered root tool bridges, not reloaded root extensions. */
+/** Isolated SDK sessions; configured extension reload is experimental and opt-in. */
 export function createDriverFactory(
   getRootContext: () => ExtensionContext,
   getModelSelection: () => ModelSelectionMode = () => "pick-first-scoped",
   getToolFiltering: () => ToolFilteringMode = () => "allowed",
   getInheritedTools: () => InheritedToolSource = () => ({ tools: [], activeNames: [] }),
+  getSubagentExtensions: () => boolean = () => false,
 ): DriverFactory & {
   resolveAgentSettings(type: AgentType, parentPath: string): ResolvedAgentSettings;
 } {
@@ -246,6 +252,7 @@ export function createDriverFactory(
     const ctx = getRootContext();
     // Tool policy is a startup snapshot; retained live sessions keep their selected set.
     const toolFiltering = getToolFiltering();
+    const subagentExtensions = getSubagentExtensions();
     const rootId = ctx.sessionManager.getSessionId();
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(rootId))
       throw new Error("Unsafe root session id for subagent storage");
@@ -393,10 +400,14 @@ export function createDriverFactory(
         rootActive.has(name) ||
         (options.type.tools?.allow?.includes(name) && toolFiltering === "allowed"),
     );
-    const customTools = [...options.tools, ...externalTools].filter(
-      (tool) => allowed.has(tool.name) && tool.name !== "codemode" && tool.name !== "tool_search",
-    );
-    const settingsManager = SettingsManager.inMemory({ cacheWarming: "off" });
+    const projectTrusted = ctx.isProjectTrusted?.() ?? false;
+    const extensionPaths = subagentExtensions
+      ? await discoverSubagentExtensions({ cwd: ctx.cwd, agentDir, projectTrusted })
+      : [];
+    // Keep discovery settings OUT of this loader: reload() resolves packages with
+    // auto-install enabled. An empty in-memory package/resource list ensures it
+    // only loads the already-resolved files and cannot install missing packages.
+    const settingsManager = SettingsManager.inMemory({ cacheWarming: "off" }, { projectTrusted });
     let parkQueue = () => {};
     const pauseBoundary = () => {
       if (!options.shouldPause()) return undefined;
@@ -408,6 +419,38 @@ export function createDriverFactory(
       agentDir,
       settingsManager,
       noExtensions: true,
+      additionalExtensionPaths: extensionPaths,
+      // Put bridges AFTER file extensions in the runner registry. First registration
+      // wins there, including tools registered by file extensions on session_start
+      // or later. SDK customTools would always override those child-local tools.
+      extensionsOverride: subagentExtensions
+        ? (base) => {
+            const sourceInfo = createSyntheticSourceInfo("<subagent-inherited-tools>", {
+              source: "sdk",
+            });
+            base.extensions.push({
+              path: "<subagent-inherited-tools>",
+              resolvedPath: "<subagent-inherited-tools>",
+              sourceInfo,
+              handlers: new Map(),
+              tools: new Map(
+                externalTools
+                  .filter(
+                    (tool) =>
+                      allowed.has(tool.name) &&
+                      tool.name !== "codemode" &&
+                      tool.name !== "tool_search",
+                  )
+                  .map((definition) => [definition.name, { definition, sourceInfo }]),
+              ),
+              messageRenderers: new Map(),
+              commands: new Map(),
+              flags: new Map(),
+              shortcuts: new Map(),
+            });
+            return base;
+          }
+        : undefined,
       noSkills: true,
       noPromptTemplates: true,
       noContextFiles: true,
@@ -430,8 +473,24 @@ export function createDriverFactory(
       extensionFactories: [
         // These orchestrators must see the CHILD loadout. Forwarding root codemode would
         // let scripts discover/call tools outside the child's allow/block policy.
-        ...(allowed.has("codemode") ? [createCodemodeExtension()] : []),
-        ...(allowed.has("tool_search") ? [createToolSearchExtension()] : []),
+        ...(allowed.has("codemode")
+          ? [
+              subagentExtensions
+                ? { name: "child-codemode", factory: createCodemodeExtension(), replaceable: true }
+                : createCodemodeExtension(),
+            ]
+          : []),
+        ...(allowed.has("tool_search")
+          ? [
+              subagentExtensions
+                ? {
+                    name: "child-tool-search",
+                    factory: createToolSearchExtension(),
+                    replaceable: true,
+                  }
+                : createToolSearchExtension(),
+            ]
+          : []),
         (pi) => {
           pi.on("turn_end", pauseBoundary);
           pi.on("agent_before_settle", pauseBoundary);
@@ -445,22 +504,104 @@ export function createDriverFactory(
     });
     options.signal.throwIfAborted();
     await loader.reload();
-    options.signal.throwIfAborted();
-    const { session } = await createAgentSession({
-      cwd: ctx.cwd,
-      agentDir,
-      modelRuntime: runtime,
-      model,
-      thinkingLevel,
-      scopedModels: [...initialScopedModels],
-      settingsManager,
-      resourceLoader: loader,
-      sessionManager,
-      // SDK `tools` is both a registry allowlist and an initial active list.
-      // Register every permitted deferred tool, then narrow declarations after bind.
-      tools: toolNames,
-      customTools,
-    });
+    const loadedExtensions = loader.getExtensions();
+    // Manager controls remain SDK custom tools so loaded extensions cannot replace
+    // them. With reload disabled, preserve the existing SDK bridge behavior exactly.
+    const customTools = [...options.tools, ...(subagentExtensions ? [] : externalTools)].filter(
+      (tool) => allowed.has(tool.name) && tool.name !== "codemode" && tool.name !== "tool_search",
+    );
+    let session: Awaited<ReturnType<typeof createAgentSession>>["session"];
+    try {
+      ({ session } = await createAgentSession({
+        cwd: ctx.cwd,
+        agentDir,
+        modelRuntime: runtime,
+        model,
+        thinkingLevel,
+        scopedModels: [...initialScopedModels],
+        settingsManager,
+        resourceLoader: loader,
+        sessionManager,
+        // SDK `tools` is both a registry allowlist and an initial active list.
+        // Register every permitted deferred tool, then narrow declarations after bind.
+        tools: toolNames,
+        customTools,
+      }));
+    } catch (error) {
+      if (subagentExtensions) {
+        // No session was returned, so normal disposal is unavailable. Give loaded
+        // factories a shutdown-only runner with child-local metadata/persistence;
+        // unavailable session actions remain throwing stubs, not root bridges.
+        await (async () => {
+          const runner = new ExtensionRunner(
+            loadedExtensions.extensions,
+            loadedExtensions.runtime,
+            ctx.cwd,
+            sessionManager,
+            new ModelRegistry(runtime),
+          );
+          try {
+            runner.bindCore(
+              {
+                ...createExtensionRuntime(),
+                appendEntry: (customType, data) =>
+                  sessionManager.appendCustomEntry(customType, data),
+                getSessionName: () => sessionManager.getSessionName(),
+                getSettings: () => settingsManager.getSettings(),
+                getThinkingLevel: () => clampThinkingLevel(model, thinkingLevel),
+              },
+              {
+                getModel: () => model,
+                getScopedModels: () => initialScopedModels,
+                isIdle: () => true,
+                isProjectTrusted: () => projectTrusted,
+                getSignal: () => undefined,
+                abort: () => {},
+                hasPendingMessages: () => false,
+                shutdown: () => {},
+                getContextUsage: () => undefined,
+                compact: () => {},
+                getSystemPrompt: () => loader.getSystemPrompt() ?? "",
+              },
+            );
+            await runner.emit({ type: "session_shutdown", reason: "quit" });
+          } finally {
+            runner.invalidate();
+          }
+        })().catch(() => {
+          // Best-effort cleanup must not hide the SDK's original startup failure.
+        });
+      }
+      throw error;
+    }
+    const unsubscribeExtensionErrors = subagentExtensions
+      ? session.extensionRunner.onError((error) =>
+          options.onEvent({
+            kind: "error",
+            text: `Extension ${error.extensionPath} (${error.event}): ${error.error}`.slice(
+              0,
+              1000,
+            ),
+          }),
+        )
+      : () => {};
+    let shutdownPromise: Promise<void> | undefined;
+    const disposeSession = () => {
+      if (!subagentExtensions) {
+        session.dispose();
+        return;
+      }
+      // SDK dispose invalidates contexts but does not emit session_shutdown. Await
+      // handlers before invalidation so session-scoped resources can be released.
+      return (shutdownPromise ??= (async () => {
+        try {
+          await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+        } finally {
+          unsubscribeExtensionErrors();
+          session.dispose();
+        }
+      })());
+    };
     let lastScopedModelsKey = "";
     const updateResolved = () => {
       const currentModel = session.model;
@@ -530,13 +671,24 @@ export function createDriverFactory(
       updateResolved();
     };
     try {
+      // Factories have already run: abort/load failures must use the same awaited
+      // shutdown lifecycle as failures during extension binding, without emitting
+      // session_start or starting a model turn.
+      options.signal.throwIfAborted();
+      if (subagentExtensions && loadedExtensions.errors.length) {
+        throw new Error(
+          `Subagent extension loading failed: ${loadedExtensions.errors
+            .map(({ path, error }) => `${path}: ${error}`)
+            .join("; ")}`,
+        );
+      }
       await enforceScopedModelPolicy();
       options.signal.throwIfAborted();
       await session.bindExtensions({ mode: "print" });
       session.setActiveToolsByName(activeToolNames);
       options.signal.throwIfAborted();
     } catch (error) {
-      session.dispose();
+      await disposeSession();
       throw error;
     }
     const streamFunction = session.agent.streamFunction;
@@ -766,13 +918,13 @@ export function createDriverFactory(
         await abortPromise;
       },
       dispose() {
-        if (disposed) return;
+        if (disposed) return shutdownPromise;
         disposed = true;
         aborted = true;
         restoreAppends();
         transcript.dispose();
         unsubscribe();
-        session.dispose();
+        return disposeSession();
       },
       async sendUpdate(content) {
         assertOpen();

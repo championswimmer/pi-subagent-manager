@@ -617,3 +617,37 @@ test("Footer submenu and pickers fit narrow terminals and save to project scope"
     assert.equal(existsSync(result.projectFile), true);
   }
 });
+
+test("[labs] Enable subagent extensions warns, toggles, saves and restores default off", async (t) => {
+  const enabled = await run(t, ["subagentExtensions", "save"]);
+  const row = enabled.menus[0]!.rows.find((row) => row.id === "subagentExtensions")!;
+  assert.equal(row.label, "[labs] Enable subagent extensions");
+  assert.equal(row.value, "Off");
+  assert.match(row.help!, /Experimental/);
+  assert.match(row.help!, /Bugs and unintended consequences/);
+  assert.match(row.help!, /separate subagent sessions/);
+  assert.match(row.help!, /configured user\/trusted-project extension hooks/);
+  assert.match(row.help!, /not CLI-only or inline extensions/);
+  const limitationsUrl =
+    "https://github.com/championswimmer/pi-subagent-manager/blob/main/docs/subagent-extension-limitations.md";
+  assert.ok(row.help!.includes(`Read limitations: ${limitationsUrl}`));
+  assert.ok(existsSync(new URL("../docs/subagent-extension-limitations.md", import.meta.url)));
+  assert.equal(enabled.loaded.settings.subagentExtensions, true);
+  assert.equal(enabled.applied, 1);
+  const disabled = await run(t, ["subagentExtensions", "save"], {
+    settings: { ...DEFAULT_MANAGER_SETTINGS, subagentExtensions: true },
+  });
+  assert.equal(disabled.loaded.settings.subagentExtensions, false);
+  const cancelled = await run(t, ["subagentExtensions", "cancel"]);
+  assert.equal(cancelled.applied, 0);
+  assert.equal(existsSync(cancelled.userFile), false);
+  const defaults = await run(t, ["defaults", "save"], {
+    settings: { ...DEFAULT_MANAGER_SETTINGS, subagentExtensions: true },
+  });
+  assert.equal(defaults.loaded.settings.subagentExtensions, false);
+  for (const width of [20, 40, 80]) {
+    const narrow = await run(t, ["subagentExtensions", "save"], { width, trusted: true });
+    assert.equal(narrow.loaded.settings.subagentExtensions, true);
+    assert.ok(narrow.renders.every((lines) => lines.every((line) => visibleWidth(line) <= width)));
+  }
+});

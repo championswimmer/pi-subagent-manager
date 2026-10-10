@@ -303,6 +303,12 @@ async function configureAgentsDialog(
           help: "Choose Circle, Braille or Hourglass. Preview every animation frame and settled state for all families.\nRequires [labs] Nerd Font icons On. Circle is the default.\nSave and apply to update the widget immediately.",
         },
         {
+          id: "subagentExtensions",
+          label: "[labs] Enable subagent extensions",
+          value: draft.subagentExtensions ? "On" : "Off",
+          help: "Experimental: reload configured user/trusted-project extension hooks in separate subagent sessions (not CLI-only or inline extensions). Bugs and unintended consequences may occur if hooks assume main-session state.\nRead limitations: https://github.com/championswimmer/pi-subagent-manager/blob/main/docs/subagent-extension-limitations.md\nOff by default. Save and apply affects newly opened sessions, not already-open agents.",
+        },
+        {
           id: "finalRecap",
           label: "[labs] Final Recap",
           value: draft.finalRecap ? "On" : "Off",
@@ -398,6 +404,8 @@ async function configureAgentsDialog(
           selectedId: draft.loaderStyle,
         });
         if (LOADER_STYLES.includes(style as LoaderStyle)) draft.loaderStyle = style as LoaderStyle;
+      } else if (action === "subagentExtensions") {
+        draft.subagentExtensions = !draft.subagentExtensions;
       } else if (action === "finalRecap") {
         draft.finalRecap = !draft.finalRecap;
       } else if (action === "scope") {
