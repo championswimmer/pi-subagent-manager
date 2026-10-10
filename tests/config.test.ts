@@ -388,10 +388,9 @@ test("merges keep unset fields on the base and null clears optional fields", () 
   assert.equal(cleared.icon, undefined);
   assert.equal(cleared.tools, undefined);
   assert.deepEqual(diffAgentSettings(base, { ...base, thinkingLevel: "low" }), {
-    name: "example",
     thinkingLevel: "low",
   });
-  assert.deepEqual(diffAgentSettings(base, base), { name: "example" });
+  assert.deepEqual(diffAgentSettings(base, base), {});
 });
 
 test("user .yml merges over bundled, project .yml merges over user, forks win", (t) => {
@@ -455,7 +454,7 @@ test("saveOverride writes sparse .yml and removeCustomization restores the base"
   );
   assert.equal(saved.thinkingLevel, "low");
   assert.ok(saved.filePath?.endsWith("example.yml"));
-  assert.equal(readFileSync(saved.filePath!, "utf8"), "name: example\nthinkingLevel: low\n");
+  assert.equal(readFileSync(saved.filePath!, "utf8"), "thinkingLevel: low\n");
   assert.equal(store.get("example").color, "accent");
   assert.throws(
     () => store.saveOverride("example", { ...saved, name: "renamed" }, "user", saved),
@@ -464,4 +463,143 @@ test("saveOverride writes sparse .yml and removeCustomization restores the base"
   store.removeCustomization("example", "user");
   assert.equal(store.get("example").thinkingLevel, "high");
   assert.equal(store.get("example").source, "bundled");
+});
+
+test("nested tool overrides inherit siblings and preserve explicit clears", () => {
+  const base: AgentType = { ...definition, tools: { allow: ["read"], block: ["bash"] } };
+  assert.deepEqual(mergeAgentSettings(base, { tools: { allow: [] } }).tools, {
+    allow: [],
+    block: ["bash"],
+  });
+  assert.deepEqual(diffAgentSettings(base, { ...base, tools: { allow: [], block: ["bash"] } }), {
+    tools: { allow: [] },
+  });
+});
+
+test("empty override creation and default updates never pin untouched settings", (t) => {
+  const f = fixture(t);
+  const initial: Partial<AgentType> = {
+    models: ["provider/old"],
+    thinkingLevel: "high",
+    tools: { allow: ["read"], block: ["bash"] },
+  };
+  write(f.bundledDir, "example.md", initial);
+  const store = new ConfigStore({ ...f, includeProject: true });
+  const original = store.get("example");
+  const empty = store.saveOverride("example", original, "user", original);
+  assert.deepEqual(parseAgentSettings(readFileSync(empty.filePath!, "utf8")), {});
+  const draft = { ...empty, tools: { ...empty.tools, allow: [] } };
+  store.saveOverride("example", draft, "user", empty);
+  assert.deepEqual(parseAgentSettings(readFileSync(empty.filePath!, "utf8")), {
+    tools: { allow: [] },
+  });
+  write(f.bundledDir, "example.md", {
+    models: ["provider/new"],
+    thinkingLevel: "low",
+    description: "Updated",
+    systemPrompt: "New prompt",
+    tools: { allow: ["write"], block: ["edit"] },
+  });
+  store.reload();
+  assert.deepEqual(store.get("example").models, ["provider/new"]);
+  assert.equal(store.get("example").thinkingLevel, "low");
+  assert.equal(store.get("example").systemPrompt, "New prompt");
+  assert.equal(store.get("example").description, "Updated");
+  assert.deepEqual(store.get("example").tools, { allow: [], block: ["edit"] });
+});
+
+test("saving another setting preserves existing pins even when equal to the default", (t) => {
+  const f = fixture(t);
+  write(f.bundledDir, "example.md", { models: ["provider/pinned"], color: "accent" });
+  writeFileSync(join(f.user, "example.yaml"), "models: [provider/pinned]\ntools:\n  allow: []\n");
+  const store = new ConfigStore({ ...f, includeProject: true });
+  const original = store.get("example");
+  store.saveOverride("example", { ...original, color: "success" }, "user", original);
+  assert.deepEqual(parseAgentSettings(readFileSync(original.filePath!, "utf8")), {
+    models: ["provider/pinned"],
+    tools: { allow: [] },
+    color: "success",
+  });
+  write(f.bundledDir, "example.md", { models: ["provider/new"] });
+  store.reload();
+  assert.deepEqual(store.get("example").models, ["provider/pinned"]);
+});
+
+test("saving to a different scope writes only edits against that scope's lower layer", (t) => {
+  const f = fixture(t);
+  write(f.bundledDir, "example.md", {
+    thinkingLevel: "high",
+    color: "accent",
+    models: ["provider/old"],
+  });
+  writeFileSync(join(f.user, "example.yml"), "thinkingLevel: low\n");
+  const store = new ConfigStore({ ...f, includeProject: true });
+  let original = store.get("example");
+  store.saveOverride("example", { ...original, color: "success" }, "project", original);
+  assert.deepEqual(parseAgentSettings(readFileSync(join(f.project, "example.yml"), "utf8")), {
+    color: "success",
+  });
+  original = store.get("example");
+  store.saveOverride("example", { ...original, thinkingLevel: "medium" }, "user", original);
+  assert.deepEqual(parseAgentSettings(readFileSync(join(f.user, "example.yml"), "utf8")), {
+    thinkingLevel: "medium",
+  });
+  assert.equal(store.get("example").color, "success");
+  rmSync(join(f.project, "example.yml"));
+  store.reload();
+  assert.equal(store.get("example").color, "accent");
+});
+
+test("nested null and empty lists round-trip, clear independently, and cannot widen validation", () => {
+  const base: AgentType = { ...definition, tools: { allow: ["read"], block: ["bash"] } };
+  const override = parseAgentSettings("tools:\n  allow: null\n  block: []\n");
+  assert.deepEqual(parseAgentSettings(serializeAgentSettings(override)), override);
+  const merged = mergeAgentSettings(base, override);
+  assert.deepEqual(merged.tools, { block: [] });
+  assert.deepEqual(mergeAgentSettings(base, { tools: { block: null } }).tools, { allow: ["read"] });
+  assert.deepEqual(mergeAgentSettings(base, { tools: {} }).tools, base.tools);
+  assert.deepEqual(base.tools, { allow: ["read"], block: ["bash"] });
+  assert.deepEqual(diffAgentSettings(base, merged), override);
+  for (const tools of ["allow: false", "block: [read, read]", "block: ['*']", "deny: null"])
+    assert.throws(() => parseAgentSettings(`tools:\n  ${tools}\n`));
+});
+
+test("editing a whole-policy clear keeps the untouched sibling clear", (t) => {
+  const f = fixture(t);
+  write(f.bundledDir, "example.md", { tools: { allow: ["read"], block: ["bash"] } });
+  writeFileSync(join(f.user, "example.yml"), "tools: null\n");
+  const store = new ConfigStore({ ...f, includeProject: false });
+  const original = store.get("example");
+  const saved = store.saveOverride(
+    "example",
+    { ...original, tools: { allow: [] } },
+    "user",
+    original,
+  );
+  assert.deepEqual(saved.tools, { allow: [] });
+  assert.deepEqual(parseAgentSettings(readFileSync(saved.filePath!, "utf8")), {
+    tools: { allow: [], block: null },
+  });
+  const reset = store.saveOverride(
+    "example",
+    { ...saved, tools: { allow: ["read"] } },
+    "user",
+    saved,
+  );
+  assert.deepEqual(parseAgentSettings(readFileSync(reset.filePath!, "utf8")), {
+    tools: { block: null },
+  });
+});
+
+test("stale drafts do not write inherited fields that changed after editing began", (t) => {
+  const f = fixture(t);
+  write(f.bundledDir, "example.md", { models: ["provider/old"], thinkingLevel: "high" });
+  const store = new ConfigStore({ ...f, includeProject: false });
+  const original = store.get("example");
+  write(f.bundledDir, "example.md", { models: ["provider/new"], thinkingLevel: "low" });
+  store.reload();
+  const saved = store.saveOverride("example", { ...original, color: "success" }, "user", original);
+  assert.deepEqual(saved.models, ["provider/new"]);
+  assert.equal(saved.thinkingLevel, "low");
+  assert.deepEqual(parseAgentSettings(readFileSync(saved.filePath!, "utf8")), { color: "success" });
 });
