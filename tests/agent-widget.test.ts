@@ -101,7 +101,7 @@ test("status tree honors a sibling comparator but cycle repair stays lexical", (
     reverse,
   );
   assert.equal(cycle.find((row) => row.path === "/root/a")?.prefix, "");
-  assert.equal(cycle.find((row) => row.path === "/root/b")?.prefix, "└─ ");
+  assert.equal(cycle.find((row) => row.path === "/root/b")?.prefix, "└ ");
 });
 
 test("agent tree heading, hierarchy, declared parents, and root exclusion", () => {
@@ -132,8 +132,8 @@ test("agent tree heading, hierarchy, declared parents, and root exclusion", () =
   assert.ok(indexOf(nested, "Parent") < indexOf(nested, "Child"));
   assert.ok(indexOf(nested, "Child") < indexOf(nested, "Grand"));
   assert.ok(indexOf(nested, "Grand") < indexOf(nested, "Sibling"));
-  assert.match(lineOf(nested, "Child"), /^│  └─ /);
-  assert.match(lineOf(nested, "Grand"), /^│     └─ /);
+  assert.match(lineOf(nested, "Child"), /^│ └ /);
+  assert.match(lineOf(nested, "Grand"), /^│   └ /);
   assert.equal(nested.length, 6);
 
   const declared = renderAgentTree(
@@ -178,8 +178,8 @@ test("agent tree heading, hierarchy, declared parents, and root exclusion", () =
     theme,
   );
   assert.ok(indexOf(indie, "Indie") < indexOf(indie, "Nested"));
-  assert.match(lineOf(indie, "Nested"), /^└─ /);
-  assert.doesNotMatch(lineOf(indie, "Indie"), /^[├└]─ /);
+  assert.match(lineOf(indie, "Nested"), /^└ /);
+  assert.doesNotMatch(lineOf(indie, "Indie"), /^[├└] /);
 
   const missing = renderAgentTree(
     [
@@ -199,7 +199,7 @@ test("agent tree heading, hierarchy, declared parents, and root exclusion", () =
   );
   assert.ok(gone >= 0);
   assert.ok(indexOf(missing, "Hold") > gone);
-  assert.match(lineOf(missing, "Hold"), /└─ /);
+  assert.match(lineOf(missing, "Hold"), /└ /);
 });
 
 test("agents sort newest-started first; a branch ranks by its most recent start", () => {
@@ -512,7 +512,7 @@ test("cycle rendering stays finite and keeps both agents with their parent row",
   assert.deepEqual(threads, snapshot);
   assert.ok(lines.length <= 12);
   assert.ok(indexOf(lines, "Alpha") < indexOf(lines, "Beta"));
-  assert.match(lineOf(lines, "Beta"), /└─ |├─ /);
+  assert.match(lineOf(lines, "Beta"), /└ |├ /);
   assert.equal(renderAgentTree([], 80, theme).length, 0);
   assert.deepEqual(renderAgentTree([thread("/root", { task: "MAIN_SENTINEL" })], 80, theme), []);
 });
