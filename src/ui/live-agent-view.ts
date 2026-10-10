@@ -17,7 +17,7 @@ import { AGENT_PROGRESS_INTERVAL, agentProgressIcon, agentTypeLabel } from "./ui
 import type { LoaderStyle } from "../prefs/settings.ts";
 import { renderTranscriptTool } from "./transcript-tool.ts";
 
-/** Transcript detail level cycled by the t key: full → preview → compact. */
+/** Transcript detail level cycled by Ctrl+O: full → preview → compact. */
 export type TranscriptDetail = "full" | "preview" | "compact";
 const DETAIL_CYCLE: TranscriptDetail[] = ["full", "preview", "compact"];
 
@@ -260,7 +260,8 @@ export class LiveAgentView {
     if (matchesKey(data, Key.ctrl("q")) || matchesKey(data, Key.ctrl("c")))
       return this.done("main");
     if (matchesKey(data, Key.ctrl("o"))) {
-      this.viewport.detail = this.detail === "full" ? "preview" : "full";
+      this.viewport.detail =
+        DETAIL_CYCLE[(DETAIL_CYCLE.indexOf(this.detail) + 1) % DETAIL_CYCLE.length];
       this.invalidate();
       this.host.requestRender();
       return;
@@ -287,10 +288,6 @@ export class LiveAgentView {
       return;
     } else if (data === "c") {
       this.viewport.showInherited = !this.viewport.showInherited;
-      this.invalidate();
-    } else if (data === "t") {
-      this.viewport.detail =
-        DETAIL_CYCLE[(DETAIL_CYCLE.indexOf(this.detail) + 1) % DETAIL_CYCLE.length];
       this.invalidate();
     } else if (matchesKey(data, Key.home)) this.scroll.scrollTo(0, { disableFollow: true });
     else if (matchesKey(data, Key.end) || data === "l") this.scroll.scrollToEnd();
@@ -378,7 +375,7 @@ export class LiveAgentView {
     if (block.type === "image") return ["[Image — text-only observer]"];
     if (block.type === "thinking") {
       if (this.detail === "compact")
-        return [this.theme.fg("dim", "[Thinking hidden · t cycles view]")];
+        return [this.theme.fg("dim", "[Thinking hidden · Ctrl+O cycles view]")];
       // Thinking is model-authored Markdown; preview truncates the rendered lines, not the source.
       const rendered = this.markdown(String(block.thinking ?? "[redacted thinking]"), width, true);
       if (this.detail === "full" || rendered.length <= 3) return rendered;
@@ -548,7 +545,7 @@ export class LiveAgentView {
     this.saveViewport();
     const footer = this.error
       ? "Ctrl+R Retry · Tab input/transcript · Esc tree · Ctrl+Q main"
-      : `${this.editing ? "Enter steer · Tab browse" : `Tab steer · Home/End scroll · c context · t view:${this.detail}`} · Ctrl+O expand tools · Esc tree · Ctrl+Q main · ↑↓/PgUp/PgDn scroll · ${this.viewport.follow ? "following" : "scrolled"}`;
+      : `${this.editing ? "Enter steer · Tab browse" : "Tab steer · Home/End scroll · c context"} · Ctrl+O view:${this.detail} · Esc tree · Ctrl+Q main · ↑↓/PgUp/PgDn scroll · ${this.viewport.follow ? "following" : "scrolled"}`;
     const input = ` ${this.input.render(inner)[0]!}`;
     const status = this.theme.fg(
       this.steerStatus ? (this.steerFailed ? "error" : "muted") : this.error ? "error" : "muted",
