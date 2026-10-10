@@ -152,9 +152,9 @@ test("live viewer shows assistant/tool streams and browsing never sends input", 
   assert.match(content, /private thinking 2/);
   assert.doesNotMatch(content, /private thinking 3/);
   live.view.handleInput("\t"); // Focus transcript controls.
-  live.view.handleInput("t"); // Compact detail hides thinking entirely.
+  live.view.handleInput("\x0f"); // Compact detail hides thinking entirely.
   assert.doesNotMatch(live.view.render(120).join("\n"), /private thinking/);
-  live.view.handleInput("t"); // Full detail shows every thinking row.
+  live.view.handleInput("\x0f"); // Full detail shows every thinking row.
   assert.match(live.view.render(120).join("\n"), /private thinking 3/);
   live.view.handleInput("some text");
   live.view.handleInput("\r");
@@ -227,7 +227,7 @@ test("input cursor editing and Tab browsing preserve the draft and forward focus
     live.view.handleInput("\t");
     assert.ok(!live.view.render(100).at(-1)!.includes(CURSOR_MARKER));
     live.view.handleInput("c");
-    live.view.handleInput("t");
+    live.view.handleInput("\x0f");
     live.view.handleInput("\r");
     assert.equal(live.viewport.showInherited, true);
     assert.equal(live.viewport.detail, "compact");
@@ -431,11 +431,11 @@ test("streaming, inherited, custom and visible thinking text use Markdown too", 
     );
     live.view.handleInput("\t");
     live.view.handleInput("c");
-    live.view.handleInput("t"); // Compact detail: inherited shown, thinking hidden.
+    live.view.handleInput("\x0f"); // Compact detail: inherited shown, thinking hidden.
     content = live.view.render(100).join("\n");
     assert.ok(content.includes(getMarkdownTheme().bold("inherited bold")));
     assert.doesNotMatch(stripTerminalSequences(content), /thinking bold/);
-    live.view.handleInput("t"); // Full detail: thinking shown again.
+    live.view.handleInput("\x0f"); // Full detail: thinking shown again.
     content = live.view.render(100).join("\n");
     assert.match(stripTerminalSequences(content), /thinking bold/);
     assert.doesNotMatch(content, /\*\*/);
@@ -538,7 +538,10 @@ test("tool calls pair with results using native previews while messages stay com
   for (let index = 1; index < 6; index++) assert.ok(content.includes(`running output ${index}`));
   assert.match(content, /1 earlier lines/);
   assert.doesNotMatch(content, /hiddenArgument|duplicate result/);
-  live.view.handleInput("\x0f"); // Ctrl+O works even while the steer input is focused.
+  live.view.handleInput("\x0f"); // Ctrl+O cycles views even while the steer input is focused.
+  assert.equal(live.viewport.detail, "compact");
+  assert.doesNotMatch(stripTerminalSequences(live.view.render(120).join("\n")), /output 0/);
+  live.view.handleInput("\x0f"); // Full expands native tool results.
   const expanded = stripTerminalSequences(live.view.render(120).join("\n"));
   for (let index = 0; index < 5; index++) assert.ok(expanded.includes(`output ${index}`));
   assert.match(expanded, /running output 0/);
@@ -603,7 +606,32 @@ test("transcript has one column of side padding; tool calls and results use pi's
   }
 });
 
-test("t cycles preview, compact and full detail for tool calls and thinking", async () => {
+test("Ctrl+O cycles all views in both modes without changing the draft; t no longer cycles", async () => {
+  const live = launch(undefined, 10);
+  await tick();
+  try {
+    live.view.handleInput("draft");
+    for (const browse of [false, true]) {
+      if (browse) live.view.handleInput("\t");
+      assert.match(live.view.render(120).join("\n"), /Ctrl\+O view:preview/);
+      for (const detail of ["compact", "full", "preview"] as const) {
+        live.view.handleInput("\x0f");
+        assert.equal(live.viewport.detail, detail);
+        assert.ok(live.view.render(120).join("\n").includes(`Ctrl+O view:${detail}`));
+      }
+      live.view.handleInput("t");
+      assert.equal(live.viewport.detail, "preview", "t never changes the detail level");
+    }
+    live.view.handleInput("\t");
+    assert.equal(stripTerminalSequences(live.view.render(120).at(-1)!).trimEnd(), " Steer > draftt");
+    assert.deepEqual(live.steers, []);
+    assert.deepEqual(live.done, []);
+  } finally {
+    live.view.dispose();
+  }
+});
+
+test("Ctrl+O cycles preview, compact and full detail for tool calls and thinking", async () => {
   const live = launch(
     snapshot({
       messages: [
@@ -633,23 +661,23 @@ test("t cycles preview, compact and full detail for tool calls and thinking", as
     assert.match(content, /thought 0/);
     assert.doesNotMatch(content, /thought 3/);
     live.view.handleInput("\t");
-    assert.match(live.view.render(80).join("\n"), /t view:preview/);
-    live.view.handleInput("t"); // Compact: one call line, thinking fully hidden.
+    assert.match(live.view.render(80).join("\n"), /Ctrl\+O view:preview/);
+    live.view.handleInput("\x0f"); // Compact: one call line, thinking fully hidden.
     content = live.view.render(80).join("\n");
     assert.match(content, /\$ build/);
     assert.doesNotMatch(content, /echo done|thought 0/);
     assert.match(content, /Thinking hidden/);
-    assert.match(content, /t view:compact/);
-    live.view.handleInput("t"); // Full: every command and thinking row.
+    assert.match(content, /Ctrl\+O view:compact/);
+    live.view.handleInput("\x0f"); // Full: every command and thinking row.
     content = live.view.render(80).join("\n");
     assert.match(content, /final step/);
     assert.match(content, /thought 3/);
-    assert.match(content, /t view:full/);
-    live.view.handleInput("t"); // Cycle wraps back to preview.
+    assert.match(content, /Ctrl\+O view:full/);
+    live.view.handleInput("\x0f"); // Cycle wraps back to preview.
     content = live.view.render(80).join("\n");
     assert.match(content, /final step/);
     assert.doesNotMatch(content, /thought 3/);
-    assert.match(content, /t view:preview/);
+    assert.match(content, /Ctrl\+O view:preview/);
   } finally {
     live.view.dispose();
   }
