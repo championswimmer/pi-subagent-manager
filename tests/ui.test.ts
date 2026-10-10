@@ -1455,7 +1455,7 @@ test("bundled tweak-settings saves a sparse .yml and locks prompt and name", asy
     assert.equal(fixture.store.get("coder").customization?.kind, "override");
     assert.equal(
       await readFile(join(userAgentsDir(fixture.agentDir), "coder.yml"), "utf8"),
-      "name: coder\nthinkingLevel: low\n",
+      "thinkingLevel: low\n",
     );
     assert.equal(
       await readFile(join(fixture.bundledDir, "coder.md"), "utf8"),
@@ -1569,4 +1569,125 @@ test("nested tool pickers use the settings draft policy and freshly fetch sessio
     assert.equal(store.get("worker").tools, undefined);
     assertOneOverlay(driver, "nested tool pickers");
   });
+});
+
+test("saving an unchanged bundled settings draft creates an empty overlay and follows updates", async () => {
+  const fixture = await bundledFixture();
+  try {
+    const context = editorContext(fixture.root, ["coder", "override", "Save", "Global", undefined]);
+    await editAgentTypes(context.ctx, fixture.store);
+    const file = join(userAgentsDir(fixture.agentDir), "coder.yml");
+    assert.equal(await readFile(file, "utf8"), "{}\n");
+    await writeFile(
+      join(fixture.bundledDir, "coder.md"),
+      serializeAgentType({
+        name: "coder",
+        description: "Updated coder",
+        systemPrompt: "Updated prompt",
+        models: ["provider/new"],
+        thinkingLevel: "low",
+      }),
+    );
+    fixture.store.reload();
+    assert.equal(fixture.store.get("coder").description, "Updated coder");
+    assert.equal(fixture.store.get("coder").systemPrompt, "Updated prompt");
+    assert.deepEqual(fixture.store.get("coder").models, ["provider/new"]);
+    assert.equal(fixture.store.get("coder").thinkingLevel, "low");
+
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("override tool editing writes only the edited list and retains base block updates", async () => {
+  const fixture = await bundledFixture();
+  try {
+    const bundled = fixture.store.get("coder");
+    await writeFile(
+      join(fixture.bundledDir, "coder.md"),
+      serializeAgentType({
+        ...bundled,
+        tools: { allow: ["read"], block: ["bash"] },
+      }),
+    );
+    fixture.store.reload();
+    const context = editorContext(fixture.root, [
+      "coder",
+      "override",
+      "tools.allow",
+      "Save",
+      "Global",
+      undefined,
+    ]);
+    context.driver.onChild = (component) => {
+      if (!(component instanceof ToolPickerComponent)) return false;
+      for (const value of ["action:empty", "action:done"])
+        component.getSelectList().onSelect!(
+          component.getCurrentItems().find((item) => item.value === value)!,
+        );
+      return true;
+    };
+    await editAgentTypes(context.ctx, fixture.store);
+    assert.equal(
+      await readFile(fixture.store.get("coder").filePath!, "utf8"),
+      "tools:\n  allow: []\n",
+    );
+    await writeFile(
+      join(fixture.bundledDir, "coder.md"),
+      serializeAgentType({
+        ...bundled,
+        tools: { allow: ["write"], block: ["edit"] },
+      }),
+    );
+    fixture.store.reload();
+    assert.deepEqual(fixture.store.get("coder").tools, { allow: [], block: ["edit"] });
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("existing overlays are clean until edited and reverting a setting restores inheritance", async () => {
+  const fixture = await bundledFixture();
+  const captureSaveValues = (context: ReturnType<typeof editorContext>) => {
+    const values: string[] = [];
+    context.driver.onChild = (component) => {
+      if (component instanceof DialogMenu && component.title.startsWith("Edit ")) {
+        values.push(component.rows.find((row) => row.id === "Save")!.value ?? "");
+      }
+      return false;
+    };
+    return values;
+  };
+  try {
+    const first = editorContext(fixture.root, [
+      "coder",
+      "override",
+      "thinkingLevel",
+      "low",
+      "Save",
+      "Global",
+      undefined,
+    ]);
+    const firstValues = captureSaveValues(first);
+    await editAgentTypes(first.ctx, fixture.store);
+    assert.deepEqual(firstValues, ["", "(changes)"]);
+    const unchanged = editorContext(fixture.root, ["coder", "Cancel", undefined]);
+    const unchangedValues = captureSaveValues(unchanged);
+    await editAgentTypes(unchanged.ctx, fixture.store);
+    assert.deepEqual(unchangedValues, [""]);
+    const reset = editorContext(fixture.root, [
+      "coder",
+      "thinkingLevel",
+      "high",
+      "Save",
+      "Global",
+      undefined,
+    ]);
+    const resetValues = captureSaveValues(reset);
+    await editAgentTypes(reset.ctx, fixture.store);
+    assert.deepEqual(resetValues, ["", "(changes)"]);
+    assert.equal(await readFile(fixture.store.get("coder").filePath!, "utf8"), "{}\n");
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
 });

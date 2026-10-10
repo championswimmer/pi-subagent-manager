@@ -1,6 +1,7 @@
 # Write your own agent
 
-An agent type is one Markdown file: YAML frontmatter on top, system prompt below.
+A full agent type is a Markdown file: YAML frontmatter on top, system prompt below.
+A settings-only customization is a sparse YAML overlay.
 
 ## 1. Pick a location
 
@@ -9,7 +10,8 @@ An agent type is one Markdown file: YAML frontmatter on top, system prompt below
 | User    | `<pi-agent-dir>/subagent-manager/agents/` (normally `~/.pi/agent/subagent-manager/agents/`) |
 | Project | `<cwd>/.pi/agent/subagent-manager/agents/` — loaded only when pi trusts the project         |
 
-Precedence: **project > user > bundled**. A file with the same `name` as a bundled agent replaces it.
+Precedence: **project > user > bundled**. Markdown definitions replace lower-layer
+definitions; YAML overlays inherit any fields they do not specify.
 
 ## Tweak settings or fork the agent?
 
@@ -26,7 +28,6 @@ project) cannot hold both a `.md` and a `.yml` for the same name.
 `~/.pi/agent/subagent-manager/agents/coder.yml`:
 
 ```yaml
-name: coder
 thinkingLevel: low
 tools:
   allow:
@@ -36,18 +37,34 @@ tools:
     - agent_pause
 ```
 
-Only listed fields override; everything else follows the base definition, so
-untouched settings keep tracking bundled updates. Set an optional field to
-`null` to clear it back to the base state (e.g. `icon: null`). `name`, when
-present, must match the filename. Overrides need a base agent to merge onto —
-a `.yml` without a matching bundled or forked definition is rejected.
+Only listed fields override; everything else follows the lower-layer definition,
+so untouched models, settings, descriptions, and prompts keep tracking extension
+updates. `tools.allow` and `tools.block` merge independently: changing one does
+not pin the other. Lists replace the corresponding list, rather than appending.
+An empty tool list (`[]`) is an explicit empty list.
+
+Omit a field to inherit it. Set an optional field to `null` to **remove** it from
+the effective definition, not to restore the bundled value: `models: null` uses
+the parent/default model; `icon: null` hides the icon; `tools.allow: null` removes
+the allow list while keeping the inherited block list; `tools: null` removes the
+whole policy. To restore inheritance, delete that setting from the YAML file.
+`name` is optional and, when present, must match the filename. `.yml` and `.yaml`
+are both supported. An override needs a matching lower-layer agent — an orphan
+YAML file is rejected. Prompt fields/bodies are not allowed in YAML overlays.
 
 In `/agents types`, editing a bundled agent asks you to pick one mode first,
-and settings stay locked until you choose. Overrides cannot rename the agent
-or edit the system prompt — fork it instead.
+and settings stay locked until you choose. **Tweak settings** starts with an
+empty overlay (`{}` when saved unchanged), not a copy of the definition. Saving
+writes only changed settings and retains existing explicit overrides, even if
+an override currently matches a default. Saving to another scope writes the
+edits into that scope without copying unchanged values from the displayed
+scope. Project overlays inherit user customizations; user overlays inherit
+bundled definitions. Overrides cannot rename the agent or edit the system
+prompt — fork it instead. Full Markdown forks remain full copies.
 
 To undo a fork or override, choose **Reset to bundled** (after Save) in the editor.
-It deletes the `.md`/`.yml` file after confirmation and the shipped agent applies again.
+It deletes the customization file after confirmation and the lower-layer agent
+applies again (the user customization, if any, or the shipped definition).
 
 These are the only locations read. Other packages' `~/.pi/agent/agents` or `.pi/agents` are ignored — use [`/agents import`](importing-agents.md) for those.
 
@@ -128,7 +145,8 @@ In `/agents types`, select **[labs] Icon** and paste the glyph, then save the ag
 
 The model picker lists selected models first, in fallback order. **Enter** toggles a model, **Ctrl+↑/↓** reorders, typing filters. Unselected models are ranked by fuzzy match against `modelSuggestions`, scoped models first.
 
-**External editor** opens the whole file in `$VISUAL`, `$EDITOR`, or `vi`.
+**External editor** opens the whole Markdown definition in `$VISUAL`, `$EDITOR`,
+or `vi` in fork mode. For an overlay, edit its YAML file directly and reload.
 
 ## Errors
 

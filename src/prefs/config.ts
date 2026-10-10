@@ -186,6 +186,16 @@ function toolPolicy(value: unknown): NonNullable<AgentType["tools"]> {
   return result;
 }
 
+function overrideToolPolicy(value: unknown): NonNullable<AgentSettingsOverride["tools"]> {
+  const mapping = record(value, "tools");
+  const result: NonNullable<AgentSettingsOverride["tools"]> = {};
+  for (const key of Object.keys(mapping)) {
+    if (key !== "allow" && key !== "block") throw new Error(`Unknown tools field: ${key}`);
+    result[key] = mapping[key] === null ? null : toolNames(mapping[key], `tools.${key}`);
+  }
+  return result;
+}
+
 export function parseAgentType(content: string, filePath?: string): AgentType {
   try {
     const { yaml, body } = frontmatter(content);
@@ -271,7 +281,7 @@ export type AgentCustomizationKind = "fork" | "override";
 /**
  * Sparse settings parsed from a `<name>.yml` override file. Plain YAML mapping,
  * no frontmatter, no Markdown body. Omitted fields follow the base definition;
- * explicit `null` on an optional field resets it to the base/inherit state.
+ * explicit `null` clears an optional field (rather than inheriting it).
  */
 export interface AgentSettingsOverride {
   name?: string;
@@ -283,7 +293,7 @@ export interface AgentSettingsOverride {
   thinkingLevel?: AgentType["thinkingLevel"] | null;
   color?: string | null;
   icon?: string | null;
-  tools?: NonNullable<AgentType["tools"]> | null;
+  tools?: { allow?: string[] | null; block?: string[] | null } | null;
 }
 
 export const AGENT_OVERRIDE_EXTENSIONS = [".yml", ".yaml"] as const;
@@ -389,7 +399,7 @@ export function parseAgentSettings(
         return value;
       });
     if (Object.hasOwn(data, "tools"))
-      result.tools = data.tools === null ? null : toolPolicy(data.tools);
+      result.tools = data.tools === null ? null : overrideToolPolicy(data.tools);
     return result;
   } catch (error) {
     throw new Error(
@@ -420,16 +430,6 @@ export function serializeAgentSettings(override: AgentSettingsOverride): string 
   return content;
 }
 
-/** Fields an override may clear back to the base/inherit state with null. */
-const CLEARABLE_OVERRIDE_FIELDS = new Set([
-  "models",
-  "modelSuggestions",
-  "thinkingLevel",
-  "color",
-  "icon",
-  "tools",
-]);
-
 /**
  * Merge a sparse settings override on top of a base definition. Unset fields
  * follow the base; explicit null clears the field. The prompt body always
@@ -457,12 +457,21 @@ export function mergeAgentSettings(
     "thinkingLevel",
     "color",
     "icon",
-    "tools",
   ] as const) {
     const value = override[key];
     if (value === undefined) continue;
     if (value === null) delete merged[key];
     else (merged[key] as unknown) = structuredClone(value);
+  }
+  if (override.tools === null) delete merged.tools;
+  else if (override.tools !== undefined) {
+    merged.tools ??= {};
+    for (const key of ["allow", "block"] as const) {
+      const value = override.tools[key];
+      if (value === null) delete merged.tools[key];
+      else if (value !== undefined) merged.tools[key] = [...value];
+    }
+    if (!Object.keys(merged.tools).length) delete merged.tools;
   }
   merged.systemPrompt = base.systemPrompt;
   return merged;
@@ -470,11 +479,11 @@ export function mergeAgentSettings(
 
 /**
  * Diff a draft against its base: only changed settings land in the override
- * file, so untouched fields keep tracking bundled updates. Always includes
- * the agent name for readability.
+ * file, so untouched fields keep tracking bundled updates. The filename
+ * identifies the agent; an unchanged draft produces an empty mapping.
  */
 export function diffAgentSettings(base: AgentType, draft: AgentType): AgentSettingsOverride {
-  const override: AgentSettingsOverride = { name: draft.name };
+  const override: AgentSettingsOverride = {};
   if (draft.description !== base.description) override.description = draft.description;
   const baseModels = getModelPreferences(base);
   const draftModels = getModelPreferences(draft);
@@ -493,16 +502,62 @@ export function diffAgentSettings(base: AgentType, draft: AgentType): AgentSetti
     "thinkingLevel",
     "color",
     "icon",
-    "tools",
   ] as const) {
     const before = base[key];
     const after = draft[key];
-    if (JSON.stringify(before ?? null) === JSON.stringify(after ?? null)) continue;
+    if (sameSetting(before, after)) continue;
     if (after === undefined) override[key] = null as never;
     else (override[key] as unknown) = structuredClone(after);
   }
-  void CLEARABLE_OVERRIDE_FIELDS;
+  for (const key of ["allow", "block"] as const) {
+    if (sameSetting(base.tools?.[key], draft.tools?.[key])) continue;
+    override.tools ??= {};
+    override.tools[key] = draft.tools?.[key] === undefined ? null : [...draft.tools[key]!];
+  }
   return override;
+}
+
+function sameSetting(before: unknown, after: unknown): boolean {
+  return JSON.stringify(before ?? null) === JSON.stringify(after ?? null);
+}
+
+/** Retain existing explicit pins; update only settings actually edited in this draft. */
+function updateAgentSettings(
+  base: AgentType,
+  before: AgentType,
+  draft: AgentType,
+  existing: AgentSettingsOverride,
+): AgentSettingsOverride {
+  const result = structuredClone(existing);
+  const edits = diffAgentSettings(before, draft);
+  const desired = diffAgentSettings(base, draft);
+  for (const key of [
+    "description",
+    "models",
+    "modelSuggestions",
+    "thinkingLevel",
+    "color",
+    "icon",
+  ] as const) {
+    if (!Object.hasOwn(edits, key)) continue;
+    if (desired[key] === undefined) delete result[key];
+    else (result[key] as unknown) = desired[key];
+    if (key === "models") delete result.model;
+  }
+  if (edits.tools) {
+    // Whole-policy clears must keep clearing the untouched sibling, too.
+    if (result.tools === null) result.tools = { allow: null, block: null };
+    const tools = result.tools ?? {};
+    for (const key of ["allow", "block"] as const) {
+      if (!Object.hasOwn(edits.tools, key)) continue;
+      const value = desired.tools?.[key];
+      if (value === undefined) delete tools[key];
+      else tools[key] = value;
+    }
+    if (Object.keys(tools).length) result.tools = tools;
+    else delete result.tools;
+  }
+  return result;
 }
 
 export function selectTools(
@@ -539,6 +594,8 @@ export class ConfigStore {
   diagnostics: string[] = [];
   private types = new Map<string, AgentType>();
   private bases = new Map<string, AgentType>();
+  private scopeBases = new Map<AgentScope, Map<string, AgentType>>();
+  private scopeOverrides = new Map<AgentScope, Map<string, AgentSettingsOverride>>();
   private readonly options: ConfigStoreOptions;
 
   constructor(options: ConfigStoreOptions) {
@@ -549,6 +606,8 @@ export class ConfigStore {
   reload(): void {
     this.types.clear();
     this.bases.clear();
+    this.scopeBases.clear();
+    this.scopeOverrides.clear();
     this.diagnostics = [];
     const layers: [string, NonNullable<AgentType["source"]>][] = [
       [
@@ -573,6 +632,10 @@ export class ConfigStore {
         ),
       );
     for (const [directory, source] of layers) {
+      if (source !== "bundled") {
+        this.scopeBases.set(source, structuredClone(this.types));
+        this.scopeOverrides.set(source, new Map());
+      }
       let files: string[];
       try {
         const stat = assertNotSymlinkPath(directory);
@@ -812,6 +875,7 @@ export class ConfigStore {
       try {
         const merged = mergeAgentSettings(base, { ...override, name });
         this.bases.set(name, structuredClone(base));
+        this.scopeOverrides.get(scope)!.set(name, structuredClone(override));
         this.types.set(name, {
           ...merged,
           name,
@@ -889,6 +953,12 @@ export class ConfigStore {
   /** Base definition under the top customization, for diffing and read-only display. */
   getBase(name: string): AgentType | undefined {
     const base = this.bases.get(name);
+    return base ? structuredClone(base) : undefined;
+  }
+
+  /** Definition below a specific save scope; never includes that scope or higher ones. */
+  private getScopeBase(name: string, scope: AgentScope): AgentType | undefined {
+    const base = this.scopeBases.get(scope)?.get(name);
     return base ? structuredClone(base) : undefined;
   }
 
@@ -976,28 +1046,27 @@ export class ConfigStore {
   /**
    * Save a settings-only `<name>.yml` override merged on top of the base.
    * The prompt body always comes from the base; only changed settings are
-   * written so untouched fields keep tracking bundled updates.
+   * written so untouched fields keep tracking bundled updates. Existing pins
+   * are retained; `original` is the pre-edit snapshot (also used to avoid
+   * copying inherited settings into another scope or from a stale draft).
    */
   saveOverride(
     name: string,
     draft: AgentType,
     scope: AgentScope,
-    original?: SaveOrigin,
+    original?: AgentType,
   ): AgentType {
     if (!NAME.test(name)) throw new Error("Unsafe agent name");
     if (draft.name !== name)
       throw new Error("Settings overrides cannot rename the agent; fork it instead");
-    const base = this.getBase(name) ?? (() => {
-      try {
-        return this.get(name);
-      } catch {
-        return undefined;
-      }
-    })();
+    const base = this.getScopeBase(name, scope);
     if (!base) throw new Error(`Settings override has no base agent named ${JSON.stringify(name)}`);
-    if (base.name !== name)
-      throw new Error(`Settings override has no base agent named ${JSON.stringify(name)}`);
-    const override = diffAgentSettings(base, { ...draft, name });
+    const before = original ?? this.get(name);
+    const existing = this.scopeOverrides.get(scope)?.get(name) ?? {};
+    const override =
+      before.customization?.kind === "fork"
+        ? diffAgentSettings(base, draft)
+        : updateAgentSettings(base, before, draft, existing);
     const content = serializeAgentSettings(override);
     parseAgentSettings(content, undefined, name);
     const filePath = this.destination(name, scope, original, "override");

@@ -24,7 +24,6 @@ import {
 import {
   AGENT_COLORS,
   ConfigStore,
-  diffAgentSettings,
   parseAgentType,
   serializeAgentType,
 } from "../prefs/config.ts";
@@ -980,7 +979,7 @@ async function chooseCustomizationMode(
         id: "override",
         label: "Tweak settings",
         value: `${agentName}.yml`,
-        help: "Override only settings (models, tools, thinking, color). The prompt stays bundled and keeps receiving updates. System prompt and name stay locked.",
+        help: "Start with an empty settings overlay; only changed fields are saved. The prompt stays bundled and keeps receiving updates. System prompt and name stay locked.",
       },
       {
         id: "fork",
@@ -1079,14 +1078,7 @@ async function editAgentTypesDialog(
       editMode = mode;
     }
     while (true) {
-      const baseForDiff =
-        editMode === "override" && original
-          ? (store.getBase(original.name) ?? original)
-          : undefined;
-      const dirty =
-        editMode === "override" && baseForDiff
-          ? Object.keys(diffAgentSettings(baseForDiff, draft)).length > 1
-          : !original || serializeAgentType(draft) !== originalContent;
+      const dirty = !original || serializeAgentType(draft) !== originalContent;
       const field = await dialogMenu(
         ctx,
         `Edit ${sanitizeText(draft.name)} (unsaved)`,
