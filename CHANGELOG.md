@@ -15,6 +15,18 @@ Generated from version tags and merged GitHub pull requests. Do not edit this fi
 
 **Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v0.20.0...v0.21.0
 
+#### [v0.21.1](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.21.1) — Patch release (2026-10-10)
+
+<!-- Release notes generated using configuration in .github/release.yml at v0.21.1 -->
+
+##### What's Changed
+###### Merged pull requests
+* fix: cycle subagent viewer detail with Ctrl-O in both modes by @championswimmer in https://github.com/championswimmer/pi-subagent-manager/pull/44
+* fix: save sparse YAML agent overrides by @championswimmer in https://github.com/championswimmer/pi-subagent-manager/pull/45
+
+
+**Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v0.21.0...v0.21.1
+
 ### [v0.20.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.20.0) — Minor release (2026-10-10)
 
 <!-- Release notes generated using configuration in .github/release.yml at v0.20.0 -->
