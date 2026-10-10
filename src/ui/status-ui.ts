@@ -301,7 +301,7 @@ export class StatusDialog {
       this.theme.fg(inactive ? hint : "muted", dialogText(thread.state)),
     ].join("");
     // Continue the tree's vertical guides without repeating the branch or selection marker.
-    const stem = row.prefix.replace("├─ ", "│  ").replace("└─ ", "   ");
+    const stem = row.prefix.replace("├ ", "│ ").replace("└ ", "  ");
     const activity = ` ${stem}  ${dialogText(thread.status || thread.task)}`;
     const metrics = this.theme.fg(base, threadMetrics(thread));
     const metricWidth = visibleWidth(metrics);

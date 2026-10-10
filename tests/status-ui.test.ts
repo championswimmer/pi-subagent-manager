@@ -263,11 +263,11 @@ test("status tree sorts siblings, draws branch prefixes, and collapses descendan
       "/root/starting",
     ],
   );
-  assert.equal(rows.find((row) => row.path === "/root/a")?.prefix, "├─ ");
-  assert.equal(rows.at(-1)?.prefix, "└─ ");
+  assert.equal(rows.find((row) => row.path === "/root/a")?.prefix, "├ ");
+  assert.equal(rows.at(-1)?.prefix, "└ ");
   assert.match(
     rows.find((row) => row.path === "/root/running/paused-child")?.prefix ?? "",
-    /│  └─ /,
+    /│ └ /,
   );
   assert.equal(
     rows.find((row) => row.path === "/root/running/paused-child")?.thread?.state,
@@ -300,7 +300,7 @@ test("status tree shows independent roots, missing-parent placeholders, and dept
   const paths = rows.map((item) => item.path);
   assert.ok(paths.indexOf("/k") < paths.indexOf("/root"));
   assert.equal(row("/k")?.prefix, "");
-  assert.equal(row("/k/child")?.prefix, "└─ ");
+  assert.equal(row("/k/child")?.prefix, "└ ");
   for (const placeholder of ["/root/gone", "/missing", "/root/missing"]) {
     assert.equal(row(placeholder)?.thread, undefined, placeholder);
     assert.equal(row(placeholder)?.hasChildren, true, placeholder);

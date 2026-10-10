@@ -137,10 +137,10 @@ export function buildStatusTree(
     for (const [index, node] of ordered.entries()) {
       visited.add(node.path);
       const last = index === ordered.length - 1;
-      const stem = ancestors.map((isLast) => (isLast ? "   " : "│  ")).join("");
+      const stem = ancestors.map((isLast) => (isLast ? "  " : "│ ")).join("");
       rows.push({
         path: node.path,
-        prefix: stem + (top ? "" : last ? "└─ " : "├─ "),
+        prefix: stem + (top ? "" : last ? "└ " : "├ "),
         hasChildren: node.children.length > 0,
         ...(node.thread ? { thread: node.thread } : {}),
       });
