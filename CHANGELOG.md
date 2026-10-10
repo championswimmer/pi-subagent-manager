@@ -4,6 +4,19 @@ Generated from version tags and merged GitHub pull requests. Do not edit this fi
 
 ## 0.x — Pre-1.0 releases
 
+### [v0.20.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.20.0) — Minor release (2026-10-10)
+
+<!-- Release notes generated using configuration in .github/release.yml at v0.20.0 -->
+
+#### What's Changed
+##### Merged pull requests
+* fix: compact nested agent tree indentation by @championswimmer in https://github.com/championswimmer/pi-subagent-manager/pull/40
+* Improve subagent session viewer with native pi tool rendering by @championswimmer in https://github.com/championswimmer/pi-subagent-manager/pull/41
+* Move agent tree metrics to the first line by @championswimmer in https://github.com/championswimmer/pi-subagent-manager/pull/42
+
+
+**Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v0.19.0...v0.20.0
+
 ### [v0.19.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v0.19.0) — Minor release (2026-10-08)
 
 <!-- Release notes generated using configuration in .github/release.yml at v0.19.0 -->
