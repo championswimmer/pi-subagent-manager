@@ -1,6 +1,6 @@
 {
   "name": "pi-subagent-manager",
-  "version": "0.21.1",
+  "version": "0.22.0",
   "description": "Hierarchical, steerable subagent threads for pi",
   "type": "module",
   "engines": {
