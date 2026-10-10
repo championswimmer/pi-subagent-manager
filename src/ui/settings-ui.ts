@@ -9,6 +9,9 @@ import {
 import {
   DEFAULT_MANAGER_SETTINGS,
   type CostDisplayMode,
+  COST_ICONS,
+  type CostIcon,
+  type CostValue,
   LOADER_STYLES,
   type LoaderStyle,
   loadManagerSaveScope,
@@ -23,6 +26,7 @@ import {
 import { editAgentTypes } from "./ui.ts";
 import type { ToolEditorOptions } from "./tool-picker.ts";
 import { AGENT_LOADERS } from "./agent-loader.ts";
+import { costIconGlyph } from "./cost-footer.ts";
 
 const LOADER_OPTIONS = LOADER_STYLES.map((id) => {
   const loader = AGENT_LOADERS[id];
@@ -120,21 +124,75 @@ const WIDGET_MODE_HELP =
 
 const COST_DISPLAY_OPTIONS = [
   {
-    id: "pi-footer-event",
-    label: "pi-footer event",
-    help: "Publish settled subagent-only USD via pi-footer:update-widget with Widget ID subagent_cost. Add a Pi Event Value widget manually and enable Raw value only. Without an external /footer, retain the combined-cost fallback.",
+    id: "pi-status",
+    label: "Replace Pi status",
+    help: "Show the selected cost in Pi’s status area, without replacing the whole footer. Third-party footers may also consume this status.",
   },
   {
     id: "pi-footer-status",
-    label: "pi-footer status key",
-    help: "Publish settled subagent-only USD under status key subagent_cost for pi-footer’s Extension Status selector, including $0.0000 before any cost settles. Does not replace your footer.",
+    label: "pi-footer status widget",
+    value: "subagent_cost",
+    help: "Status key: subagent_cost\nSelect subagent_cost in pi-footer’s Extension Status widget. Does not replace your footer.",
   },
   {
-    id: "pi-status",
-    label: "Pi status only",
-    help: "Only update Pi’s status with total USD cost: main session + all settled subagents. pi-footer modes show subagent-only cost. No pi-footer events or custom footer. Third-party footers may also consume this status key.",
+    id: "pi-footer-event",
+    label: "pi-footer event",
+    value: "subagent_cost",
+    help: "Event: pi-footer:update-widget\nWidget ID: subagent_cost\nAdd a Pi Event Value widget and enable Raw value only. Without an external /footer, retain the cost fallback.",
   },
 ] as const;
+
+const COST_VALUE_OPTIONS = [
+  { id: "subagents", label: "Only subagent cost", help: "Settled USD cost of all subagents; excludes the main session." },
+  { id: "total", label: "Total cost", help: "Main session USD cost plus all settled subagent costs." },
+] as const;
+
+const COST_ICON_LABELS = { money: "Money", coins: "Coins", wallet: "Wallet" } as const;
+
+/** Edits the shared draft; only the outer settings screen saves or applies it. */
+async function configureFooterDisplay(ctx: ExtensionCommandContext, draft: ManagerSettings): Promise<void> {
+  let selectedId: string | undefined;
+  while (true) {
+    const action = await dialogMenu(ctx, "[labs] Footer display", [
+      {
+        id: "location",
+        label: "Location",
+        value: COST_DISPLAY_OPTIONS.find((option) => option.id === draft.costDisplay)!.label,
+        help: "Choose Pi status, a pi-footer status widget, or a pi-footer event. Integration IDs are shown in the location picker.",
+      },
+      {
+        id: "value",
+        label: "Display value",
+        value: COST_VALUE_OPTIONS.find((option) => option.id === draft.costValue)!.label,
+        help: "Show only settled subagent cost, or main session plus settled subagents. Applies to every location.",
+      },
+      {
+        id: "icon",
+        label: "Icon",
+        value: `${costIconGlyph(draft.costIcon, draft.nerdFontIcons)} ${COST_ICON_LABELS[draft.costIcon]}`,
+        help: `Choose a money-related ${draft.nerdFontIcons ? "Nerd Font" : "emoji"} icon. The family follows [labs] Nerd Font icons.`,
+      },
+      { id: "back", label: "Back", help: "Return to settings. Save and apply there to commit these changes." },
+    ], { selectedId, footer: "↑↓/Tab navigate · Enter edit · Esc back" });
+    if (!action || action === "back") return;
+    selectedId = action;
+    if (action === "location") {
+      const mode = await dialogMenu(ctx, "Footer location", [...COST_DISPLAY_OPTIONS], { selectedId: draft.costDisplay });
+      if (COST_DISPLAY_OPTIONS.some((option) => option.id === mode)) draft.costDisplay = mode as CostDisplayMode;
+    } else if (action === "value") {
+      const value = await dialogMenu(ctx, "Footer display value", [...COST_VALUE_OPTIONS], { selectedId: draft.costValue });
+      if (COST_VALUE_OPTIONS.some((option) => option.id === value)) draft.costValue = value as CostValue;
+    } else if (action === "icon") {
+      const icon = await dialogMenu(ctx, `Footer icon · ${draft.nerdFontIcons ? "Nerd Font" : "Emoji"}`, COST_ICONS.map((id) => ({
+        id,
+        label: COST_ICON_LABELS[id],
+        value: costIconGlyph(id, draft.nerdFontIcons),
+        help: `${costIconGlyph(id, draft.nerdFontIcons)} ${COST_ICON_LABELS[id]} · ${draft.nerdFontIcons ? "Requires a Nerd Font in your terminal." : "Emoji icon."}`,
+      })), { selectedId: draft.costIcon });
+      if (COST_ICONS.includes(icon as CostIcon)) draft.costIcon = icon as CostIcon;
+    }
+  }
+}
 
 const MODEL_SELECTION_OPTIONS = [
   {
@@ -228,9 +286,9 @@ async function configureAgentsDialog(
         },
         {
           id: "costDisplay",
-          label: "[labs] Cost display",
+          label: "[labs] Footer display",
           value: COST_DISPLAY_OPTIONS.find((mode) => mode.id === draft.costDisplay)!.label,
-          help: "Choose pi-footer event, pi-footer status key (default), or Pi status only. ID: subagent_cost. pi-footer modes: settled subagent-only USD. Pi status: main session + all settled subagents; publishes on session start and as soon as a subagent starts. Save to apply immediately.",
+          help: "Configure footer location, displayed cost, and money icon in a submenu. Save and apply to update immediately.",
         },
         {
           id: "nerdFontIcons",
@@ -332,11 +390,7 @@ async function configureAgentsDialog(
         if (WIDGET_MODE_OPTIONS.some((option) => option.id === mode))
           draft.widgetMode = mode as WidgetMode;
       } else if (action === "costDisplay") {
-        const mode = await dialogMenu(ctx, "[labs] Cost display", [...COST_DISPLAY_OPTIONS], {
-          selectedId: draft.costDisplay,
-        });
-        if (COST_DISPLAY_OPTIONS.some((option) => option.id === mode))
-          draft.costDisplay = mode as CostDisplayMode;
+        await configureFooterDisplay(ctx, draft);
       } else if (action === "nerdFontIcons") {
         draft.nerdFontIcons = !draft.nerdFontIcons;
       } else if (action === "loaderStyle") {

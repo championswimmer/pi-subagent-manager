@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import type { Usage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { CostDisplayMode } from "../prefs/settings.ts";
+import type { CostDisplayMode, CostValue, CostIcon } from "../prefs/settings.ts";
 
 export function footerUsage(entries: readonly SessionEntry[]) {
   const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
@@ -32,6 +32,15 @@ export const COST_WIDGET_ID = "subagent_cost";
 export const COST_WIDGET_EVENT = "pi-footer:update-widget";
 export const COST_ICON = "\uf0d6";
 
+export function costIconGlyph(icon: CostIcon, nerdFontIcons: boolean): string {
+  const glyphs = {
+    money: { emoji: "💵", nerd: COST_ICON },
+    coins: { emoji: "🪙", nerd: "\u{f0512}" },
+    wallet: { emoji: "👛", nerd: "\u{f055d}" },
+  };
+  return glyphs[icon][nerdFontIcons ? "nerd" : "emoji"];
+}
+
 export function formatSubagentCost(cost: number, nerdFontIcons: boolean): string {
   return `${nerdFontIcons ? COST_ICON + " " : ""}$${cost.toFixed(4)}`;
 }
@@ -54,11 +63,20 @@ export class CostFooterController {
     private readonly subagentCost: () => number,
     private readonly nerdFontIcons: () => boolean,
     private readonly displayMode: () => CostDisplayMode = () => "pi-footer-status",
+    private readonly costValue: () => CostValue = () => "subagents",
+    private readonly costIcon: () => CostIcon = () => "money",
   ) {}
+
+  private formatCost(mainCost: number): string {
+    const cost = this.subagentCost() + (this.costValue() === "total" ? mainCost : 0);
+    return `${costIconGlyph(this.costIcon(), this.nerdFontIcons())} $${cost.toFixed(4)}`;
+  }
 
   refresh(ctx: ExtensionContext): void {
     const mode = this.displayMode();
-    const value = formatSubagentCost(this.subagentCost(), this.nerdFontIcons());
+    const value = this.formatCost(
+      this.costValue() === "total" ? footerUsage(ctx.sessionManager.getEntries()).cost : 0,
+    );
     if (this.publishedMode !== undefined && this.publishedMode !== mode) {
       this.clear();
       this.reset(ctx);
@@ -67,14 +85,8 @@ export class CostFooterController {
     if (mode !== "pi-footer-event") {
       if (ctx.hasUI) {
         this.statusContext = ctx;
-        const statusValue =
-          mode === "pi-status"
-            ? `Total: ${formatSubagentCost(
-                footerUsage(ctx.sessionManager.getEntries()).cost + this.subagentCost(),
-                this.nerdFontIcons(),
-              )}`
-            : value;
-        ctx.ui.setStatus(COST_WIDGET_ID, statusValue);
+        const label = this.costValue() === "total" ? "Total" : "Subagents";
+        ctx.ui.setStatus(COST_WIDGET_ID, mode === "pi-status" ? `${label}: ${value}` : value);
       }
       return;
     }
@@ -91,7 +103,7 @@ export class CostFooterController {
       return;
     }
     if (this.subagentCost() <= 0 || !ctx.hasUI || ctx.mode !== "tui") return;
-    this.requestRender = installCostFooter(ctx, this.subagentCost);
+    this.requestRender = installCostFooter(ctx, this.subagentCost, (mainCost) => this.formatCost(mainCost));
     this.installed = true;
   }
 
@@ -123,6 +135,7 @@ const tokens = (n: number) =>
 export function installCostFooter(
   ctx: ExtensionContext,
   subagentCost: () => number,
+  displayCost?: (mainCost: number) => string,
 ): (() => void) | undefined {
   if (!ctx.hasUI || ctx.mode !== "tui" || !ctx.ui.setFooter) return;
   let requestRender: (() => void) | undefined;
@@ -163,7 +176,8 @@ export function installCostFooter(
         const subscription =
           ctx.model &&
           (ctx.model.provider === "kimi-coding" || ctx.modelRegistry?.isUsingOAuth(ctx.model));
-        parts.push(`$${(totals.cost + subagentCost()).toFixed(3)}${subscription ? " (sub)" : ""}`);
+        const costText = displayCost?.(totals.cost) ?? `$${(totals.cost + subagentCost()).toFixed(3)}`;
+        parts.push(`${costText}${subscription ? " (sub)" : ""}`);
         const context = ctx.getContextUsage();
         if (context) {
           const text = `${context.percent === null ? "?" : context.percent.toFixed(1) + "%"}/${tokens(context.contextWindow)}`;

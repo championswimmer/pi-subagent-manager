@@ -8,6 +8,7 @@ import {
   COST_WIDGET_EVENT,
   COST_WIDGET_ID,
   CostFooterController,
+  costIconGlyph,
   formatSubagentCost,
   footerUsage,
   hasExternalFooter,
@@ -145,8 +146,8 @@ test("external footer receives only its cost slot; never install or clear its fo
   footer.refresh(ctx);
   footer.clear();
   assert.deepEqual(published, [
-    { widgetId: COST_WIDGET_ID, value: "$0.0000" },
-    { widgetId: COST_WIDGET_ID, value: "$0.5000" },
+    { widgetId: COST_WIDGET_ID, value: "💵 $0.0000" },
+    { widgetId: COST_WIDGET_ID, value: "💵 $0.5000" },
     { widgetId: COST_WIDGET_ID, value: COST_ICON + " $0.8000" },
     { widgetId: COST_WIDGET_ID, value: COST_ICON + " $0.8000" },
     { widgetId: COST_WIDGET_ID, value: null },
@@ -186,7 +187,7 @@ test("without a footer extension, install fallback only once cost exists and res
   cost = 0;
   footer.refresh(ctx);
   assert.equal(installed.length, 2);
-  assert.deepEqual(published.at(-1), { widgetId: COST_WIDGET_ID, value: "$0.0000" });
+  assert.deepEqual(published.at(-1), { widgetId: COST_WIDGET_ID, value: "💵 $0.0000" });
 });
 
 test("prompt/skill named footer cannot claim the footer; loaded extension command can", () => {
@@ -254,17 +255,17 @@ test("status-key mode registers zero cost for discovery and Pi status mode is la
     events: { emit() { assert.fail("status modes must not emit pi-footer events"); } },
   } as any, () => cost, () => false, () => mode);
   footer.refresh(ctx);
-  assert.equal(statuses.get(COST_WIDGET_ID), "$0.0000");
+  assert.equal(statuses.get(COST_WIDGET_ID), "💵 $0.0000");
   cost = 0.5;
   footer.refresh(ctx);
-  assert.equal(statuses.get(COST_WIDGET_ID), "$0.5000");
+  assert.equal(statuses.get(COST_WIDGET_ID), "💵 $0.5000");
   mode = "pi-status";
   footer.refresh(ctx);
-  assert.equal(statuses.get(COST_WIDGET_ID), "Total: $0.8300");
+  assert.equal(statuses.get(COST_WIDGET_ID), "Subagents: 💵 $0.5000");
   footer.reset(ctx);
   cost = 0;
   footer.refresh(ctx);
-  assert.equal(statuses.get(COST_WIDGET_ID), "Total: $0.3300");
+  assert.equal(statuses.get(COST_WIDGET_ID), "Subagents: 💵 $0.0000");
   footer.clear();
   assert.equal(statuses.has(COST_WIDGET_ID), false);
 });
@@ -294,11 +295,86 @@ test("switching transports clears old values and removes only our own fallback f
   footer.refresh(ctx);
   assert.equal(footers[1], undefined);
   assert.deepEqual(updates.at(-1), { widgetId: COST_WIDGET_ID, value: null });
-  assert.equal(statuses.get(COST_WIDGET_ID), "$0.5000");
+  assert.equal(statuses.get(COST_WIDGET_ID), "💵 $0.5000");
   mode = "pi-footer-event";
   footer.refresh(ctx);
   assert.equal(statuses.has(COST_WIDGET_ID), false);
-  assert.deepEqual(updates.at(-1), { widgetId: COST_WIDGET_ID, value: "$0.5000" });
+  assert.deepEqual(updates.at(-1), { widgetId: COST_WIDGET_ID, value: "💵 $0.5000" });
   footer.clear();
   assert.deepEqual(updates.at(-1), { widgetId: COST_WIDGET_ID, value: null });
+});
+
+
+test("all destinations and the fallback honor independent values and both icon families", () => {
+  const glyphs = {
+    money: ["💵", "\uf0d6"],
+    coins: ["🪙", "\u{f0512}"],
+    wallet: ["👛", "\u{f055d}"],
+  };
+  for (const destination of ["pi-status", "pi-footer-status", "pi-footer-event", "fallback"] as const) {
+    const manager = SessionManager.inMemory("/tmp/test");
+    manager.appendMessage(message);
+    let value: "subagents" | "total" = "subagents";
+    let icon: "money" | "coins" | "wallet" = "money";
+    let nerd = false;
+    let published: string | undefined;
+    let component: { render(width: number): string[] } | undefined;
+    let installs = 0;
+    const ctx = {
+      hasUI: true,
+      mode: "tui",
+      cwd: "/tmp/test",
+      sessionManager: manager,
+      getContextUsage: () => undefined,
+      ui: {
+        setStatus(key: string, text: string) {
+          assert.equal(key, COST_WIDGET_ID);
+          published = text;
+        },
+        setFooter(factory: any) {
+          assert.equal(destination, "fallback", "only fallback mode may install a footer");
+          installs++;
+          component = factory(
+            { requestRender() {} },
+            { fg: (_: string, text: string) => text },
+            {
+              onBranchChange: () => () => {},
+              getGitBranch: () => undefined,
+              getAvailableProviderCount: () => 1,
+              getExtensionStatuses: () => new Map(),
+            },
+          );
+        },
+      },
+    } as unknown as ExtensionContext;
+    const footer = new CostFooterController({
+      getCommands: () => destination === "fallback" ? [] : [{ name: "footer", source: "extension" }],
+      events: { emit: (_: string, payload: any) => { published = payload.value; } },
+    } as any, () => 0.5, () => nerd,
+    () => destination === "fallback" ? "pi-footer-event" : destination,
+    () => value, () => icon);
+    for (value of ["subagents", "total"] as const) {
+      for (icon of ["money", "coins", "wallet"] as const) {
+        for (nerd of [false, true]) {
+          footer.refresh(ctx);
+          const glyph = glyphs[icon][nerd ? 1 : 0];
+          assert.equal(costIconGlyph(icon, nerd), glyph);
+          const cost = glyph + (value === "total" ? " $0.8300" : " $0.5000");
+          assert.equal(published, destination === "pi-status"
+            ? (value === "total" ? "Total: " : "Subagents: ") + cost : cost);
+          if (destination === "fallback") {
+            assert.ok(component!.render(100)[1].includes(cost));
+            for (const width of [1, 10, 40]) {
+              assert.ok(component!.render(width).every((line) => visibleWidth(line) <= width));
+            }
+          }
+        }
+      }
+    }
+    assert.equal(installs, destination === "fallback" ? 1 : 0);
+    manager.appendMessage(message);
+    footer.refresh(ctx);
+    assert.ok(published!.endsWith("$1.1600"), "total tracks new main-session usage");
+    if (component) assert.ok(component.render(100)[1].includes("$1.1600"));
+  }
 });

@@ -553,13 +553,67 @@ for (const width of [32, 80]) {
 }
 
 
-test("[labs] Cost display offers and saves all three transports", async (t) => {
+test("Footer display opens a submenu and saves all three locations with integration IDs", async (t) => {
   for (const mode of ["pi-footer-event", "pi-footer-status", "pi-status"] as const) {
-    const result = await run(t, ["costDisplay", mode, "save"]);
-    assert.equal(result.menus[1]!.title, "[labs] Cost display");
-    assert.deepEqual(result.menus[1]!.rows.map((row) => row.id), ["pi-footer-event", "pi-footer-status", "pi-status"]);
-    assert.equal(result.value(0, "costDisplay"), "pi-footer status key");
+    const result = await run(t, ["costDisplay", "location", mode, "back", "save"]);
+    assert.equal(result.menus[0]!.rows.find((row) => row.id === "costDisplay")!.label, "[labs] Footer display");
+    assert.equal(result.menus[1]!.title, "[labs] Footer display");
+    assert.deepEqual(result.menus[1]!.rows.map((row) => row.id), ["location", "value", "icon", "back"]);
+    const locations = result.menus[2]!.rows;
+    assert.deepEqual(locations.map((row) => row.id), ["pi-status", "pi-footer-status", "pi-footer-event"]);
+    assert.equal(locations[1]!.value, "subagent_cost");
+    assert.equal(locations[2]!.value, "subagent_cost");
+    assert.match(locations[2]!.help!, /pi-footer:update-widget/);
     assert.equal(result.loaded.settings.costDisplay, mode);
     assert.equal(result.applied, 1);
+  }
+});
+
+test("Footer display saves both cost values independently of location", async (t) => {
+  for (const value of ["subagents", "total"] as const) {
+    const result = await run(t, ["costDisplay", "value", value, "back", "save"]);
+    assert.deepEqual(result.menus[2]!.rows.map((row) => row.id), ["subagents", "total"]);
+    assert.equal(result.loaded.settings.costValue, value);
+    assert.equal(result.loaded.settings.costDisplay, DEFAULT_MANAGER_SETTINGS.costDisplay);
+  }
+});
+
+test("Footer icon offers three previews from the draft Nerd Font setting", async (t) => {
+  for (const nerd of [false, true]) {
+    for (const icon of ["money", "coins", "wallet"] as const) {
+      const result = await run(t, [
+        ...(nerd ? ["nerdFontIcons"] : []),
+        "costDisplay", "icon", icon, "back", "save",
+      ]);
+      const picker = result.menus.find((menu) => menu.title.startsWith("Footer icon"))!;
+      assert.equal(picker.title, `Footer icon · ${nerd ? "Nerd Font" : "Emoji"}`);
+      assert.deepEqual(picker.rows.map((row) => row.id), ["money", "coins", "wallet"]);
+      assert.deepEqual(picker.rows.map((row) => row.value), nerd ? ["\uf0d6", "\u{f0512}", "\u{f055d}"] : ["💵", "🪙", "👛"]);
+      assert.equal(result.loaded.settings.costIcon, icon);
+      assert.equal(result.loaded.settings.nerdFontIcons, nerd);
+    }
+  }
+});
+
+test("Footer edits remain draft-only, picker Esc preserves values, and defaults reset choices", async (t) => {
+  const cancelled = await run(t, ["costDisplay", "location", "pi-status", "value", "total", "icon", "wallet", "back", "cancel"]);
+  assert.equal(cancelled.applied, 0);
+  assert.equal(existsSync(cancelled.userFile), false);
+  const settings = { ...DEFAULT_MANAGER_SETTINGS, costDisplay: "pi-status", costValue: "total", costIcon: "wallet" } as const;
+  const escaped = await run(t, ["costDisplay", "location", undefined, "value", undefined, "icon", undefined, undefined, "save"], { settings });
+  assert.equal(escaped.loaded.settings.costDisplay, "pi-status");
+  assert.equal(escaped.loaded.settings.costValue, "total");
+  assert.equal(escaped.loaded.settings.costIcon, "wallet");
+  const restored = await run(t, ["defaults", "save"], { settings });
+  assert.deepEqual(restored.loaded.settings, DEFAULT_MANAGER_SETTINGS);
+});
+
+test("Footer submenu and pickers fit narrow terminals and save to project scope", async (t) => {
+  for (const width of [20, 40, 60]) {
+    const result = await run(t, ["costDisplay", "location", "pi-footer-event", "value", "total", "icon", "coins", "back", "save"], { width, trusted: true });
+    assert.ok(result.renders.every((lines) => lines.every((line) => visibleWidth(line) <= width)));
+    assert.equal(result.loaded.settings.costValue, "total");
+    assert.equal(result.loaded.settings.costIcon, "coins");
+    assert.equal(existsSync(result.projectFile), true);
   }
 });
