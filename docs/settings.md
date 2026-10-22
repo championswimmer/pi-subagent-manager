@@ -282,3 +282,12 @@ The dialog warns about invalid settings layers. Project saves are blocked until 
 invalid Global layer is fixed, rather than persisting a default-based snapshot.
 If settings layers change while the dialog is open, Save and scope transitions
 refuse the stale draft: reopen settings to load the new values before editing.
+
+### Diagnostics from selected child extensions
+
+Selected extensions can emit `pi-subagent-manager:diagnostic` on their child-local
+`pi.events` bus to send bounded info/warning/error reports to the parent UI and
+agent context, without writing stderr. Use the live
+`pi-subagent-manager:diagnostic:probe` handshake before selecting that reporting
+path. This is available only when selected extensions actually load; it does not
+intercept `console.error` or add tools. See [the protocol, limits and example](subagent-extension-limitations.md#child-extension-diagnostics).

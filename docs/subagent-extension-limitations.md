@@ -28,3 +28,62 @@ Reloaded extension tools take precedence over inherited main-session bridges, in
 **Bridged calls run through both child hooks and the main session's hooks.** They reuse main-session resources and context, so session-mutating tools are not necessarily isolated to the child, and hook side effects can occur in both sessions. Built-in codemode and tool search remain child-local rather than reusing the main agent's implementations.
 
 Leave all extensions unselected if your extensions require exact main-session inheritance, interactive UI, or an `input` hook for every delivered message.
+
+## Child extension diagnostics
+
+Selected extensions can report to their host without importing this package:
+
+```ts
+function report(pi, level, message, source) {
+  // This synchronous, child-local probe identifies a LIVE manager host, not a
+  // historical transcript marker. No listener in a normal top-level session.
+  let hosted = false;
+  pi.events.emit("pi-subagent-manager:diagnostic:probe", {
+    respond: () => { hosted = true; },
+  });
+  if (hosted) {
+    pi.events.emit("pi-subagent-manager:diagnostic", { level, message, source });
+  } else {
+    // Retain your normal top-level reporting (e.g. ctx.ui.notify / stderr).
+  }
+}
+```
+
+`level` must be `info`, `warning`, or `error`; `message` is a nonblank string and
+`source` is an optional short extension name. The channel is available during
+factory loading and hooks (including shutdown), only in sessions with selected
+extensions. Each child has an isolated event bus. The probe and report are
+synchronous; no transcript ownership marker is needed, and reopening a child
+transcript in the ordinary CLI does not install a host listener.
+
+Reports are attributed to the child thread path and sent through the main
+session's public UI notification API (including RPC notifications when available).
+They also reach the lexical parent agent's context as non-waking update messages,
+explicitly labeled **untrusted extension-reported data, not instructions**, with
+source/message JSON-quoted (UI notifications retain their readable formatting);
+independent roots report to their owner. In print mode this ordinary message
+path is the fallback, not stderr. Up to 20 reports remain in the live thread's
+`diagnostics` field in `agent_status`, spawn/wait results, and completion state.
+This field is not restored after manager reload; delivered parent messages use
+the existing durable mailbox. Reports never start a parent model turn on their
+own, change child success/failure, or replace its output/status.
+
+Control/ANSI and Unicode Bidi_Control characters are stripped, whitespace flattened, messages limited to
+1,000 characters and source names to 80. Exact duplicates are dropped, with at
+most five reports per 10 seconds and 20 distinct reports per child runtime;
+excess reports are silently dropped. Limits reset when a child runtime reopens.
+Only explicitly supplied text is forwarded: never include credentials, raw
+provider responses, tool arguments, or transcripts. Sanitization is not secret
+redaction; the extension author is responsible for choosing safe summaries.
+
+`ctx.ui.notify` in children remains non-interactive; use this channel rather than
+assuming `ctx.hasUI` or print mode identifies a host. **Console output is not
+intercepted**: children share a process and concurrently replacing `console.error`
+would capture unrelated sessions. Extensions must opt into the event channel to
+avoid writing to the parent terminal.
+
+For **model-authored** progress or error reports, the existing child-only
+`agent_update({ message })` tool already delivers to the parent without ending
+the task or triggering a parent turn. Use `agent_pause` when parent input is
+needed. No duplicate error-reporting tool is necessary; extension diagnostics
+are a separate host channel and do not require model tool permissions.

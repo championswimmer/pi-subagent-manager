@@ -42,7 +42,14 @@ export interface AgentType {
   baseFilePath?: string;
 }
 export type ThreadState = "starting" | "running" | "paused" | "completed" | "failed" | "stopped";
+export interface ChildDiagnostic {
+  level: "info" | "warning" | "error";
+  message: string;
+  source?: string;
+}
 export interface ThreadView {
+  /** Bounded explicit extension reports; live only, not transcript content. */
+  diagnostics?: ChildDiagnostic[];
   path: string;
   parent: string | null;
   owner: string;
@@ -82,6 +89,7 @@ export interface ThreadView {
   costId?: string;
 }
 export type DriverEvent =
+  | { kind: "diagnostic"; diagnostic: ChildDiagnostic }
   | { kind: "settings"; model: string; thinkingLevel: ThinkingLevel }
   | {
       kind: "activity" | "error";
@@ -209,6 +217,7 @@ export interface ThreadService {
 }
 export type DriverFactory = (options: DriverOptions) => Promise<AgentDriver>;
 export type ThreadEvent =
+  | { kind: "diagnostic"; thread: ThreadView; diagnostic: ChildDiagnostic; recipient: string }
   | { kind: "change"; thread: ThreadView }
   | { kind: "metrics"; thread: ThreadView }
   | { kind: "update"; thread: ThreadView; message: string; recipient: string }

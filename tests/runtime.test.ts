@@ -171,7 +171,9 @@ test("isolated real SDK driver without credentials", async (t) => {
       { model: registry.find("runtime-test", "model/with/slashes")! },
       { model: registry.find("runtime-other", "backup")! },
     ];
+    const notifications: { message: string; level: string }[] = [];
     const ctx = {
+      ui: { notify: (message: string, level: string) => notifications.push({ message, level }) },
       cwd,
       sessionManager: root,
       modelRegistry: registry,
@@ -290,11 +292,18 @@ test("isolated real SDK driver without credentials", async (t) => {
         import { Type } from "@earendil-works/pi-ai";
         import { appendFile } from "node:fs/promises";
         export default function(pi) {
+          let factoryHosted = false;
+          pi.events.emit("pi-subagent-manager:diagnostic:probe", { respond: () => { factoryHosted = true; } });
           let count = 0;
           const record = (event, data = {}) => pi.appendEntry("extension-test", { event, ...data });
           pi.on("session_start", (_event, ctx) => {
             count = ctx.sessionManager.getBranch().filter(e => e.type === "custom" && e.customType === "extension-test" && e.data.event === "execute").length;
-            record("start", { sessionId: ctx.sessionManager.getSessionId(), trusted: ctx.isProjectTrusted() });
+            let hostAvailable = false;
+            pi.events.emit("pi-subagent-manager:diagnostic:probe", { respond: () => { hostAvailable = true; } });
+            if (!hostAvailable) throw new Error("Missing diagnostic host");
+            pi.events.emit("pi-subagent-manager:diagnostic", { level: "error", source: "test-extension", message: "Classifier\\n\\u001b[31m unavailable" });
+            pi.events.emit("pi-subagent-manager:diagnostic", { level: "error", source: "test-extension", message: "Classifier\\n\\u001b[31m unavailable" });
+            record("start", { sessionId: ctx.sessionManager.getSessionId(), trusted: ctx.isProjectTrusted(), factoryHosted });
           });
           pi.on("input", (event) => {
             record("input");
@@ -393,6 +402,7 @@ test("isolated real SDK driver without credentials", async (t) => {
                       value?: number;
                       sessionId?: string;
                       trusted?: boolean;
+                      factoryHosted?: boolean;
                     };
                   }
                 ).data,
@@ -426,7 +436,29 @@ test("isolated real SDK driver without credentials", async (t) => {
             'export default function() { throw new Error("UNSELECTED FACTORY RAN"); }',
           );
           subagentExtensions = [extensionFile];
-          const child = await create(extensionOptions("/root/extensions-on"));
+          assert.equal(notifications.length, 0, "extensions off cannot report");
+          const diagnosticStart = events.length;
+          const savedError = console.error;
+          const stderr: unknown[][] = [];
+          console.error = (...args) => {
+            stderr.push(args);
+          };
+          let child: AgentDriver;
+          try {
+            child = await create(extensionOptions("/root/extensions-on"));
+          } finally {
+            console.error = savedError;
+          }
+          assert.deepEqual(stderr, [], "channel never writes to stderr");
+          const reports = events.slice(diagnosticStart).filter((e) => e.kind === "diagnostic");
+          assert.equal(reports.length, 1, "duplicate reports are suppressed");
+          assert.deepEqual(notifications, [
+            {
+              message:
+                "Diagnostic from /root/extensions-on [error; test-extension]: Classifier unavailable",
+              level: "error",
+            },
+          ]);
           issueToolCall();
           await child.prompt("run child hooks");
           assert.equal(bridgeCalls, 1, "reloaded tool replaces bridge rather than executing twice");
@@ -436,6 +468,7 @@ test("isolated real SDK driver without credentials", async (t) => {
             ["start", "input", "before", "call", "execute", "result"],
           );
           assert.equal(records[0]!.trusted, false);
+          assert.equal(records[0]!.factoryHosted, true, "channel available during factory loading");
           assert.notEqual(records[0]!.sessionId, root.getSessionId());
           const executed = records.find(({ event }) => event === "execute")!;
           assert.equal(executed.sessionId, records[0]!.sessionId);
@@ -453,6 +486,8 @@ test("isolated real SDK driver without credentials", async (t) => {
           );
 
           const other = await create(extensionOptions("/root/extensions-other"));
+          assert.equal(notifications.length, 2, "dedupe state is child-local");
+          assert.match(notifications[1]!.message, /Diagnostic from \/root\/extensions-other/);
           issueToolCall();
           await other.prompt("separate extension state");
           assert.equal(
@@ -1482,6 +1517,7 @@ test("isolated real SDK driver without credentials", async (t) => {
             event.kind === "settings" ||
             event.kind === "usage" ||
             event.kind === "checkpoint" ||
+            event.kind === "diagnostic" ||
             event.text.length <= 1000,
         ),
       );
