@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, realpath } from "node:fs/promises";
 import {
   createAgentSession,
+  createEventBus,
   createExtensionRuntime,
   ExtensionRunner,
   ModelRegistry,
@@ -44,6 +45,13 @@ import {
   type DriverOptions,
   type ThinkingLevel,
 } from "../types.ts";
+
+import {
+  DIAGNOSTIC_CHANNEL,
+  DIAGNOSTIC_PROBE_CHANNEL,
+  diagnosticSink,
+  diagnosticText,
+} from "./diagnostics.ts";
 
 const BUILTINS = ["read", "bash", "powershell", "edit", "write", "grep", "find", "ls"];
 /** Persisted before transcript messages so older-leaf restores still carry ownership. */
@@ -440,7 +448,43 @@ export function createDriverFactory(
       parkQueue();
       return { continue: false };
     };
+    // A separate bus per driver: never share parent/other-child extension events.
+    const childEvents = createEventBus();
+    let diagnosticsClosed = false;
+    let diagnosticsInitialized = false;
+    // The startup signal belongs to one run; a stopped driver may be reused.
+    const diagnosticsUnavailable = () =>
+      diagnosticsClosed || (!diagnosticsInitialized && options.signal.aborted);
+    if (subagentExtensions)
+      childEvents.on(DIAGNOSTIC_PROBE_CHANNEL, (payload) => {
+        try {
+          if (
+            diagnosticsUnavailable() ||
+            !payload ||
+            typeof payload !== "object"
+          )
+            return;
+          const respond = (payload as { respond?: unknown }).respond;
+          if (typeof respond === "function") respond();
+        } catch {
+          /* Untrusted callbacks cannot escape into EventBus's stderr handler. */
+        }
+      });
+    if (subagentExtensions)
+      childEvents.on(
+        DIAGNOSTIC_CHANNEL,
+        diagnosticSink((diagnostic) => {
+          if (diagnosticsUnavailable()) return;
+          options.onEvent({ kind: "diagnostic", diagnostic });
+          try {
+            getRootContext().ui.notify(diagnosticText(options.path, diagnostic), diagnostic.level);
+          } catch {
+            // Agent-facing delivery remains available if the UI is absent/unavailable.
+          }
+        }),
+      );
     const loader = new DefaultResourceLoader({
+      eventBus: childEvents,
       cwd: ctx.cwd,
       agentDir,
       settingsManager,
@@ -529,7 +573,13 @@ export function createDriverFactory(
       ],
     });
     options.signal.throwIfAborted();
-    await loader.reload();
+    try {
+      await loader.reload();
+    } catch (error) {
+      diagnosticsClosed = true;
+      childEvents.clear();
+      throw error;
+    }
     const loadedExtensions = loader.getExtensions();
     // Manager controls remain SDK custom tools so loaded extensions cannot replace
     // them. With reload disabled, preserve the existing SDK bridge behavior exactly.
@@ -598,6 +648,8 @@ export function createDriverFactory(
           // Best-effort cleanup must not hide the SDK's original startup failure.
         });
       }
+      diagnosticsClosed = true;
+      childEvents.clear();
       throw error;
     }
     const unsubscribeExtensionErrors = subagentExtensions
@@ -614,6 +666,8 @@ export function createDriverFactory(
     let shutdownPromise: Promise<void> | undefined;
     const disposeSession = () => {
       if (!subagentExtensions) {
+        diagnosticsClosed = true;
+        childEvents.clear();
         session.dispose();
         return;
       }
@@ -624,6 +678,8 @@ export function createDriverFactory(
           await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
         } finally {
           unsubscribeExtensionErrors();
+          diagnosticsClosed = true;
+          childEvents.clear();
           session.dispose();
         }
       })());
@@ -717,6 +773,7 @@ export function createDriverFactory(
       await disposeSession();
       throw error;
     }
+    diagnosticsInitialized = true;
     const streamFunction = session.agent.streamFunction;
     session.agent.streamFunction = async (requestModel, context, streamOptions) => {
       assertScopedRequestAuthorized(
