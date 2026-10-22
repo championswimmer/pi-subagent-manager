@@ -68,3 +68,14 @@ test("diagnostics remove every Unicode Bidi_Control character from message and s
   assert.doesNotMatch(reports[0]!.message, /\p{Bidi_Control}/u);
   assert.doesNotMatch(reports[0]!.source!, /\p{Bidi_Control}/u);
 });
+
+
+test("diagnostic capability is explicit, versioned from the manifest and callback-safe", async () => {
+  const { respondDiagnosticCapability } = await import("../src/orch/diagnostics.ts");
+  const { createRequire } = await import("node:module");
+  let reply: unknown;
+  respondDiagnosticCapability({ respond(value: unknown) { reply = value; } });
+  assert.deepEqual(reply, { version: createRequire(import.meta.url)("../package.json").version, protocol: 1 });
+  for (const payload of [undefined, {}, { respond() { throw new Error("private"); } }])
+    assert.doesNotThrow(() => respondDiagnosticCapability(payload));
+});

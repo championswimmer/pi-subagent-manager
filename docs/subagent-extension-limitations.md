@@ -39,7 +39,7 @@ function report(pi, level, message, source) {
   // historical transcript marker. No listener in a normal top-level session.
   let hosted = false;
   pi.events.emit("pi-subagent-manager:diagnostic:probe", {
-    respond: () => { hosted = true; },
+    respond: (capability) => { hosted = capability?.protocol === 1 && typeof capability.version === "string"; },
   });
   if (hosted) {
     pi.events.emit("pi-subagent-manager:diagnostic", { level, message, source });
@@ -87,3 +87,12 @@ For **model-authored** progress or error reports, the existing child-only
 the task or triggering a parent turn. Use `agent_pause` when parent input is
 needed. No duplicate error-reporting tool is necessary; extension diagnostics
 are a separate host channel and do not require model tool permissions.
+
+Since **1.1.0**, both the child diagnostic probe and the parent-session
+`pi-subagent-manager:capabilities:probe` synchronously reply via
+`respond({ version, protocol: 1 })`. `version` comes from this package's manifest.
+Consumers must validate protocol 1 and a semver meeting their minimum version;
+legacy argument-free replies are not compatible. The parent probe is available
+while the manager is enabled; it does not install a child diagnostic sink.
+Extensions in one session share Pi's public event bus, but each child has its own
+bus. Discovery is capability detection among trusted extensions, not authentication.

@@ -1,8 +1,19 @@
+import { createRequire } from "node:module";
 import type { ChildDiagnostic } from "../types.ts";
 
 /** Child-local pi.events channel. Payloads are explicit, never captured from console/transcripts. */
 export const DIAGNOSTIC_CHANNEL = "pi-subagent-manager:diagnostic";
 export const DIAGNOSTIC_PROBE_CHANNEL = `${DIAGNOSTIC_CHANNEL}:probe`;
+/** Session-wide discovery, not a child report channel or an authentication boundary. */
+export const CAPABILITY_PROBE_CHANNEL = "pi-subagent-manager:capabilities:probe";
+const packageVersion: string = createRequire(import.meta.url)("../../package.json").version;
+export function respondDiagnosticCapability(payload: unknown): void {
+  try {
+    if (!payload || typeof payload !== "object") return;
+    const respond = (payload as { respond?: unknown }).respond;
+    if (typeof respond === "function") respond({ version: packageVersion, protocol: 1 });
+  } catch { /* Discovery callbacks must not escape into EventBus stderr. */ }
+}
 
 function clean(value: string, limit: number): string {
   return value

@@ -1,4 +1,4 @@
-import { diagnosticAgentText } from "./orch/diagnostics.ts";
+import { CAPABILITY_PROBE_CHANNEL, respondDiagnosticCapability, diagnosticAgentText } from "./orch/diagnostics.ts";
 import { randomUUID } from "node:crypto";
 import { buildSessionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -44,6 +44,10 @@ type RootNotification = {
 };
 
 export default function piSubagent(pi: ExtensionAPI): void {
+  let capabilityActive = true;
+  pi.events.on(CAPABILITY_PROBE_CHANNEL, (payload) => {
+    if (capabilityActive && limits.subagentMode !== "off") respondDiagnosticCapability(payload);
+  });
   let context: ExtensionContext | undefined;
   const inheritedTools = createInheritedToolSource(pi);
   let store = new ConfigStore({
@@ -698,6 +702,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
       ctx.ui.notify(diagnostics.join("\n"), "warning");
   };
   pi.on("session_start", async (event, ctx) => {
+    capabilityActive = true;
     await attachSession(ctx, true, event.reason !== "startup");
     if (limits.subagentMode !== "off") await importAgents(ctx, true);
   });
@@ -722,6 +727,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
   pi.on("session_before_switch", stopWorkingThreads);
   pi.on("session_before_fork", stopWorkingThreads);
   pi.on("session_shutdown", async () => {
+    capabilityActive = false;
     cancelSummary();
     housekeeping.cancelAll();
     generation++;
