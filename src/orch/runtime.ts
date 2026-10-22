@@ -49,6 +49,7 @@ import {
 import {
   DIAGNOSTIC_CHANNEL,
   DIAGNOSTIC_PROBE_CHANNEL,
+  respondDiagnosticCapability,
   diagnosticSink,
   diagnosticText,
 } from "./diagnostics.ts";
@@ -464,8 +465,7 @@ export function createDriverFactory(
             typeof payload !== "object"
           )
             return;
-          const respond = (payload as { respond?: unknown }).respond;
-          if (typeof respond === "function") respond();
+          respondDiagnosticCapability(payload);
         } catch {
           /* Untrusted callbacks cannot escape into EventBus's stderr handler. */
         }

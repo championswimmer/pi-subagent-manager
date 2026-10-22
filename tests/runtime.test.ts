@@ -299,7 +299,7 @@ test("isolated real SDK driver without credentials", async (t) => {
           pi.on("session_start", (_event, ctx) => {
             count = ctx.sessionManager.getBranch().filter(e => e.type === "custom" && e.customType === "extension-test" && e.data.event === "execute").length;
             let hostAvailable = false;
-            pi.events.emit("pi-subagent-manager:diagnostic:probe", { respond: () => { hostAvailable = true; } });
+            pi.events.emit("pi-subagent-manager:diagnostic:probe", { respond: (capability) => { hostAvailable = capability?.protocol === 1 && typeof capability.version === "string"; } });
             if (!hostAvailable) throw new Error("Missing diagnostic host");
             pi.events.emit("pi-subagent-manager:diagnostic", { level: "error", source: "test-extension", message: "Classifier\\n\\u001b[31m unavailable" });
             pi.events.emit("pi-subagent-manager:diagnostic", { level: "error", source: "test-extension", message: "Classifier\\n\\u001b[31m unavailable" });
