@@ -835,6 +835,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
         await editAgentTypes(ctx, store, limits.nerdFontIcons, {
           getAllTools: () => pi.getAllTools(),
           toolFiltering: limits.toolFiltering,
+          resolveAgentSettings: (type) => driverFactory.resolveAgentSettings(type, "/root"),
         });
         store.reload();
       } else if (command === "reload") {
@@ -857,6 +858,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
           agentDir: getAgentDir(),
           getAllTools: () => pi.getAllTools(),
           checklistStatus: () => currentChecklistStatus(ctx),
+          resolveAgentSettings: (type) => driverFactory.resolveAgentSettings(type, "/root"),
           apply: () => {
             const diagnostics = loadLimits(ctx);
             requireManager().setLimits(limits);

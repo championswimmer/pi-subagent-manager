@@ -36,6 +36,8 @@ export interface DialogRow {
   /** Trusted formatter for a fixed three-cell middle column, styled at render time. */
   renderIndicators?: (theme: Theme) => string;
   value?: string;
+  /** Optional second line beneath the value, clipped to the same column. */
+  valueDetail?: string;
   valueColor?: Parameters<Theme["fg"]>[0];
   help?: string;
 }
@@ -239,7 +241,8 @@ export class DialogMenu {
       .split(/\r\n?|\n/)
       .flatMap((line) => wrapTextWithAnsi(dialogText(line), Math.max(1, inner - 1)))
       .slice(0, Math.max(1, height - 7 - legend.length));
-    this.viewport = Math.max(1, height - 6 - help.length - legend.length);
+    const rowHeight = this.rows.some((row) => row.valueDetail !== undefined) ? 2 : 1;
+    this.viewport = Math.max(1, Math.floor((height - 6 - help.length - legend.length) / rowHeight));
     const start = Math.max(
       0,
       Math.min(
@@ -260,7 +263,7 @@ export class DialogMenu {
         "dim",
         ` ${this.rows.length ? this.selected + 1 : 0}/${this.rows.length} · Field / ${hasIndicators ? "Saved / " : ""}Value`,
       ),
-      ...this.rows.slice(start, start + this.viewport).map((row, i) => {
+      ...this.rows.slice(start, start + this.viewport).flatMap((row, i) => {
         const selected = start + i === this.selected;
         const color = (text: string) => selected ? this.theme.fg("accent", text) : text;
         const plainLabel = dialogText(row.label);
@@ -274,11 +277,15 @@ export class DialogMenu {
         const indicators = truncateToWidth(row.renderIndicators?.(this.theme) ?? "", indicatorWidth, "", true);
         const indicatorPadding = " ".repeat(Math.max(0, indicatorWidth - visibleWidth(indicators)));
         const value = dialogText(row.value ?? "");
-        return color(`${selected ? "›" : " "} `)
+        const primary = color(`${selected ? "›" : " "} `)
           + (row.renderLabel ? label : color(label))
           + color(`${padding} │ `)
           + (hasIndicators ? indicators + color(`${indicatorPadding} │ `) : "")
           + (row.valueColor ? this.theme.fg(row.valueColor, value) : color(value));
+        if (rowHeight === 1) return [primary];
+        const valueStart = 2 + labelWidth + 3 + (hasIndicators ? indicatorWidth + 3 : 0);
+        const detail = truncateToWidth(dialogText(row.valueDetail ?? ""), Math.max(0, inner - valueStart));
+        return [primary, " ".repeat(valueStart) + this.theme.fg("muted", detail)];
       }),
       "",
       ...help.map((line) => this.theme.fg("muted", ` ${line}`)),

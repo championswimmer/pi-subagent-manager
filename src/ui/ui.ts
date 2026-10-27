@@ -43,7 +43,7 @@ import type { LoaderStyle, WidgetMode } from "../prefs/settings.ts";
 import { AGENT_PROGRESS_INTERVAL, agentProgressIcon, isAgentLoaderGlyph } from "./agent-loader.ts";
 export { AGENT_PROGRESS_INTERVAL, agentProgressIcon } from "./agent-loader.ts";
 import { buildStatusTree, lastStarted, threadActivity, type StatusRow } from "./thread-tree.ts";
-import { THINKING_LEVELS, type AgentType, type ThreadService, type ThreadView } from "../types.ts";
+import { THINKING_LEVELS, type AgentType, type ResolvedAgentSettings, type ThreadService, type ThreadView } from "../types.ts";
 
 export type ThreadController = Pick<
   ThreadService,
@@ -1025,11 +1025,27 @@ function editMenuLabel(action: EditMenuAction, draft: AgentType): string {
   }
 }
 
+export interface AgentEditorOptions extends ToolEditorOptions {
+  /** The runtime resolver used by agent_types, for children of this session's root. */
+  resolveAgentSettings?: (type: AgentType) => ResolvedAgentSettings;
+}
+
+function effectiveModelLine(type: AgentType, options: AgentEditorOptions): string {
+  try {
+    const settings = options.resolveAgentSettings?.(type);
+    return settings
+      ? `Model: ${settings.model} · thinking: ${settings.thinkingLevel}`
+      : "Model: unavailable";
+  } catch {
+    return "Model: unavailable";
+  }
+}
+
 export async function editAgentTypes(
   ctx: ExtensionCommandContext,
   store: ConfigStore,
   nerdFontIcons = false,
-  toolEditor: ToolEditorOptions = { getAllTools: () => [], toolFiltering: "allowed" },
+  toolEditor: AgentEditorOptions = { getAllTools: () => [], toolFiltering: "allowed" },
 ): Promise<void> {
   if (!canOpenDialog(ctx)) return;
   await withDialogSession(ctx, (scoped) =>
@@ -1079,7 +1095,7 @@ async function editAgentTypesDialog(
   ctx: ExtensionCommandContext,
   store: ConfigStore,
   nerdFontIcons: boolean,
-  toolEditor: ToolEditorOptions,
+  toolEditor: AgentEditorOptions,
 ): Promise<void> {
   while (true) {
     const types = store.list();
@@ -1096,6 +1112,7 @@ async function editAgentTypesDialog(
         renderLabel: (label: string, theme: Theme) =>
           agentTypeBadge(label, type.color, theme, type.icon, nerdFontIcons),
         value: type.description,
+        valueDetail: effectiveModelLine(type, toolEditor),
         help: agentSourceHelp(store, type.name),
       })),
     ]);
