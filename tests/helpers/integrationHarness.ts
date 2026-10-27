@@ -226,7 +226,9 @@ export async function withOfflineHarness(
       const enabled = options.managerSettings?.subagentMode !== "off";
       assert.equal(session.getActiveToolNames().includes("agent_spawn"), enabled);
       assert.equal(
-        session.getAllTools().some((tool) => tool.name === "agent_steer" && tool.exposure !== "hidden"),
+        session
+          .getAllTools()
+          .some((tool) => tool.name === "agent_steer" && tool.exposure !== "hidden"),
         enabled,
       );
       return session;

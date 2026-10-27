@@ -29,7 +29,14 @@ export type CostValue = (typeof COST_VALUES)[number];
 export const COST_ICONS = ["money", "coins", "wallet"] as const;
 export type CostIcon = (typeof COST_ICONS)[number];
 
-export const LOADER_STYLES = ["circle", "braille", "hourglass", "ascii", "ascii-star", "ascii-pulse"] as const;
+export const LOADER_STYLES = [
+  "circle",
+  "braille",
+  "hourglass",
+  "ascii",
+  "ascii-star",
+  "ascii-pulse",
+] as const;
 export type LoaderStyle = (typeof LOADER_STYLES)[number];
 
 export const TOOL_FILTERING_MODES = ["allowed", "all-except-blocked", "all"] as const;
@@ -97,7 +104,23 @@ export const isHousekeepingModel = (value: unknown): value is string =>
   typeof value === "string" && (value === "" || HOUSEKEEPING_MODEL.test(value));
 
 const KEYS = [
-  "maxLevels", "maxConcurrent", "maxThreads", "modelSelection", "subagentMode", "toolFiltering", "widgetMode", "costDisplay", "costValue", "costIcon", "nerdFontIcons", "loaderStyle", "finalRecap", "subagentExtensions", "checklistIntegration", "housekeepingEnabled", "housekeepingModel",
+  "maxLevels",
+  "maxConcurrent",
+  "maxThreads",
+  "modelSelection",
+  "subagentMode",
+  "toolFiltering",
+  "widgetMode",
+  "costDisplay",
+  "costValue",
+  "costIcon",
+  "nerdFontIcons",
+  "loaderStyle",
+  "finalRecap",
+  "subagentExtensions",
+  "checklistIntegration",
+  "housekeepingEnabled",
+  "housekeepingModel",
 ] as const;
 const MAX_LEVELS = 32;
 
@@ -107,9 +130,7 @@ function errorCode(error: unknown): string | undefined {
     : undefined;
 }
 
-function lstatIfPresent(
-  path: string,
-): ReturnType<typeof lstatSync> | undefined {
+function lstatIfPresent(path: string): ReturnType<typeof lstatSync> | undefined {
   try {
     return lstatSync(path);
   } catch (error) {
@@ -118,9 +139,7 @@ function lstatIfPresent(
   }
 }
 
-function assertNotSymlinkPath(
-  path: string,
-): ReturnType<typeof lstatSync> | undefined {
+function assertNotSymlinkPath(path: string): ReturnType<typeof lstatSync> | undefined {
   const stat = lstatIfPresent(path);
   if (stat?.isSymbolicLink()) throw new Error(`Unsafe symlink path: ${path}`);
   return stat;
@@ -135,12 +154,20 @@ function positiveSafeInteger(value: unknown): value is number {
 }
 
 function requirement(key: (typeof KEYS)[number]): string {
-  if (key === "subagentExtensions") return "subagentExtensions must be a boolean or an array of absolute file paths";
-  if (key === "nerdFontIcons" || key === "finalRecap" || key === "checklistIntegration" || key === "housekeepingEnabled") return `${key} must be a boolean`;
+  if (key === "subagentExtensions")
+    return "subagentExtensions must be a boolean or an array of absolute file paths";
+  if (
+    key === "nerdFontIcons" ||
+    key === "finalRecap" ||
+    key === "checklistIntegration" ||
+    key === "housekeepingEnabled"
+  )
+    return `${key} must be a boolean`;
   if (key === "housekeepingModel") return "housekeepingModel must be empty or provider/model-id";
   if (key === "subagentMode") return "subagentMode must be off, opportunistic or orchestration";
   if (key === "widgetMode") return "widgetMode must be full or minimal";
-  if (key === "costDisplay") return "costDisplay must be pi-footer-event, pi-footer-status or pi-status";
+  if (key === "costDisplay")
+    return "costDisplay must be pi-footer-event, pi-footer-status or pi-status";
   if (key === "costValue") return "costValue must be subagents or total";
   if (key === "costIcon") return "costIcon must be money, coins or wallet";
   if (key === "loaderStyle") return `loaderStyle must be one of: ${LOADER_STYLES.join(", ")}`;
@@ -171,21 +198,40 @@ function parseSettings(content: string): Partial<ManagerSettings> {
     if (typeof record.scopedModelFiltering !== "boolean")
       throw new Error("scopedModelFiltering must be a boolean");
     if (!Object.hasOwn(record, "modelSelection"))
-      layer.modelSelection = record.scopedModelFiltering ? "pick-first-scoped" : "pick-first-available";
+      layer.modelSelection = record.scopedModelFiltering
+        ? "pick-first-scoped"
+        : "pick-first-available";
   }
   for (const key of KEYS) {
     if (!Object.hasOwn(record, key)) continue;
     const value = record[key];
-    if (key === "nerdFontIcons" || key === "finalRecap" || key === "checklistIntegration" || key === "housekeepingEnabled") {
+    if (
+      key === "nerdFontIcons" ||
+      key === "finalRecap" ||
+      key === "checklistIntegration" ||
+      key === "housekeepingEnabled"
+    ) {
       if (typeof value !== "boolean") throw new Error(requirement(key));
       layer[key] = value;
       continue;
     }
     if (key === "subagentExtensions") {
-      if (typeof value !== "boolean" && !(Array.isArray(value) && value.every(
-        (entry) => typeof entry === "string" && entry.length > 0 && resolve(entry) === entry && !entry.includes("\0"),
-      ))) throw new Error(requirement(key));
-      layer.subagentExtensions = typeof value === "boolean" ? value : [...new Set(value as string[])].sort();
+      if (
+        typeof value !== "boolean" &&
+        !(
+          Array.isArray(value) &&
+          value.every(
+            (entry) =>
+              typeof entry === "string" &&
+              entry.length > 0 &&
+              resolve(entry) === entry &&
+              !entry.includes("\0"),
+          )
+        )
+      )
+        throw new Error(requirement(key));
+      layer.subagentExtensions =
+        typeof value === "boolean" ? value : [...new Set(value as string[])].sort();
       continue;
     }
     if (key === "housekeepingModel") {
@@ -266,8 +312,7 @@ function settingsFileExists(entry: SettingsLayer): boolean {
   }
   const stat = assertNotSymlinkPath(entry.filePath);
   if (!stat) return false;
-  if (!stat.isFile())
-    throw new Error(`Settings must be a regular file: ${entry.filePath}`);
+  if (!stat.isFile()) throw new Error(`Settings must be a regular file: ${entry.filePath}`);
   return true;
 }
 
@@ -329,11 +374,7 @@ export function loadManagerSettings(options: ManagerSettingsOptions): {
 }
 
 function serializedSettings(settings: ManagerSettings): string {
-  if (
-    settings === null ||
-    typeof settings !== "object" ||
-    Array.isArray(settings)
-  ) {
+  if (settings === null || typeof settings !== "object" || Array.isArray(settings)) {
     throw new Error("Settings must be a JSON object");
   }
   for (const key of Object.keys(settings)) {
@@ -379,8 +420,7 @@ function ensureScopeDirectories(directories: string[]): void {
 
 function assertRegularFileOrAbsent(filePath: string): void {
   const stat = assertNotSymlinkPath(filePath);
-  if (stat && !stat.isFile())
-    throw new Error(`Settings must be a regular file: ${filePath}`);
+  if (stat && !stat.isFile()) throw new Error(`Settings must be a regular file: ${filePath}`);
 }
 
 function exclusiveCreateFlags(): number {
@@ -405,8 +445,7 @@ function writeAtomically(entry: SettingsLayer, content: string, overwrite = true
     for (const directory of entry.directories) assertExistingDirectory(directory);
     assertRegularFileOrAbsent(filePath);
     const tempStat = assertNotSymlinkPath(temporary);
-    if (!tempStat?.isFile())
-      throw new Error(`Settings must be a regular file: ${temporary}`);
+    if (!tempStat?.isFile()) throw new Error(`Settings must be a regular file: ${temporary}`);
     if (overwrite) renameSync(temporary, filePath);
     else {
       try {
@@ -452,24 +491,34 @@ export function saveManagerSettings(options: {
   return entry.filePath;
 }
 
-function assertExpectedLayers(current: ManagerSettingsLayers, expected: ManagerSettingsLayers): void {
+function assertExpectedLayers(
+  current: ManagerSettingsLayers,
+  expected: ManagerSettingsLayers,
+): void {
   if (
     current.scope !== expected.scope ||
-    KEYS.some((key) => !settingsValueEqual(current.global[key], expected.global[key]) ||
-      !settingsValueEqual(current.project[key], expected.project[key])) ||
+    KEYS.some(
+      (key) =>
+        !settingsValueEqual(current.global[key], expected.global[key]) ||
+        !settingsValueEqual(current.project[key], expected.project[key]),
+    ) ||
     current.diagnostics.length !== expected.diagnostics.length ||
     current.diagnostics.some((diagnostic, index) => diagnostic !== expected.diagnostics[index])
   ) {
-    throw new Error("Settings changed on disk. Reopen settings before saving or switching scope to avoid stale inherited values.");
+    throw new Error(
+      "Settings changed on disk. Reopen settings before saving or switching scope to avoid stale inherited values.",
+    );
   }
 }
 
 /** Persist only values that change the selected scope's inherited settings. */
-export function saveManagerOverrides(options: ManagerSettingsOptions & {
-  scope: ManagerSaveScope;
-  settings: ManagerSettings;
-  expectedLayers?: ManagerSettingsLayers;
-}): string {
+export function saveManagerOverrides(
+  options: ManagerSettingsOptions & {
+    scope: ManagerSaveScope;
+    settings: ManagerSettings;
+    expectedLayers?: ManagerSettingsLayers;
+  },
+): string {
   if (options.scope !== "user" && options.scope !== "project")
     throw new Error("Invalid settings scope");
   if (options.scope === "project" && !options.includeProject)
@@ -480,29 +529,40 @@ export function saveManagerOverrides(options: ManagerSettingsOptions & {
   if (options.expectedLayers) assertExpectedLayers(current, options.expectedLayers);
   if (options.scope === "project") {
     const globalPath = layer(options.agentDir, ["subagent-manager"]).filePath;
-    const globalDiagnostics = current.diagnostics.filter((diagnostic) => diagnostic.startsWith(`${globalPath}:`));
+    const globalDiagnostics = current.diagnostics.filter((diagnostic) =>
+      diagnostic.startsWith(`${globalPath}:`),
+    );
     if (globalDiagnostics.length > 0)
-      throw new Error(`Cannot save project overrides while global settings are invalid. Fix global settings and reopen settings. ${globalDiagnostics.join("; ")}`);
+      throw new Error(
+        `Cannot save project overrides while global settings are invalid. Fix global settings and reopen settings. ${globalDiagnostics.join("; ")}`,
+      );
   }
-  const inherited = options.scope === "user"
-    ? DEFAULT_MANAGER_SETTINGS
-    : { ...DEFAULT_MANAGER_SETTINGS, ...current.global };
+  const inherited =
+    options.scope === "user"
+      ? DEFAULT_MANAGER_SETTINGS
+      : { ...DEFAULT_MANAGER_SETTINGS, ...current.global };
   const overrides = Object.fromEntries(
-    KEYS.filter((key) => !settingsValueEqual(parsed[key], inherited[key])).map((key) => [key, parsed[key]]),
+    KEYS.filter((key) => !settingsValueEqual(parsed[key], inherited[key])).map((key) => [
+      key,
+      parsed[key],
+    ]),
   );
-  const entry = options.scope === "user"
-    ? layer(options.agentDir, ["subagent-manager"])
-    : layer(options.cwd, [".pi", "agent", "subagent-manager"]);
+  const entry =
+    options.scope === "user"
+      ? layer(options.agentDir, ["subagent-manager"])
+      : layer(options.cwd, [".pi", "agent", "subagent-manager"]);
   ensureScopeDirectories(entry.directories);
   writeAtomically(entry, `${JSON.stringify(overrides, null, 2)}\n`);
   return entry.filePath;
 }
 
 /** Confirmed scope transition: create an empty project layer or remove only its file. */
-export function setManagerProjectSettings(options: ManagerSettingsOptions & {
-  enabled: boolean;
-  expectedLayers?: ManagerSettingsLayers;
-}): string {
+export function setManagerProjectSettings(
+  options: ManagerSettingsOptions & {
+    enabled: boolean;
+    expectedLayers?: ManagerSettingsLayers;
+  },
+): string {
   if (!options.includeProject) throw new Error("Project settings are not enabled/trusted");
   if (typeof options.enabled !== "boolean") throw new Error("Invalid project settings state");
   if (options.expectedLayers)
@@ -522,7 +582,10 @@ export function setManagerProjectSettings(options: ManagerSettingsOptions & {
 }
 
 /** Resolved settings.json path for a scope; the file may not exist. */
-export function managerSettingsPath(options: ManagerSettingsOptions, scope: ManagerSaveScope): string {
+export function managerSettingsPath(
+  options: ManagerSettingsOptions,
+  scope: ManagerSaveScope,
+): string {
   if (scope === "project") {
     if (!options.includeProject) throw new Error("Project settings are not enabled/trusted");
     return layer(options.cwd, [".pi", "agent", "subagent-manager"]).filePath;
@@ -531,16 +594,19 @@ export function managerSettingsPath(options: ManagerSettingsOptions, scope: Mana
 }
 
 /** Restore a scope's defaults by deleting its settings file (nothing is written). A missing file is not an error. */
-export function deleteManagerSettings(options: ManagerSettingsOptions & { scope: ManagerSaveScope }): {
+export function deleteManagerSettings(
+  options: ManagerSettingsOptions & { scope: ManagerSaveScope },
+): {
   filePath: string;
   deleted: boolean;
 } {
   if (options.scope !== "user" && options.scope !== "project")
     throw new Error("Invalid settings scope");
   const filePath = managerSettingsPath(options, options.scope);
-  const entry = options.scope === "project"
-    ? layer(options.cwd, [".pi", "agent", "subagent-manager"])
-    : layer(options.agentDir, ["subagent-manager"]);
+  const entry =
+    options.scope === "project"
+      ? layer(options.cwd, [".pi", "agent", "subagent-manager"])
+      : layer(options.agentDir, ["subagent-manager"]);
   // Malformed JSON is removable; symlinks and non-files are refused by settingsFileExists.
   if (!settingsFileExists(entry)) return { filePath, deleted: false };
   unlinkSync(entry.filePath);

@@ -6,14 +6,14 @@ The model shortlist was audited **October 4, 2026 local time (October 3 UTC)**. 
 
 ## Role routing
 
-| Role | Work and boundaries | Thinking |
-| --- | --- | --- |
-| `architect` | Design, ambiguity, tradeoffs, verifiable plans, and explicitly authorized coordination. Not an implementation mandate or an unlimited research job. | `high` |
-| `coder` | Iterative implementation, refactoring, debugging, and frontend UI through a checked patch. Not lookup-only work or independent review. | `high` |
-| `researcher` | Source-backed local/remote codebase, library/API, and internet research; verification and synthesis. No implementation edits or delegation. | `high` |
-| `reviewer` | Scoped, non-mutating correctness/security review with demonstrable defects and minimal local repair suggestions. No implementation or comment quota. | `high` |
-| `tasker` | Short bounded diagnostics, extraction, mechanical changes, and targeted repository lookup. Escalate ambiguity or sustained implementation. | `low` |
-| `writer` | Original or revised prose for a stated audience and voice, using supplied/local evidence. No invented facts or live evidence gathering. | `medium` |
+| Role         | Work and boundaries                                                                                                                                  | Thinking |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| `architect`  | Design, ambiguity, tradeoffs, verifiable plans, and explicitly authorized coordination. Not an implementation mandate or an unlimited research job.  | `high`   |
+| `coder`      | Iterative implementation, refactoring, debugging, and frontend UI through a checked patch. Not lookup-only work or independent review.               | `high`   |
+| `researcher` | Source-backed local/remote codebase, library/API, and internet research; verification and synthesis. No implementation edits or delegation.          | `high`   |
+| `reviewer`   | Scoped, non-mutating correctness/security review with demonstrable defects and minimal local repair suggestions. No implementation or comment quota. | `high`   |
+| `tasker`     | Short bounded diagnostics, extraction, mechanical changes, and targeted repository lookup. Escalate ambiguity or sustained implementation.           | `low`    |
+| `writer`     | Original or revised prose for a stated audience and voice, using supplied/local evidence. No invented facts or live evidence gathering.              | `medium` |
 
 Use tasker for one symbol or a few facts already in the repository; use researcher for tracing behavior across a codebase, versioned API evidence, outside sources, or contradictory claims. Researcher gathers what is true; architect decides what to build. Writer turns verified material into prose.
 
@@ -23,14 +23,14 @@ Existing user/project `researcher` overrides still win over the new packaged def
 
 The optional **[labs] Nerd Font icons** [setting](settings.md#labs-nerd-font-icons-nerdfonticons) is off by default and requires a Nerd Font in your terminal. Each default has a distinct literal `icon` in its frontmatter:
 
-| Role | Nerd Fonts identifier | Codepoint | Why this icon |
-| --- | --- | --- | --- |
-| `architect` | `nf-md-floor_plan` | `U+F0821` | Structure, layout, and architecture planning. |
-| `coder` | `nf-fa-code` | `U+F121` | Implementation and source code. |
-| `researcher` | `nf-fa-search` | `U+F002` | Evidence gathering and investigation. |
-| `reviewer` | `nf-cod-inspect` | `U+EBD1` | Inspecting code for concrete defects. |
-| `tasker` | `nf-oct-checklist` | `U+F45E` | Bounded tasks and checklist-style execution. |
-| `writer` | `nf-fa-pencil` | `U+F040` | Writing and editorial work. |
+| Role         | Nerd Fonts identifier | Codepoint | Why this icon                                 |
+| ------------ | --------------------- | --------- | --------------------------------------------- |
+| `architect`  | `nf-md-floor_plan`    | `U+F0821` | Structure, layout, and architecture planning. |
+| `coder`      | `nf-fa-code`          | `U+F121`  | Implementation and source code.               |
+| `researcher` | `nf-fa-search`        | `U+F002`  | Evidence gathering and investigation.         |
+| `reviewer`   | `nf-cod-inspect`      | `U+EBD1`  | Inspecting code for concrete defects.         |
+| `tasker`     | `nf-oct-checklist`    | `U+F45E`  | Bounded tasks and checklist-style execution.  |
+| `writer`     | `nf-fa-pencil`        | `U+F040`  | Writing and editorial work.                   |
 
 Names and codepoints were checked against the [official Nerd Fonts glyph mapping](https://raw.githubusercontent.com/ryanoasis/nerd-fonts/master/glyphnames.json); the [cheat sheet](https://www.nerdfonts.com/cheat-sheet) offers previews and character copying. These are role-based design choices, not font-detected fallbacks. User/project overrides may choose another icon or omit it entirely. See [custom icons](custom-agents.md#icons-labs).
 
@@ -40,14 +40,14 @@ Suggestions are chosen by task capability, quality, cost, and speed. API formats
 
 Every `modelSuggestions` entry is a single plain model-name string suitable for fuzzy search—no parentheticals, tier labels, benchmark scores, or provider paths. Those belong in this guide and the audit. Suggestions are advisory: they **do not select a runtime model**. Defaults inherit the parent/default model until configured. Actual runtime preferences belong in `models` as eligible `provider/model-id` identities and are subject to scoped-model filtering.
 
-| Role | Suggested names, in order | Rationale |
-| --- | --- | --- |
-| architect | `opus-5.5`, `gpt-6-astra`, `fable-5.1`, `kimi-k3` | Heavyweight, quality-first reasoning for ambiguous architecture, difficult constraints, and consequential plans; Kimi is the user-selected long-context alternative. |
-| coder | `sonnet-5.5`, `gpt-6.1-sol`, `muse-spark-1.3`, `mimo-v2.6-pro`, `glm-5.3`, `grok-4.7` | Reliable iterative tool use first, then quality/price and additional user-selected implementation alternatives. |
-| researcher | `gemini-4-argon`, `gpt-5.6-sol`, `muse-spark-1.3`, `sonnet-5.5` | Compact calibration/research shortlist with a user-selected GPT-5.6 Sol alternative. Hallucination and accuracy scores are in the audit; GPT-6.1 Sol's scores must not be transferred to GPT-5.6 Sol. No matched research-citation tournament is claimed. |
-| reviewer | `gpt-6.1-sol`, `sonnet-5.5`, `opus-5.5`, `glm-5.3` | Reasoning and code evidence, without treating premium Astra as necessary for every review. |
-| tasker | `gpt-6-luna`, `deepseek-v4.1-flash`, `gemini-3.5-flash-lite`, `gemini-3.8-flash` | Cheap/fast first; stronger Flash only when reliability warrants it. Sonnet is no longer a routine bounded-task suggestion. |
-| writer | `opus-5.5`, `gemini-4-argon`, `gemini-3.8-flash`, `fable-5.1`, `muse-spark-1.3` | Quality-sensitive editorial work, creative-writing Arena candidates, low-cost drafting, and a user-selected Muse alternative. |
+| Role       | Suggested names, in order                                                             | Rationale                                                                                                                                                                                                                                                 |
+| ---------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| architect  | `opus-5.5`, `gpt-6-astra`, `fable-5.1`, `kimi-k3`                                     | Heavyweight, quality-first reasoning for ambiguous architecture, difficult constraints, and consequential plans; Kimi is the user-selected long-context alternative.                                                                                      |
+| coder      | `sonnet-5.5`, `gpt-6.1-sol`, `muse-spark-1.3`, `mimo-v2.6-pro`, `glm-5.3`, `grok-4.7` | Reliable iterative tool use first, then quality/price and additional user-selected implementation alternatives.                                                                                                                                           |
+| researcher | `gemini-4-argon`, `gpt-5.6-sol`, `muse-spark-1.3`, `sonnet-5.5`                       | Compact calibration/research shortlist with a user-selected GPT-5.6 Sol alternative. Hallucination and accuracy scores are in the audit; GPT-6.1 Sol's scores must not be transferred to GPT-5.6 Sol. No matched research-citation tournament is claimed. |
+| reviewer   | `gpt-6.1-sol`, `sonnet-5.5`, `opus-5.5`, `glm-5.3`                                    | Reasoning and code evidence, without treating premium Astra as necessary for every review.                                                                                                                                                                |
+| tasker     | `gpt-6-luna`, `deepseek-v4.1-flash`, `gemini-3.5-flash-lite`, `gemini-3.8-flash`      | Cheap/fast first; stronger Flash only when reliability warrants it. Sonnet is no longer a routine bounded-task suggestion.                                                                                                                                |
+| writer     | `opus-5.5`, `gemini-4-argon`, `gemini-3.8-flash`, `fable-5.1`, `muse-spark-1.3`       | Quality-sensitive editorial work, creative-writing Arena candidates, low-cost drafting, and a user-selected Muse alternative.                                                                                                                             |
 
 These are choices, not an automatic fallback/escalation chain or a universal quality ranking. Gemini 4 Argon is included for its uncertainty calibration and creative-writing evidence despite gated access; preliminary results and source-specific pricing remain disclosed. Haiku 5.5 has no inspected post-release task measurements yet, so it is not added merely on announcement. Deep-research product results are not automatically results for their underlying base models.
 

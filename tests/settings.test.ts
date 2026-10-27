@@ -71,7 +71,25 @@ const settings = (
   widgetMode: WidgetMode = "full",
   nerdFontIcons = false,
   finalRecap = false,
-) => ({ maxLevels, maxConcurrent, maxThreads, modelSelection, subagentMode, toolFiltering, widgetMode, costDisplay: "pi-footer-status", costValue: "subagents", costIcon: "money", nerdFontIcons, loaderStyle: "circle", finalRecap, subagentExtensions: false, checklistIntegration: false, housekeepingEnabled: false, housekeepingModel: "" });
+) => ({
+  maxLevels,
+  maxConcurrent,
+  maxThreads,
+  modelSelection,
+  subagentMode,
+  toolFiltering,
+  widgetMode,
+  costDisplay: "pi-footer-status",
+  costValue: "subagents",
+  costIcon: "money",
+  nerdFontIcons,
+  loaderStyle: "circle",
+  finalRecap,
+  subagentExtensions: false,
+  checklistIntegration: false,
+  housekeepingEnabled: false,
+  housekeepingModel: "",
+});
 
 const escape = (path: string) => new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
@@ -160,10 +178,12 @@ test("invalid layer content is rejected with a diagnostic naming the file", (t) 
     ['{"maxLevels":33}', /maxLevels must be <= 32/],
     ['{"scopedModelFiltering":"true"}', /scopedModelFiltering must be a boolean/],
     ['{"scopedModelFiltering":0}', /scopedModelFiltering must be a boolean/],
-    ...["automatic", "Pick First (scoped)", true, null, 1, [], {}].map((modelSelection): [string, RegExp] => [
-      JSON.stringify({ modelSelection }),
-      /modelSelection must be pick-first-available, pick-first-scoped or use-current/,
-    ]),
+    ...["automatic", "Pick First (scoped)", true, null, 1, [], {}].map(
+      (modelSelection): [string, RegExp] => [
+        JSON.stringify({ modelSelection }),
+        /modelSelection must be pick-first-available, pick-first-scoped or use-current/,
+      ],
+    ),
     ['{"subagentMode":"automatic"}', /subagentMode must be off, opportunistic or orchestration/],
     ['{"subagentMode":"Off"}', /subagentMode must be off, opportunistic or orchestration/],
     ['{"subagentMode":false}', /subagentMode must be off, opportunistic or orchestration/],
@@ -200,7 +220,11 @@ test("an invalid layer is ignored atomically while other layers still apply", (t
   writeJson(f.globalFile, { maxLevels: 5, modelSelection: "pick-first-available" });
   writeJson(f.projectFile, { maxLevels: 2, scopedModelFiltering: "no" });
   result = load(f);
-  assert.deepEqual(result.settings, { ...DEFAULTS, maxLevels: 5, modelSelection: "pick-first-available" });
+  assert.deepEqual(result.settings, {
+    ...DEFAULTS,
+    maxLevels: 5,
+    modelSelection: "pick-first-available",
+  });
   assert.equal(result.diagnostics.length, 1);
   assert.match(result.diagnostics[0], escape(f.projectFile));
 
@@ -218,7 +242,10 @@ test("all subagent modes save and load with trusted-project precedence", (t) => 
     assert.equal(JSON.parse(readFileSync(f.globalFile, "utf8")).subagentMode, mode);
     for (const projectMode of SUBAGENT_MODES) {
       writeJson(f.projectFile, { subagentMode: projectMode });
-      assert.deepEqual(load(f), { settings: { ...user, subagentMode: projectMode }, diagnostics: [] });
+      assert.deepEqual(load(f), {
+        settings: { ...user, subagentMode: projectMode },
+        diagnostics: [],
+      });
       assert.equal(load(f, false).settings.subagentMode, mode);
     }
   }
@@ -346,9 +373,9 @@ test("save writes canonical 0600 files, creates owned directories, and reloads w
 
   const reordered = {
     widgetMode: "full",
-      costDisplay: "pi-footer-status",
-      costValue: "subagents",
-      costIcon: "money",
+    costDisplay: "pi-footer-status",
+    costValue: "subagents",
+    costIcon: "money",
     nerdFontIcons: false,
     loaderStyle: "circle",
     finalRecap: false,
@@ -396,14 +423,13 @@ test("invalid save input never creates or mutates files", (t) => {
       /maxThreads must be a positive safe integer/,
     ],
     [{ maxLevels: 1, maxConcurrent: 1, maxThreads: 1 }, /modelSelection must be/],
-    [
-      { ...settings(1, 1, 1), modelSelection: "invalid" },
-      /modelSelection must be/,
-    ],
-    ...["automatic", "Pick First (scoped)", true, null, 1, [], {}].map((modelSelection): [unknown, RegExp] => [
-      { ...settings(1, 1, 1), modelSelection },
-      /modelSelection must be pick-first-available, pick-first-scoped or use-current/,
-    ]),
+    [{ ...settings(1, 1, 1), modelSelection: "invalid" }, /modelSelection must be/],
+    ...["automatic", "Pick First (scoped)", true, null, 1, [], {}].map(
+      (modelSelection): [unknown, RegExp] => [
+        { ...settings(1, 1, 1), modelSelection },
+        /modelSelection must be pick-first-available, pick-first-scoped or use-current/,
+      ],
+    ),
     [
       { ...settings(1, 1, 1), subagentMode: "automatic" },
       /subagentMode must be off, opportunistic or orchestration/,
@@ -494,7 +520,10 @@ test("all model selection modes save and load with trusted-project precedence", 
     assert.equal(Object.hasOwn(stored, "scopedModelFiltering"), false);
     for (const projectMode of MODEL_SELECTION_MODES) {
       writeJson(f.projectFile, { modelSelection: projectMode });
-      assert.deepEqual(load(f), { settings: { ...user, modelSelection: projectMode }, diagnostics: [] });
+      assert.deepEqual(load(f), {
+        settings: { ...user, modelSelection: projectMode },
+        diagnostics: [],
+      });
       assert.equal(load(f, false).settings.modelSelection, mode);
     }
   }
@@ -502,10 +531,16 @@ test("all model selection modes save and load with trusted-project precedence", 
 
 test("legacy filtering migrates per layer; explicit model selection wins and saves canonically", (t) => {
   const f = fixture(t);
-  for (const [legacy, mode] of [[true, "pick-first-scoped"], [false, "pick-first-available"]] as const) {
+  for (const [legacy, mode] of [
+    [true, "pick-first-scoped"],
+    [false, "pick-first-available"],
+  ] as const) {
     writeJson(f.globalFile, { scopedModelFiltering: legacy });
     const migrated = load(f, false);
-    assert.deepEqual(migrated, { settings: { ...DEFAULTS, modelSelection: mode }, diagnostics: [] });
+    assert.deepEqual(migrated, {
+      settings: { ...DEFAULTS, modelSelection: mode },
+      diagnostics: [],
+    });
     save(f, "user", migrated.settings);
     const stored = JSON.parse(readFileSync(f.globalFile, "utf8"));
     assert.equal(stored.modelSelection, mode);
@@ -532,7 +567,10 @@ test("invalid model selection rejects its entire layer and does not fall back to
   assert.deepEqual(result.settings, { ...DEFAULTS, modelSelection: "use-current", maxLevels: 5 });
   assert.equal(result.diagnostics.length, 1);
   assert.match(result.diagnostics[0], escape(f.projectFile));
-  assert.match(result.diagnostics[0], /modelSelection must be pick-first-available, pick-first-scoped or use-current/);
+  assert.match(
+    result.diagnostics[0],
+    /modelSelection must be pick-first-available, pick-first-scoped or use-current/,
+  );
 });
 
 test("both widget modes save and load with trusted-project precedence", (t) => {
@@ -576,7 +614,11 @@ test("Final Recap defaults off, layers by key, and saves in both scopes", (t) =>
   assert.equal(load(f).settings.finalRecap, true, "missing project key inherits global");
   writeJson(f.projectFile, { finalRecap: false });
   assert.deepEqual(load(f), { settings: { ...DEFAULTS, nerdFontIcons: true }, diagnostics: [] });
-  assert.equal(load(f, false).settings.finalRecap, true, "untrusted project does not override global");
+  assert.equal(
+    load(f, false).settings.finalRecap,
+    true,
+    "untrusted project does not override global",
+  );
   save(f, "project", { ...DEFAULTS, finalRecap: true });
   assert.equal(JSON.parse(readFileSync(f.projectFile, "utf8")).finalRecap, true);
   assert.equal(load(f).settings.finalRecap, true);
@@ -595,11 +637,13 @@ test("Final Recap rejects non-booleans atomically when loading and saving", (t) 
     assert.equal(result.diagnostics.length, 1);
     assert.match(result.diagnostics[0], escape(f.projectFile));
     assert.match(result.diagnostics[0], /finalRecap must be a boolean/);
-    rejects(() => save(f, "user", { ...DEFAULTS, finalRecap: invalid }), /finalRecap must be a boolean/);
+    rejects(
+      () => save(f, "user", { ...DEFAULTS, finalRecap: invalid }),
+      /finalRecap must be a boolean/,
+    );
     assert.equal(readFileSync(f.globalFile, "utf8"), before);
   }
 });
-
 
 test("cost display defaults to a discoverable status key and validates all modes", (t) => {
   const f = fixture(t);
@@ -618,7 +662,6 @@ test("cost display defaults to a discoverable status key and validates all modes
     rejects(() => save(f, "user", { ...DEFAULTS, costDisplay: invalid }), /costDisplay must be/);
   }
 });
-
 
 test("cost value and icon settings round-trip independently with per-key precedence", (t) => {
   const f = fixture(t);
@@ -673,17 +716,25 @@ test("layer snapshots preserve validated provenance, precedence and legacy norma
   const f = fixture(t);
   const options = { ...f, includeProject: true };
   assert.deepEqual(loadManagerSettingsLayers(options), {
-    settings: DEFAULTS, diagnostics: [], global: {}, project: {}, scope: "user",
+    settings: DEFAULTS,
+    diagnostics: [],
+    global: {},
+    project: {},
+    scope: "user",
   });
   writeJson(f.globalFile, { maxLevels: 5, scopedModelFiltering: false, finalRecap: true });
   writeJson(f.projectFile, { maxLevels: 2, finalRecap: false });
   const loaded = loadManagerSettingsLayers(options);
   assert.deepEqual(loaded.global, {
-    maxLevels: 5, modelSelection: "pick-first-available", finalRecap: true,
+    maxLevels: 5,
+    modelSelection: "pick-first-available",
+    finalRecap: true,
   });
   assert.deepEqual(loaded.project, { maxLevels: 2, finalRecap: false });
   assert.deepEqual(loaded.settings, {
-    ...DEFAULTS, maxLevels: 2, modelSelection: "pick-first-available",
+    ...DEFAULTS,
+    maxLevels: 2,
+    modelSelection: "pick-first-available",
   });
   assert.equal(loaded.scope, "project");
   assert.deepEqual(loaded.diagnostics, []);
@@ -707,7 +758,11 @@ test("layer scope follows this project's file rather than legacy cross-project U
   mkdirSync(otherCwd);
   assert.equal(loadManagerSettingsLayers({ ...options, cwd: otherCwd }).scope, "user");
   assert.deepEqual(loadManagerSettingsLayers({ ...options, includeProject: false }), {
-    settings: DEFAULTS, diagnostics: [], global: {}, project: {}, scope: "user",
+    settings: DEFAULTS,
+    diagnostics: [],
+    global: {},
+    project: {},
+    scope: "user",
   });
 });
 
@@ -735,21 +790,39 @@ test("invalid regular layers have no provenance but project files still select P
 test("sparse saves inherit lower layers and do not snapshot unrelated values", (t) => {
   const f = fixture(t);
   const options = { ...f, includeProject: true };
-  assert.equal(saveManagerOverrides({ ...options, scope: "user", settings: {
-    ...DEFAULTS, maxLevels: 5, finalRecap: true,
-  } }), f.globalFile);
+  assert.equal(
+    saveManagerOverrides({
+      ...options,
+      scope: "user",
+      settings: {
+        ...DEFAULTS,
+        maxLevels: 5,
+        finalRecap: true,
+      },
+    }),
+    f.globalFile,
+  );
   assert.deepEqual(JSON.parse(readFileSync(f.globalFile, "utf8")), {
-    maxLevels: 5, finalRecap: true,
+    maxLevels: 5,
+    finalRecap: true,
   });
   const globalBefore = readFileSync(f.globalFile, "utf8");
-  saveManagerOverrides({ ...options, scope: "project", settings: {
-    ...load(f).settings, maxConcurrent: 7,
-  } });
+  saveManagerOverrides({
+    ...options,
+    scope: "project",
+    settings: {
+      ...load(f).settings,
+      maxConcurrent: 7,
+    },
+  });
   assert.deepEqual(JSON.parse(readFileSync(f.projectFile, "utf8")), { maxConcurrent: 7 });
   assert.equal(readFileSync(f.globalFile, "utf8"), globalBefore);
   writeJson(f.globalFile, { maxLevels: 8, finalRecap: false, costValue: "total" });
   assert.deepEqual(load(f).settings, {
-    ...DEFAULTS, maxLevels: 8, maxConcurrent: 7, costValue: "total",
+    ...DEFAULTS,
+    maxLevels: 8,
+    maxConcurrent: 7,
+    costValue: "total",
   });
   saveManagerOverrides({ ...options, scope: "project", settings: load(f, false).settings });
   assert.equal(readFileSync(f.projectFile, "utf8"), "{}\n");
@@ -763,7 +836,9 @@ test("saving built-in defaults in Project explicitly overrides changed global va
   writeJson(f.globalFile, { maxLevels: 5, finalRecap: true, costIcon: "wallet" });
   saveManagerOverrides({ ...f, includeProject: true, scope: "project", settings: DEFAULTS });
   assert.deepEqual(JSON.parse(readFileSync(f.projectFile, "utf8")), {
-    maxLevels: DEFAULTS.maxLevels, costIcon: DEFAULTS.costIcon, finalRecap: false,
+    maxLevels: DEFAULTS.maxLevels,
+    costIcon: DEFAULTS.costIcon,
+    finalRecap: false,
   });
   assert.deepEqual(load(f).settings, DEFAULTS);
   saveManagerOverrides({ ...f, includeProject: true, scope: "user", settings: DEFAULTS });
@@ -774,17 +849,45 @@ test("sparse saves validate complete drafts and trust before any filesystem chan
   const f = fixture(t);
   const options = { ...f, includeProject: true };
   for (const scope of ["user", "project"] as const) {
-    for (const value of [null, [], {}, { ...DEFAULTS, maxLevels: 33 }, { ...DEFAULTS, extra: true }]) {
-      assert.throws(() => saveManagerOverrides({ ...options, scope, settings: value as ManagerSettings }));
+    for (const value of [
+      null,
+      [],
+      {},
+      { ...DEFAULTS, maxLevels: 33 },
+      { ...DEFAULTS, extra: true },
+    ]) {
+      assert.throws(() =>
+        saveManagerOverrides({ ...options, scope, settings: value as ManagerSettings }),
+      );
       assert.equal(existsSync(dirname(f.globalFile)), false);
       assert.equal(existsSync(join(f.cwd, ".pi")), false);
     }
   }
-  rejects(() => saveManagerOverrides({ ...options, includeProject: false, scope: "project", settings: DEFAULTS }), /not enabled\/trusted/);
-  rejects(() => saveManagerOverrides({ ...options, scope: "global" as "user", settings: DEFAULTS }), /Invalid settings scope/);
+  rejects(
+    () =>
+      saveManagerOverrides({
+        ...options,
+        includeProject: false,
+        scope: "project",
+        settings: DEFAULTS,
+      }),
+    /not enabled\/trusted/,
+  );
+  rejects(
+    () => saveManagerOverrides({ ...options, scope: "global" as "user", settings: DEFAULTS }),
+    /Invalid settings scope/,
+  );
   saveManagerOverrides({ ...options, scope: "user", settings: { ...DEFAULTS, maxLevels: 4 } });
   const before = readFileSync(f.globalFile, "utf8");
-  rejects(() => saveManagerOverrides({ ...options, scope: "user", settings: { ...DEFAULTS, finalRecap: "bad" } as unknown as ManagerSettings }), /boolean/);
+  rejects(
+    () =>
+      saveManagerOverrides({
+        ...options,
+        scope: "user",
+        settings: { ...DEFAULTS, finalRecap: "bad" } as unknown as ManagerSettings,
+      }),
+    /boolean/,
+  );
   assert.equal(readFileSync(f.globalFile, "utf8"), before);
 });
 
@@ -832,19 +935,37 @@ test("project deactivation removes even malformed JSON but leaves directories an
 test("scope transitions require trust and a boolean without touching disk", (t) => {
   const f = fixture(t);
   for (const enabled of [false, true]) {
-    rejects(() => setManagerProjectSettings({ ...f, includeProject: false, enabled }), /not enabled\/trusted/);
+    rejects(
+      () => setManagerProjectSettings({ ...f, includeProject: false, enabled }),
+      /not enabled\/trusted/,
+    );
   }
-  rejects(() => setManagerProjectSettings({ ...f, includeProject: true, enabled: "yes" as unknown as boolean }), /Invalid project settings state/);
+  rejects(
+    () =>
+      setManagerProjectSettings({
+        ...f,
+        includeProject: true,
+        enabled: "yes" as unknown as boolean,
+      }),
+    /Invalid project settings state/,
+  );
   assert.equal(existsSync(join(f.cwd, ".pi")), false);
   assert.equal(existsSync(dirname(f.globalFile)), false);
 });
 
 test("new layer and persistence APIs reject project symlinks at every owned path", (t) => {
-  for (const segments of [[], [".pi"], [".pi", "agent"], [".pi", "agent", "subagent-manager"], [".pi", "agent", "subagent-manager", "settings.json"]]) {
+  for (const segments of [
+    [],
+    [".pi"],
+    [".pi", "agent"],
+    [".pi", "agent", "subagent-manager"],
+    [".pi", "agent", "subagent-manager", "settings.json"],
+  ]) {
     const f = fixture(t);
     const link = join(f.cwd, ...segments);
     const target = join(f.root, "outside");
-    const targetFile = link === f.projectFile ? target : join(target, relative(link, f.projectFile));
+    const targetFile =
+      link === f.projectFile ? target : join(target, relative(link, f.projectFile));
     writeJson(targetFile, { maxLevels: 9 });
     rmSync(link, { recursive: true, force: true });
     mkdirSync(dirname(link), { recursive: true });
@@ -855,9 +976,17 @@ test("new layer and persistence APIs reject project symlinks at every owned path
     assert.deepEqual(loaded.project, {});
     assert.match(loaded.diagnostics[0], /Unsafe symlink path/);
     for (const enabled of [true, false]) {
-      rejects(() => setManagerProjectSettings({ ...options, enabled }), /Unsafe symlink path/, link);
+      rejects(
+        () => setManagerProjectSettings({ ...options, enabled }),
+        /Unsafe symlink path/,
+        link,
+      );
     }
-    rejects(() => saveManagerOverrides({ ...options, scope: "project", settings: DEFAULTS }), /Unsafe symlink path/, link);
+    rejects(
+      () => saveManagerOverrides({ ...options, scope: "project", settings: DEFAULTS }),
+      /Unsafe symlink path/,
+      link,
+    );
     assert.equal(readFileSync(targetFile, "utf8"), '{"maxLevels":9}');
     assert.ok(lstatSync(link).isSymbolicLink());
   }
@@ -870,10 +999,17 @@ test("new persistence APIs reject nonregular files and invalid owned directories
     if (fileInsteadOfDirectory) writeFileSync(unsafe, "not a directory");
     else mkdirSync(unsafe, { recursive: true });
     const options = { ...f, includeProject: true };
-    const pattern = fileInsteadOfDirectory ? /Settings directory must be a directory/ : /Settings must be a regular file/;
+    const pattern = fileInsteadOfDirectory
+      ? /Settings directory must be a directory/
+      : /Settings must be a regular file/;
     assert.match(loadManagerSettingsLayers(options).diagnostics[0], pattern);
-    for (const enabled of [true, false]) rejects(() => setManagerProjectSettings({ ...options, enabled }), pattern, unsafe);
-    rejects(() => saveManagerOverrides({ ...options, scope: "project", settings: DEFAULTS }), pattern, unsafe);
+    for (const enabled of [true, false])
+      rejects(() => setManagerProjectSettings({ ...options, enabled }), pattern, unsafe);
+    rejects(
+      () => saveManagerOverrides({ ...options, scope: "project", settings: DEFAULTS }),
+      pattern,
+      unsafe,
+    );
     assert.ok(existsSync(unsafe));
   }
 });
@@ -882,13 +1018,22 @@ test("sparse Project saves normalize legacy values but reject malformed global b
   const f = fixture(t);
   const options = { ...f, includeProject: true, scope: "project" as const };
   writeJson(f.globalFile, { scopedModelFiltering: false, costValue: "total" });
-  saveManagerOverrides({ ...options, settings: {
-    ...DEFAULTS, modelSelection: "pick-first-available", costValue: "total", maxThreads: 90,
-  } });
+  saveManagerOverrides({
+    ...options,
+    settings: {
+      ...DEFAULTS,
+      modelSelection: "pick-first-available",
+      costValue: "total",
+      maxThreads: 90,
+    },
+  });
   assert.deepEqual(JSON.parse(readFileSync(f.projectFile, "utf8")), { maxThreads: 90 });
   writeJson(f.globalFile, { maxLevels: 5, finalRecap: "invalid" });
   const before = readFileSync(f.projectFile, "utf8");
-  rejects(() => saveManagerOverrides({ ...options, settings: { ...DEFAULTS, maxConcurrent: 7 } }), /global settings are invalid/);
+  rejects(
+    () => saveManagerOverrides({ ...options, settings: { ...DEFAULTS, maxConcurrent: 7 } }),
+    /global settings are invalid/,
+  );
   assert.equal(readFileSync(f.projectFile, "utf8"), before);
   assert.equal(load(f).settings.maxLevels, DEFAULTS.maxLevels);
   assert.equal(load(f).settings.maxThreads, 90);
@@ -909,7 +1054,11 @@ test("sparse Global saves reject unsafe global paths without reading untrusted P
   assert.deepEqual(loaded.global, {});
   assert.deepEqual(loaded.project, {});
   assert.equal(loaded.scope, "user");
-  rejects(() => saveManagerOverrides({ ...options, scope: "user", settings: DEFAULTS }), /Unsafe symlink path/, f.globalFile);
+  rejects(
+    () => saveManagerOverrides({ ...options, scope: "user", settings: DEFAULTS }),
+    /Unsafe symlink path/,
+    f.globalFile,
+  );
   assert.equal(readFileSync(target, "utf8"), '{"maxLevels":9}');
   rmSync(f.globalFile);
   saveManagerOverrides({ ...options, scope: "user", settings: { ...DEFAULTS, maxLevels: 4 } });
@@ -928,9 +1077,13 @@ test("expected layers prevent stale inherited drafts from snapshotting changed g
     writeJson(f.globalFile, { maxLevels: 8 });
     const before = readFileSync(f.globalFile, "utf8");
     const projectBefore = scope === "project" ? readFileSync(f.projectFile, "utf8") : undefined;
-    rejects(() => saveManagerOverrides({ ...options, scope, settings: draft, expectedLayers }), /changed on disk.*Reopen settings/);
+    rejects(
+      () => saveManagerOverrides({ ...options, scope, settings: draft, expectedLayers }),
+      /changed on disk.*Reopen settings/,
+    );
     assert.equal(readFileSync(f.globalFile, "utf8"), before);
-    if (projectBefore !== undefined) assert.equal(readFileSync(f.projectFile, "utf8"), projectBefore);
+    if (projectBefore !== undefined)
+      assert.equal(readFileSync(f.projectFile, "utf8"), projectBefore);
     else assert.equal(existsSync(join(f.cwd, ".pi")), false);
   }
 });
@@ -943,11 +1096,19 @@ test("snapshot comparison ignores property order while preserving known layer ch
   const expectedLayers = loadManagerSettingsLayers(options);
   writeFileSync(f.globalFile, ' { "finalRecap": true, "maxLevels": 5 }\n');
   writeJson(f.projectFile, { costValue: "total", maxThreads: 90 });
-  saveManagerOverrides({ ...options, scope: "project", settings: {
-    ...expectedLayers.settings, maxConcurrent: 7,
-  }, expectedLayers });
+  saveManagerOverrides({
+    ...options,
+    scope: "project",
+    settings: {
+      ...expectedLayers.settings,
+      maxConcurrent: 7,
+    },
+    expectedLayers,
+  });
   assert.deepEqual(JSON.parse(readFileSync(f.projectFile, "utf8")), {
-    maxConcurrent: 7, maxThreads: 90, costValue: "total",
+    maxConcurrent: 7,
+    maxThreads: 90,
+    costValue: "total",
   });
 });
 
@@ -957,13 +1118,23 @@ test("snapshot guards notice project edits, scope changes and diagnostic changes
   for (const mutation of ["project-key", "project-created", "diagnostic", "trust"] as const) {
     rmSync(join(f.cwd, ".pi"), { recursive: true, force: true });
     writeJson(f.globalFile, { maxLevels: 5 });
-    if (mutation === "project-key" || mutation === "trust") writeJson(f.projectFile, { maxThreads: 90 });
+    if (mutation === "project-key" || mutation === "trust")
+      writeJson(f.projectFile, { maxThreads: 90 });
     const expectedLayers = loadManagerSettingsLayers(options);
     if (mutation === "project-key") writeJson(f.projectFile, { maxThreads: 100 });
     else if (mutation === "project-created") writeJson(f.projectFile, {});
     else if (mutation === "diagnostic") writeJson(f.globalFile, "{malformed");
     const currentOptions = { ...options, includeProject: mutation !== "trust" };
-    rejects(() => saveManagerOverrides({ ...currentOptions, scope: "user", settings: expectedLayers.settings, expectedLayers }), /Reopen settings/);
+    rejects(
+      () =>
+        saveManagerOverrides({
+          ...currentOptions,
+          scope: "user",
+          settings: expectedLayers.settings,
+          expectedLayers,
+        }),
+      /Reopen settings/,
+    );
   }
 });
 
@@ -974,7 +1145,10 @@ test("malformed global refuses Project saves without creating files, while Globa
   const expectedLayers = loadManagerSettingsLayers(options);
   const settings = { ...DEFAULTS, maxConcurrent: 7 };
   const before = readFileSync(f.globalFile, "utf8");
-  rejects(() => saveManagerOverrides({ ...options, scope: "project", settings, expectedLayers }), /global settings are invalid/);
+  rejects(
+    () => saveManagerOverrides({ ...options, scope: "project", settings, expectedLayers }),
+    /global settings are invalid/,
+  );
   assert.equal(existsSync(join(f.cwd, ".pi")), false);
   assert.equal(readFileSync(f.globalFile, "utf8"), before);
   saveManagerOverrides({ ...options, scope: "user", settings, expectedLayers });
@@ -990,7 +1164,10 @@ test("snapshot guards prevent changed global values during both scope confirmati
     if (!enabled) writeJson(f.projectFile, { maxThreads: 90 });
     const expectedLayers = loadManagerSettingsLayers(options);
     writeJson(f.globalFile, { maxLevels: 8 });
-    rejects(() => setManagerProjectSettings({ ...options, enabled, expectedLayers }), /changed on disk.*Reopen settings/);
+    rejects(
+      () => setManagerProjectSettings({ ...options, enabled, expectedLayers }),
+      /changed on disk.*Reopen settings/,
+    );
     if (enabled) assert.equal(existsSync(join(f.cwd, ".pi")), false);
     else assert.deepEqual(JSON.parse(readFileSync(f.projectFile, "utf8")), { maxThreads: 90 });
   }
@@ -1029,7 +1206,11 @@ test("housekeeping is an opt-in labs pair validated on load and save, persisting
   const defaults = load(f).settings;
   assert.equal(defaults.housekeepingEnabled, false);
   assert.equal(defaults.housekeepingModel, "");
-  save(f, "user", { ...DEFAULTS, housekeepingEnabled: true, housekeepingModel: "anthropic/claude-haiku-5-5" });
+  save(f, "user", {
+    ...DEFAULTS,
+    housekeepingEnabled: true,
+    housekeepingModel: "anthropic/claude-haiku-5-5",
+  });
   const saved = load(f).settings;
   assert.equal(saved.housekeepingEnabled, true);
   assert.equal(saved.housekeepingModel, "anthropic/claude-haiku-5-5");
@@ -1037,20 +1218,30 @@ test("housekeeping is an opt-in labs pair validated on load and save, persisting
   const layered = load(f);
   assert.equal(layered.settings.housekeepingModel, "openai/gpt-5-mini");
   assert.equal(layered.settings.housekeepingEnabled, true, "unset project key inherits global");
-  assert.equal(load(f, false).settings.housekeepingModel, "anthropic/claude-haiku-5-5", "untrusted project ignored");
+  assert.equal(
+    load(f, false).settings.housekeepingModel,
+    "anthropic/claude-haiku-5-5",
+    "untrusted project ignored",
+  );
   // Ids may contain slashes; only the first separates provider.
   writeJson(f.projectFile, { housekeepingModel: "openrouter/anthropic/claude-haiku" });
   assert.equal(load(f).settings.housekeepingModel, "openrouter/anthropic/claude-haiku");
   for (const bad of ["haiku", "a b/c", "/x", "x/"]) {
     writeJson(f.projectFile, { housekeepingModel: bad });
-    assert.match(load(f).diagnostics.join("\n"), /housekeepingModel must be empty or provider\/model-id/, bad);
-    rejects(() => save(f, "user", { ...DEFAULTS, housekeepingModel: bad }), /housekeepingModel must be empty or provider\/model-id/);
+    assert.match(
+      load(f).diagnostics.join("\n"),
+      /housekeepingModel must be empty or provider\/model-id/,
+      bad,
+    );
+    rejects(
+      () => save(f, "user", { ...DEFAULTS, housekeepingModel: bad }),
+      /housekeepingModel must be empty or provider\/model-id/,
+    );
   }
   writeJson(f.projectFile, { housekeepingEnabled: "yes" });
   assert.match(load(f).diagnostics.join("\n"), /housekeepingEnabled must be a boolean/);
   rejects(() => save(f, "user", { ...DEFAULTS, housekeepingEnabled: 1 }), /must be a boolean/);
 });
-
 
 test("extension selections round-trip, override layers and compare structurally", (t) => {
   const f = fixture(t);
@@ -1059,11 +1250,23 @@ test("extension selections round-trip, override layers and compare structurally"
   save(f, "user", { ...DEFAULTS, subagentExtensions: files });
   assert.deepEqual(load(f).settings.subagentExtensions, files);
   const snapshot = loadManagerSettingsLayers(options);
-  saveManagerOverrides({ ...options, scope: "project", settings: { ...snapshot.settings, subagentExtensions: [...files] }, expectedLayers: snapshot });
+  saveManagerOverrides({
+    ...options,
+    scope: "project",
+    settings: { ...snapshot.settings, subagentExtensions: [...files] },
+    expectedLayers: snapshot,
+  });
   assert.deepEqual(JSON.parse(readFileSync(f.projectFile, "utf8")), {});
-  saveManagerOverrides({ ...options, scope: "project", settings: { ...snapshot.settings, subagentExtensions: [] } });
+  saveManagerOverrides({
+    ...options,
+    scope: "project",
+    settings: { ...snapshot.settings, subagentExtensions: [] },
+  });
   assert.deepEqual(load(f).settings.subagentExtensions, []);
   for (const invalid of [["relative.ts"], [1], [null], {}]) {
-    rejects(() => save(f, "user", { ...DEFAULTS, subagentExtensions: invalid }), /subagentExtensions must be/);
+    rejects(
+      () => save(f, "user", { ...DEFAULTS, subagentExtensions: invalid }),
+      /subagentExtensions must be/,
+    );
   }
 });

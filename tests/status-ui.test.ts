@@ -266,10 +266,7 @@ test("status tree sorts siblings, draws branch prefixes, and collapses descendan
   );
   assert.equal(rows.find((row) => row.path === "/root/a")?.prefix, "├ ");
   assert.equal(rows.at(-1)?.prefix, "└ ");
-  assert.match(
-    rows.find((row) => row.path === "/root/running/paused-child")?.prefix ?? "",
-    /│ └ /,
-  );
+  assert.match(rows.find((row) => row.path === "/root/running/paused-child")?.prefix ?? "", /│ └ /);
   assert.equal(
     rows.find((row) => row.path === "/root/running/paused-child")?.thread?.state,
     "paused",

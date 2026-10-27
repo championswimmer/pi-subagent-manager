@@ -30,7 +30,11 @@ import { selectTools } from "../prefs/config.ts";
 import { TranscriptChannel } from "./transcript.ts";
 import { discoverSubagentExtensions, selectSubagentExtensions } from "./extensions.ts";
 import type { InheritedToolSource } from "./inherited-tools.ts";
-import type { ModelSelectionMode, SubagentExtensionSelection, ToolFilteringMode } from "../prefs/settings.ts";
+import type {
+  ModelSelectionMode,
+  SubagentExtensionSelection,
+  ToolFilteringMode,
+} from "../prefs/settings.ts";
 import {
   modelIdentity,
   getModelPreferences,
@@ -157,7 +161,16 @@ async function assertAcceptedSessionFile(
   }
 }
 
-const SNIPPET_KEYS = ["command", "path", "file_path", "filePath", "pattern", "query", "url", "description"];
+const SNIPPET_KEYS = [
+  "command",
+  "path",
+  "file_path",
+  "filePath",
+  "pattern",
+  "query",
+  "url",
+  "description",
+];
 /** Short single-line argument hint for housekeeping summaries; never shown verbatim as status. */
 export function toolArgumentSnippet(args: unknown): string | undefined {
   if (args === null || args === undefined) return undefined;
@@ -175,7 +188,10 @@ export function toolArgumentSnippet(args: unknown): string | undefined {
       }
     }
   }
-  const clean = text?.replace(/[\x00-\x1f\x7f-\x9f]+/g, " ").replace(/\s+/g, " ").trim();
+  const clean = text
+    ?.replace(/[\x00-\x1f\x7f-\x9f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   return clean ? clean.slice(0, 160) : undefined;
 }
 
@@ -432,12 +448,14 @@ export function createDriverFactory(
         (options.type.tools?.allow?.includes(name) && toolFiltering === "allowed"),
     );
     const projectTrusted = ctx.isProjectTrusted?.() ?? false;
-    const extensionPaths = extensionSelection === false || (Array.isArray(extensionSelection) && !extensionSelection.length)
-      ? []
-      : selectSubagentExtensions(
-          await discoverSubagentExtensions({ cwd: ctx.cwd, agentDir, projectTrusted }),
-          extensionSelection,
-        );
+    const extensionPaths =
+      extensionSelection === false ||
+      (Array.isArray(extensionSelection) && !extensionSelection.length)
+        ? []
+        : selectSubagentExtensions(
+            await discoverSubagentExtensions({ cwd: ctx.cwd, agentDir, projectTrusted }),
+            extensionSelection,
+          );
     const subagentExtensions = extensionPaths.length > 0;
     // Keep discovery settings OUT of this loader: reload() resolves packages with
     // auto-install enabled. An empty in-memory package/resource list ensures it
@@ -459,12 +477,7 @@ export function createDriverFactory(
     if (subagentExtensions)
       childEvents.on(DIAGNOSTIC_PROBE_CHANNEL, (payload) => {
         try {
-          if (
-            diagnosticsUnavailable() ||
-            !payload ||
-            typeof payload !== "object"
-          )
-            return;
+          if (diagnosticsUnavailable() || !payload || typeof payload !== "object") return;
           respondDiagnosticCapability(payload);
         } catch {
           /* Untrusted callbacks cannot escape into EventBus's stderr handler. */

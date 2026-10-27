@@ -136,7 +136,10 @@ test("tool schemas expose timeoutMs and agent_steer timeoutMs with 30s–5min bo
   const props = (spawn.parameters as any).properties.timeoutMs;
   assert.equal(props.minimum, 30000);
   assert.equal(props.maximum, 300000);
-  assert.equal(tools.find((t) => t.name === "agent_extend_timeout"), undefined);
+  assert.equal(
+    tools.find((t) => t.name === "agent_extend_timeout"),
+    undefined,
+  );
   const steer = tools.find((t) => t.name === "agent_steer")!;
   assert.equal((steer.parameters as any).properties.timeoutMs.minimum, 30000);
   assert.equal((steer.parameters as any).properties.timeoutMs.maximum, 300000);

@@ -119,10 +119,7 @@ test("first run consent and individual selection enqueue only selected paths, ne
   const message = f.messages[0]!;
   assert.ok(message.includes(selected));
   assert.ok(!message.includes(other));
-  for (const pattern of [
-    /test\/scoped-model/,
-    /"api": "openai-responses"/,
-  ])
+  for (const pattern of [/test\/scoped-model/, /"api": "openai-responses"/])
     assert.match(message, pattern);
   assert.ok(!existsSync(join(f.agentDir, "subagent-manager", "agents")));
   assert.equal(readFileSync(selected, "utf8"), original);

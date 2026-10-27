@@ -140,15 +140,14 @@ export class StatusDialog {
 
   private syncRefresh(): void {
     if (!this.refreshing) return;
-    const delay =
-      this.service
-        .list()
-        .some(
-          (thread) =>
-            thread.path !== ROOT && (thread.state === "starting" || thread.state === "running"),
-        )
-        ? AGENT_PROGRESS_INTERVAL
-        : 1000;
+    const delay = this.service
+      .list()
+      .some(
+        (thread) =>
+          thread.path !== ROOT && (thread.state === "starting" || thread.state === "running"),
+      )
+      ? AGENT_PROGRESS_INTERVAL
+      : 1000;
     if (this.timer !== undefined && this.refreshDelay === delay) return;
     this.stopRefresh();
     this.refreshDelay = delay;
@@ -317,7 +316,9 @@ export class StatusDialog {
         ? truncateToWidth(metrics, width, "")
         : (() => {
             const left = truncateToWidth(identityLine, width - metricWidth - 1);
-            return left + " ".repeat(Math.max(1, width - visibleWidth(left) - metricWidth)) + metrics;
+            return (
+              left + " ".repeat(Math.max(1, width - visibleWidth(left) - metricWidth)) + metrics
+            );
           })();
     const second = truncateToWidth(
       this.theme.fg(inactive ? base : selected ? "accent" : "muted", activity),
@@ -363,7 +364,9 @@ export class StatusDialog {
       height,
       this.heading(rows, start, treeCount),
       body,
-      this.navigation ? "Esc main · ↑↓ select · ←→ fold · → widget · i Actions · Ctrl+C stop all" : FOOTER,
+      this.navigation
+        ? "Esc main · ↑↓ select · ←→ fold · → widget · i Actions · Ctrl+C stop all"
+        : FOOTER,
     );
   }
 

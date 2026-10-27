@@ -734,7 +734,8 @@ export class ThreadManager {
                   this.disposed ||
                   this.records.get(record.view.path) !== record ||
                   (diagnosticDriver ? record.driver !== diagnosticDriver : signal.aborted)
-                ) return;
+                )
+                  return;
                 record.view.diagnostics = [
                   ...(record.view.diagnostics ?? []),
                   event.diagnostic,
@@ -769,7 +770,10 @@ export class ThreadManager {
               if (active(record.view) && !record.pauseRequested) {
                 record.view.status = event.text;
                 this.touch(record);
-                this.recordActivity(record, event.detail ? `${event.text} ${event.detail}` : event.text);
+                this.recordActivity(
+                  record,
+                  event.detail ? `${event.text} ${event.detail}` : event.text,
+                );
               }
             },
             ...(parentSessionFile ? { parentSessionFile } : {}),
@@ -850,7 +854,8 @@ export class ThreadManager {
   private recordActivity(record: Record, line: string): void {
     const recent = (record.recentActivity ??= []);
     recent.push(line.slice(0, 600));
-    if (recent.length > RECENT_ACTIVITY_LIMIT) recent.splice(0, recent.length - RECENT_ACTIVITY_LIMIT);
+    if (recent.length > RECENT_ACTIVITY_LIMIT)
+      recent.splice(0, recent.length - RECENT_ACTIVITY_LIMIT);
     if (!this.options.onActivity || this.disposed) return;
     try {
       this.options.onActivity({

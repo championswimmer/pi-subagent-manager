@@ -21,12 +21,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import {
-  AGENT_COLORS,
-  ConfigStore,
-  parseAgentType,
-  serializeAgentType,
-} from "../prefs/config.ts";
+import { AGENT_COLORS, ConfigStore, parseAgentType, serializeAgentType } from "../prefs/config.ts";
 import { editModelPreferences, MODEL_EDITOR_CANCEL } from "./model-picker.ts";
 import { editToolSelection, TOOL_EDITOR_CANCEL, type ToolEditorOptions } from "./tool-picker.ts";
 import {
@@ -43,7 +38,13 @@ import type { LoaderStyle, WidgetMode } from "../prefs/settings.ts";
 import { AGENT_PROGRESS_INTERVAL, agentProgressIcon, isAgentLoaderGlyph } from "./agent-loader.ts";
 export { AGENT_PROGRESS_INTERVAL, agentProgressIcon } from "./agent-loader.ts";
 import { buildStatusTree, lastStarted, threadActivity, type StatusRow } from "./thread-tree.ts";
-import { THINKING_LEVELS, type AgentType, type ResolvedAgentSettings, type ThreadService, type ThreadView } from "../types.ts";
+import {
+  THINKING_LEVELS,
+  type AgentType,
+  type ResolvedAgentSettings,
+  type ThreadService,
+  type ThreadView,
+} from "../types.ts";
 
 export type ThreadController = Pick<
   ThreadService,
@@ -423,7 +424,9 @@ export function renderAgentSummary(
         return theme.fg(color, `${progress ? `${progress} ` : ""}${counts[state]} ${state}`);
       })
       .join(theme.fg("muted", ", ")) +
-    (showBrowserHint && counts.running > 0 ? theme.fg("muted", expandHint ? " · ← expand" : " · ← browser") : "");
+    (showBrowserHint && counts.running > 0
+      ? theme.fg("muted", expandHint ? " · ← expand" : " · ← browser")
+      : "");
   const right = theme.fg("muted", `↑${formatCount(input)} ↓${formatCount(output)}`);
   return [fitLine(left, right, Math.max(0, width))];
 }
@@ -1055,12 +1058,10 @@ export async function editAgentTypes(
 
 function agentSourceHelp(store: ConfigStore, name: string): string {
   const layers = store.getLayers(name);
-  const paths = layers.map((layer) =>
-    `${layer.source ?? "user"} · ${layer.filePath ?? ""}`,
-  ).join("\n");
-  return layers.length > 1
-    ? `${layers.map((layer) => layer.source).join(" → ")}\n${paths}`
-    : paths;
+  const paths = layers
+    .map((layer) => `${layer.source ?? "user"} · ${layer.filePath ?? ""}`)
+    .join("\n");
+  return layers.length > 1 ? `${layers.map((layer) => layer.source).join(" → ")}\n${paths}` : paths;
 }
 
 function agentSettingsIndicators(
@@ -1072,23 +1073,26 @@ function agentSettingsIndicators(
     const settings = store.getSettingsOverride(name, scope);
     if (!settings) return false;
     if (action === "tools.allow" || action === "tools.block") {
-      return Object.hasOwn(settings, "tools") &&
-        (settings.tools === null || Object.hasOwn(settings.tools ?? {}, action.split(".")[1]!));
+      return (
+        Object.hasOwn(settings, "tools") &&
+        (settings.tools === null || Object.hasOwn(settings.tools ?? {}, action.split(".")[1]!))
+      );
     }
     return Object.hasOwn(settings, action);
   };
   const global = hasKey("user");
   const project = hasKey("project");
   return (theme) =>
-    (global ? theme.fg("accent", "●") : " ") + " " +
-    (project ? theme.fg("warning", "●") : " ");
+    (global ? theme.fg("accent", "●") : " ") + " " + (project ? theme.fg("warning", "●") : " ");
 }
 
 function agentSettingsLegend(theme: Theme): string {
   const global = theme.fg("accent", "●");
   const project = theme.fg("warning", "●");
-  return theme.fg("muted", "Saved: ") +
-    `${global} Global · ${project} Current Project · ${global} ${project} Both`;
+  return (
+    theme.fg("muted", "Saved: ") +
+    `${global} Global · ${project} Current Project · ${global} ${project} Both`
+  );
 }
 
 async function editAgentTypesDialog(
@@ -1150,9 +1154,10 @@ async function editAgentTypesDialog(
           return {
             id: action,
             label: EDIT_FIELD_LABELS[action],
-            renderIndicators: editMode === "override" && original
-              ? agentSettingsIndicators(store, original.name, action)
-              : undefined,
+            renderIndicators:
+              editMode === "override" && original
+                ? agentSettingsIndicators(store, original.name, action)
+                : undefined,
             valueColor: action === "Save" && dirty ? ("warning" as const) : undefined,
             value:
               action === "Customization"
@@ -1161,7 +1166,10 @@ async function editAgentTypesDialog(
                   ? "(changes)"
                   : action === "Source"
                     ? original
-                      ? store.getLayers(original.name).map((layer) => layer.source).join(" → ")
+                      ? store
+                          .getLayers(original.name)
+                          .map((layer) => layer.source)
+                          .join(" → ")
                       : "New draft"
                     : action === "Save scope"
                       ? saveScope === "user"

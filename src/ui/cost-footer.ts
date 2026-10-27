@@ -103,7 +103,9 @@ export class CostFooterController {
       return;
     }
     if (this.subagentCost() <= 0 || !ctx.hasUI || ctx.mode !== "tui") return;
-    this.requestRender = installCostFooter(ctx, this.subagentCost, (mainCost) => this.formatCost(mainCost));
+    this.requestRender = installCostFooter(ctx, this.subagentCost, (mainCost) =>
+      this.formatCost(mainCost),
+    );
     this.installed = true;
   }
 
@@ -176,7 +178,8 @@ export function installCostFooter(
         const subscription =
           ctx.model &&
           (ctx.model.provider === "kimi-coding" || ctx.modelRegistry?.isUsingOAuth(ctx.model));
-        const costText = displayCost?.(totals.cost) ?? `$${(totals.cost + subagentCost()).toFixed(3)}`;
+        const costText =
+          displayCost?.(totals.cost) ?? `$${(totals.cost + subagentCost()).toFixed(3)}`;
         parts.push(`${costText}${subscription ? " (sub)" : ""}`);
         const context = ctx.getContextUsage();
         if (context) {

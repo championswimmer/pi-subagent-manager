@@ -151,8 +151,16 @@ const COST_DISPLAY_OPTIONS = [
 ] as const;
 
 const COST_VALUE_OPTIONS = [
-  { id: "subagents", label: "Only subagent cost", help: "Settled USD cost of all subagents; excludes the main session." },
-  { id: "total", label: "Total cost", help: "Main session USD cost plus all settled subagent costs." },
+  {
+    id: "subagents",
+    label: "Only subagent cost",
+    help: "Settled USD cost of all subagents; excludes the main session.",
+  },
+  {
+    id: "total",
+    label: "Total cost",
+    help: "Main session USD cost plus all settled subagent costs.",
+  },
 ] as const;
 
 const COST_ICON_LABELS = { money: "Money", coins: "Coins", wallet: "Wallet" } as const;
@@ -160,15 +168,26 @@ const COST_ICON_LABELS = { money: "Money", coins: "Coins", wallet: "Wallet" } as
 type SettingsLayers = ReturnType<typeof loadManagerSettingsLayers>;
 
 /** Persisted changes, not unsaved draft values; theme styling is computed on render. */
-function withProvenance(row: DialogRow, keys: (keyof ManagerSettings)[], layers: SettingsLayers): DialogRow {
-  const globalChanged = keys.some((key) => layers.global[key] !== undefined &&
-    !settingsValueEqual(layers.global[key], DEFAULT_MANAGER_SETTINGS[key]));
-  const projectChanged = keys.some((key) => layers.project[key] !== undefined &&
-    !settingsValueEqual(layers.project[key], layers.global[key] ?? DEFAULT_MANAGER_SETTINGS[key]));
+function withProvenance(
+  row: DialogRow,
+  keys: (keyof ManagerSettings)[],
+  layers: SettingsLayers,
+): DialogRow {
+  const globalChanged = keys.some(
+    (key) =>
+      layers.global[key] !== undefined &&
+      !settingsValueEqual(layers.global[key], DEFAULT_MANAGER_SETTINGS[key]),
+  );
+  const projectChanged = keys.some(
+    (key) =>
+      layers.project[key] !== undefined &&
+      !settingsValueEqual(layers.project[key], layers.global[key] ?? DEFAULT_MANAGER_SETTINGS[key]),
+  );
   return {
     ...row,
     renderIndicators: (theme) =>
-      (globalChanged ? theme.fg("accent", "●") : " ") + " " +
+      (globalChanged ? theme.fg("accent", "●") : " ") +
+      " " +
       (projectChanged ? theme.fg("warning", "●") : " "),
     help: `${row.label}\n${row.help ?? ""}`,
   };
@@ -177,7 +196,10 @@ function withProvenance(row: DialogRow, keys: (keyof ManagerSettings)[], layers:
 function provenanceLegend(theme: Theme): string {
   const global = theme.fg("accent", "●");
   const project = theme.fg("warning", "●");
-  return theme.fg("muted", "Saved: ") + `${global} Global · ${project} Current Project · ${global} ${project} Both`;
+  return (
+    theme.fg("muted", "Saved: ") +
+    `${global} Global · ${project} Current Project · ${global} ${project} Both`
+  );
 }
 
 /** Selection edits stay in the outer draft until Save and apply. */
@@ -186,21 +208,38 @@ async function configureSubagentExtensions(
   draft: ManagerSettings,
   agentDir: string,
 ): Promise<void> {
-  const available = await discoverSubagentExtensions({ cwd: ctx.cwd, agentDir, projectTrusted: ctx.isProjectTrusted() });
-  const selected = new Set(draft.subagentExtensions === true ? available : draft.subagentExtensions || []);
+  const available = await discoverSubagentExtensions({
+    cwd: ctx.cwd,
+    agentDir,
+    projectTrusted: ctx.isProjectTrusted(),
+  });
+  const selected = new Set(
+    draft.subagentExtensions === true ? available : draft.subagentExtensions || [],
+  );
   // Keep stale selections visible and removable; runtime still intersects with discovery.
   const files = [...new Set([...available, ...selected])].sort();
   let selectedId: string | undefined;
   while (true) {
-    const action = await dialogMenu(ctx, "[lab] Subagent extensions", [
-      ...files.map((file) => ({
-        id: file,
-        label: `${selected.has(file) ? "[x]" : "[ ]"} ${basename(file)}`,
-        value: available.includes(file) ? (selected.has(file) ? "On" : "Off") : "Unavailable",
-        help: `${file}\n${available.includes(file) ? "Reload this extension in newly opened subagent sessions." : "Not currently discoverable/trusted; will not load. Toggle Off to remove the saved selection."}\nSpace/Enter toggles. Changes are saved only with outer Save and apply.`,
-      })),
-      { id: "back", label: "Back", help: files.length ? "Return to settings; selection is not saved yet." : "No extensions available (configured or auto-discovered). CLI-only, inline, built-in extensions and this manager are excluded." },
-    ], { selectedId, spaceSelect: true, footer: "↑↓/Tab navigate · Space/Enter toggle · Esc back" });
+    const action = await dialogMenu(
+      ctx,
+      "[lab] Subagent extensions",
+      [
+        ...files.map((file) => ({
+          id: file,
+          label: `${selected.has(file) ? "[x]" : "[ ]"} ${basename(file)}`,
+          value: available.includes(file) ? (selected.has(file) ? "On" : "Off") : "Unavailable",
+          help: `${file}\n${available.includes(file) ? "Reload this extension in newly opened subagent sessions." : "Not currently discoverable/trusted; will not load. Toggle Off to remove the saved selection."}\nSpace/Enter toggles. Changes are saved only with outer Save and apply.`,
+        })),
+        {
+          id: "back",
+          label: "Back",
+          help: files.length
+            ? "Return to settings; selection is not saved yet."
+            : "No extensions available (configured or auto-discovered). CLI-only, inline, built-in extensions and this manager are excluded.",
+        },
+      ],
+      { selectedId, spaceSelect: true, footer: "↑↓/Tab navigate · Space/Enter toggle · Esc back" },
+    );
     if (!action || action === "back") {
       draft.subagentExtensions = [...selected].sort();
       return;
@@ -212,48 +251,83 @@ async function configureSubagentExtensions(
 }
 
 /** Edits the shared draft; only the outer settings screen saves or applies it. */
-async function configureFooterDisplay(ctx: ExtensionCommandContext, draft: ManagerSettings, layers: SettingsLayers): Promise<void> {
+async function configureFooterDisplay(
+  ctx: ExtensionCommandContext,
+  draft: ManagerSettings,
+  layers: SettingsLayers,
+): Promise<void> {
   let selectedId: string | undefined;
   while (true) {
-    const action = await dialogMenu(ctx, "[lab] Footer display", ([
+    const action = await dialogMenu(
+      ctx,
+      "[lab] Footer display",
+      (
+        [
+          {
+            id: "location",
+            label: "Location",
+            value: COST_DISPLAY_OPTIONS.find((option) => option.id === draft.costDisplay)!.label,
+            help: "Choose Pi status, a pi-footer status widget, or a pi-footer event. Integration IDs are shown in the location picker.",
+          },
+          {
+            id: "value",
+            label: "Display value",
+            value: COST_VALUE_OPTIONS.find((option) => option.id === draft.costValue)!.label,
+            help: "Show only settled subagent cost, or main session plus settled subagents. Applies to every location.",
+          },
+          {
+            id: "icon",
+            label: "Icon",
+            value: `${costIconGlyph(draft.costIcon, draft.nerdFontIcons)} ${COST_ICON_LABELS[draft.costIcon]}`,
+            help: `Choose a money-related ${draft.nerdFontIcons ? "Nerd Font" : "emoji"} icon. The family follows [lab] Nerd Font icons.`,
+          },
+          {
+            id: "back",
+            label: "Back",
+            help: "Return to settings. Save and apply there to commit these changes.",
+          },
+        ] as DialogRow[]
+      ).map((row) => {
+        const key = (
+          { location: "costDisplay", value: "costValue", icon: "costIcon" } as Record<
+            string,
+            keyof ManagerSettings
+          >
+        )[row.id];
+        return key ? withProvenance(row, [key], layers) : row;
+      }),
       {
-        id: "location",
-        label: "Location",
-        value: COST_DISPLAY_OPTIONS.find((option) => option.id === draft.costDisplay)!.label,
-        help: "Choose Pi status, a pi-footer status widget, or a pi-footer event. Integration IDs are shown in the location picker.",
+        selectedId,
+        renderLegend: provenanceLegend,
+        footer: "↑↓/Tab navigate · Enter edit · Esc back",
       },
-      {
-        id: "value",
-        label: "Display value",
-        value: COST_VALUE_OPTIONS.find((option) => option.id === draft.costValue)!.label,
-        help: "Show only settled subagent cost, or main session plus settled subagents. Applies to every location.",
-      },
-      {
-        id: "icon",
-        label: "Icon",
-        value: `${costIconGlyph(draft.costIcon, draft.nerdFontIcons)} ${COST_ICON_LABELS[draft.costIcon]}`,
-        help: `Choose a money-related ${draft.nerdFontIcons ? "Nerd Font" : "emoji"} icon. The family follows [lab] Nerd Font icons.`,
-      },
-      { id: "back", label: "Back", help: "Return to settings. Save and apply there to commit these changes." },
-    ] as DialogRow[]).map((row) => {
-      const key = ({ location: "costDisplay", value: "costValue", icon: "costIcon" } as Record<string, keyof ManagerSettings>)[row.id];
-      return key ? withProvenance(row, [key], layers) : row;
-    }), { selectedId, renderLegend: provenanceLegend, footer: "↑↓/Tab navigate · Enter edit · Esc back" });
+    );
     if (!action || action === "back") return;
     selectedId = action;
     if (action === "location") {
-      const mode = await dialogMenu(ctx, "Footer location", [...COST_DISPLAY_OPTIONS], { selectedId: draft.costDisplay });
-      if (COST_DISPLAY_OPTIONS.some((option) => option.id === mode)) draft.costDisplay = mode as CostDisplayMode;
+      const mode = await dialogMenu(ctx, "Footer location", [...COST_DISPLAY_OPTIONS], {
+        selectedId: draft.costDisplay,
+      });
+      if (COST_DISPLAY_OPTIONS.some((option) => option.id === mode))
+        draft.costDisplay = mode as CostDisplayMode;
     } else if (action === "value") {
-      const value = await dialogMenu(ctx, "Footer display value", [...COST_VALUE_OPTIONS], { selectedId: draft.costValue });
-      if (COST_VALUE_OPTIONS.some((option) => option.id === value)) draft.costValue = value as CostValue;
+      const value = await dialogMenu(ctx, "Footer display value", [...COST_VALUE_OPTIONS], {
+        selectedId: draft.costValue,
+      });
+      if (COST_VALUE_OPTIONS.some((option) => option.id === value))
+        draft.costValue = value as CostValue;
     } else if (action === "icon") {
-      const icon = await dialogMenu(ctx, `Footer icon · ${draft.nerdFontIcons ? "Nerd Font" : "Emoji"}`, COST_ICONS.map((id) => ({
-        id,
-        label: COST_ICON_LABELS[id],
-        value: costIconGlyph(id, draft.nerdFontIcons),
-        help: `${costIconGlyph(id, draft.nerdFontIcons)} ${COST_ICON_LABELS[id]} · ${draft.nerdFontIcons ? "Requires a Nerd Font in your terminal." : "Emoji icon."}`,
-      })), { selectedId: draft.costIcon });
+      const icon = await dialogMenu(
+        ctx,
+        `Footer icon · ${draft.nerdFontIcons ? "Nerd Font" : "Emoji"}`,
+        COST_ICONS.map((id) => ({
+          id,
+          label: COST_ICON_LABELS[id],
+          value: costIconGlyph(id, draft.nerdFontIcons),
+          help: `${costIconGlyph(id, draft.nerdFontIcons)} ${COST_ICON_LABELS[id]} · ${draft.nerdFontIcons ? "Requires a Nerd Font in your terminal." : "Emoji icon."}`,
+        })),
+        { selectedId: draft.costIcon },
+      );
       if (COST_ICONS.includes(icon as CostIcon)) draft.costIcon = icon as CostIcon;
     }
   }
@@ -268,28 +342,52 @@ const HOUSEKEEPING_HELP =
   "Experimental: a model you choose writes a one-line summary of each running agent's current work, shown in the tree and widget instead of raw tool-call status.\nSends the agent's task and recent tool names/arguments/text to the selected model, uses extra tokens, and is not included in subagent cost totals.\nOff by default. Any failure keeps the original status. Choose from available and scoped models.";
 
 /** Edits the shared draft; only the outer settings screen saves or applies it. */
-async function configureHousekeeping(ctx: ExtensionCommandContext, draft: ManagerSettings, layers: SettingsLayers): Promise<void> {
+async function configureHousekeeping(
+  ctx: ExtensionCommandContext,
+  draft: ManagerSettings,
+  layers: SettingsLayers,
+): Promise<void> {
   let selectedId: string | undefined;
   while (true) {
-    const action = await dialogMenu(ctx, "[lab] Housekeeping model", ([
+    const action = await dialogMenu(
+      ctx,
+      "[lab] Housekeeping model",
+      (
+        [
+          {
+            id: "enabled",
+            label: "Summaries",
+            value: draft.housekeepingEnabled ? "On" : "Off",
+            help: "Name each running agent's work in one line using the housekeeping model, replacing raw tool-call status in the tree and widget.\nInactive until a model is selected. Off by default.",
+          },
+          {
+            id: "model",
+            label: "Model",
+            value: draft.housekeepingModel || "Not selected",
+            valueColor: draft.housekeepingModel ? undefined : ("muted" as const),
+            help: "Pick any available model; scoped models are listed first. A small, fast, inexpensive model is usually enough.\nIf the model later becomes unavailable (no credentials, removed), summaries stay inactive and normal status shows.",
+          },
+          {
+            id: "back",
+            label: "Back",
+            help: "Return to settings. Save and apply there to commit these changes.",
+          },
+        ] as DialogRow[]
+      ).map((row) => {
+        const key = (
+          { enabled: "housekeepingEnabled", model: "housekeepingModel" } as Record<
+            string,
+            keyof ManagerSettings
+          >
+        )[row.id];
+        return key ? withProvenance(row, [key], layers) : row;
+      }),
       {
-        id: "enabled",
-        label: "Summaries",
-        value: draft.housekeepingEnabled ? "On" : "Off",
-        help: "Name each running agent's work in one line using the housekeeping model, replacing raw tool-call status in the tree and widget.\nInactive until a model is selected. Off by default.",
+        selectedId,
+        renderLegend: provenanceLegend,
+        footer: "↑↓/Tab navigate · Enter edit · Esc back",
       },
-      {
-        id: "model",
-        label: "Model",
-        value: draft.housekeepingModel || "Not selected",
-        valueColor: draft.housekeepingModel ? undefined : "muted" as const,
-        help: "Pick any available model; scoped models are listed first. A small, fast, inexpensive model is usually enough.\nIf the model later becomes unavailable (no credentials, removed), summaries stay inactive and normal status shows.",
-      },
-      { id: "back", label: "Back", help: "Return to settings. Save and apply there to commit these changes." },
-    ] as DialogRow[]).map((row) => {
-      const key = ({ enabled: "housekeepingEnabled", model: "housekeepingModel" } as Record<string, keyof ManagerSettings>)[row.id];
-      return key ? withProvenance(row, [key], layers) : row;
-    }), { selectedId, renderLegend: provenanceLegend, footer: "↑↓/Tab navigate · Enter edit · Esc back" });
+    );
     if (!action || action === "back") return;
     selectedId = action;
     if (action === "enabled") draft.housekeepingEnabled = !draft.housekeepingEnabled;
@@ -338,9 +436,7 @@ export async function configureAgents(
   },
 ): Promise<void> {
   if (!canOpenDialog(ctx)) return;
-  await withDialogSession(ctx, (scoped) =>
-    configureAgentsDialog(scoped, options),
-  );
+  await withDialogSession(ctx, (scoped) => configureAgentsDialog(scoped, options));
 }
 
 /** Always shown; "disabled" (muted, guarded) unless pi-checklist prerequisites currently hold. */
@@ -377,16 +473,25 @@ async function configureAgentsDialog(
 ): Promise<void> {
   const checklistStatus = (): ChecklistStatus => {
     try {
-      return options.checklistStatus?.() ?? { eligible: false, reason: "pi-checklist status is unavailable" };
+      return (
+        options.checklistStatus?.() ?? {
+          eligible: false,
+          reason: "pi-checklist status is unavailable",
+        }
+      );
     } catch (error) {
-      return { eligible: false, reason: `could not verify pi-checklist: ${error instanceof Error ? error.message : String(error)}` };
+      return {
+        eligible: false,
+        reason: `could not verify pi-checklist: ${error instanceof Error ? error.message : String(error)}`,
+      };
     }
   };
-  const readLayers = () => loadManagerSettingsLayers({
-    cwd: ctx.cwd,
-    agentDir: options.agentDir,
-    includeProject: ctx.isProjectTrusted(),
-  });
+  const readLayers = () =>
+    loadManagerSettingsLayers({
+      cwd: ctx.cwd,
+      agentDir: options.agentDir,
+      includeProject: ctx.isProjectTrusted(),
+    });
   let layers = readLayers();
   const reportDiagnostics = () => {
     for (const diagnostic of layers.diagnostics) ctx.ui.notify(diagnostic, "warning");
@@ -401,108 +506,121 @@ async function configureAgentsDialog(
     const action = await dialogMenu(
       ctx,
       `Agents settings${dirty ? " · unsaved" : ""}`,
-      ([
-        {
-          id: "subagentMode",
-          label: "Subagent Mode",
-          value: MODE_OPTIONS.find((mode) => mode.id === draft.subagentMode)!.label,
-          help: MODE_HELP,
-        },
-        {
-          id: "toolFiltering",
-          label: "Tool Filtering",
-          value: TOOL_FILTERING_OPTIONS.find((mode) => mode.id === draft.toolFiltering)!.label,
-          help: TOOL_FILTERING_HELP,
-        },
-        ...FIELDS.map((field) => ({
-          ...field,
-          value: String(draft[field.id]),
-        })),
-        {
-          id: "modelSelection",
-          label: "Model Picking",
-          value: MODEL_SELECTION_OPTIONS.find((mode) => mode.id === draft.modelSelection)!.label,
-          help: MODEL_SELECTION_HELP,
-        },
-        {
-          id: "widgetMode",
-          label: "Status Widget",
-          value: WIDGET_MODE_OPTIONS.find((mode) => mode.id === draft.widgetMode)!.label,
-          help: WIDGET_MODE_HELP,
-        },
-        {
-          id: "costDisplay",
-          label: "[lab] Footer display",
-          value: COST_DISPLAY_OPTIONS.find((mode) => mode.id === draft.costDisplay)!.label,
-          help: "Configure footer location, displayed cost, and money icon in a submenu. Save and apply to update immediately.",
-        },
-        {
-          id: "housekeeping",
-          label: "[lab] Housekeeping model",
-          value: housekeepingValue(draft),
-          valueColor: draft.housekeepingEnabled && !draft.housekeepingModel ? "warning" as const : undefined,
-          help: HOUSEKEEPING_HELP,
-        },
-        {
-          id: "nerdFontIcons",
-          label: "[lab] Nerd Font icons",
-          value: draft.nerdFontIcons ? "On" : "Off",
-          help: "Experimental: display each agent type’s optional Nerd Font icon and unlock Nerd Font loader palettes.\nRequires a Nerd Font configured in your terminal; otherwise glyphs may appear as boxes.\nOff by default. Braille and ASCII loaders work with this Off. Save and apply to update immediately.",
-        },
-        {
-          id: "loaderStyle",
-          label: "[lab] Loader style",
-          value: AGENT_LOADERS[effectiveLoaderStyle(draft.loaderStyle, draft.nerdFontIcons)].label,
-          help: "Preview every animation frame and settled state.\nNerd Fonts Off: Braille (standard Unicode), ASCII, ASCII Star and ASCII Pulse. On: all palettes, including Circle and Hourglass.\nNerd-only saved styles fall back to ASCII while Nerd Fonts are off. Save and apply to update immediately.",
-        },
-        {
-          id: "subagentExtensions",
-          label: "[lab] Subagent extensions",
-          value: Array.isArray(draft.subagentExtensions) ? `${draft.subagentExtensions.length} selected` : draft.subagentExtensions ? "All (legacy)" : "None",
-          help: "Experimental: reload selected user/trusted-project extension hooks, including auto-discovered .ts/.js files and subdirectory entry points, in separate subagent sessions (not CLI-only or inline extensions). Bugs and unintended consequences may occur if hooks assume main-session state.\nRead limitations: https://github.com/championswimmer/pi-subagent-manager/blob/main/docs/subagent-extension-limitations.md\nSelect individual extensions in the submenu. None by default. Save and apply affects newly opened sessions, not already-open agents.",
-        },
-        checklistRow(draft.checklistIntegration, checklistStatus()),
-        {
-          id: "finalRecap",
-          label: "[lab] Final Recap",
-          value: draft.finalRecap ? "On" : "Off",
-          help: "Experimental: when detached agents finish or fail and the main agent is idle, automatically ask the main agent to summarize their results.\nEnabling this may cause extra model turns and uses more tokens and context.\nOff by default. Subagent Mode Off suppresses automatic summaries.",
-        },
-        {
-          id: "scope",
-          label: "Save scope",
-          value: scope === "user" ? "Global" : "Current Project",
-          help: "Global: save overrides of built-in defaults for all projects.\nCurrent Project: save overrides of global settings for this trusted project.\nSwitching requires confirmation: enabling Project creates its settings file; switching to Global deletes it and discards unsaved edits. Confirmed scope changes happen immediately, even if you later cancel.",
-        },
-        {
-          id: "types",
-          label: "Agent definitions",
-          value: `${options.store.list().length} types`,
-          help: "Create or edit agent definitions.\nConfigure model preferences and tool policy for each agent type.",
-        },
-        {
-          id: "defaults",
-          label: "Restore defaults",
-          help: "Pick Global or Project, then delete that scope's settings.json so its defaults apply again.\nThe file is removed, not rewritten; unsaved edits are discarded. This cannot be undone.",
-        },
-        {
-          id: "save",
-          label: "Save and apply",
-          value: dirty ? "(changes)" : undefined,
-          valueColor: dirty ? "warning" as const : undefined,
-          help: "Save only overrides to the selected scope and reload settings now.\nUnchanged values inherit from the lower layer.\nRunning agents and retained sessions are kept.",
-        },
-        {
-          id: "cancel",
-          label: "Cancel",
-          help: "Close without saving manager settings.",
-        },
-      ] as DialogRow[]).map((row) => {
-        const keys = row.id === "costDisplay"
-          ? ["costDisplay", "costValue", "costIcon"] as (keyof ManagerSettings)[]
-          : row.id === "housekeeping"
-            ? ["housekeepingEnabled", "housekeepingModel"] as (keyof ManagerSettings)[]
-          : row.id in DEFAULT_MANAGER_SETTINGS ? [row.id as keyof ManagerSettings] : [];
+      (
+        [
+          {
+            id: "subagentMode",
+            label: "Subagent Mode",
+            value: MODE_OPTIONS.find((mode) => mode.id === draft.subagentMode)!.label,
+            help: MODE_HELP,
+          },
+          {
+            id: "toolFiltering",
+            label: "Tool Filtering",
+            value: TOOL_FILTERING_OPTIONS.find((mode) => mode.id === draft.toolFiltering)!.label,
+            help: TOOL_FILTERING_HELP,
+          },
+          ...FIELDS.map((field) => ({
+            ...field,
+            value: String(draft[field.id]),
+          })),
+          {
+            id: "modelSelection",
+            label: "Model Picking",
+            value: MODEL_SELECTION_OPTIONS.find((mode) => mode.id === draft.modelSelection)!.label,
+            help: MODEL_SELECTION_HELP,
+          },
+          {
+            id: "widgetMode",
+            label: "Status Widget",
+            value: WIDGET_MODE_OPTIONS.find((mode) => mode.id === draft.widgetMode)!.label,
+            help: WIDGET_MODE_HELP,
+          },
+          {
+            id: "costDisplay",
+            label: "[lab] Footer display",
+            value: COST_DISPLAY_OPTIONS.find((mode) => mode.id === draft.costDisplay)!.label,
+            help: "Configure footer location, displayed cost, and money icon in a submenu. Save and apply to update immediately.",
+          },
+          {
+            id: "housekeeping",
+            label: "[lab] Housekeeping model",
+            value: housekeepingValue(draft),
+            valueColor:
+              draft.housekeepingEnabled && !draft.housekeepingModel
+                ? ("warning" as const)
+                : undefined,
+            help: HOUSEKEEPING_HELP,
+          },
+          {
+            id: "nerdFontIcons",
+            label: "[lab] Nerd Font icons",
+            value: draft.nerdFontIcons ? "On" : "Off",
+            help: "Experimental: display each agent type’s optional Nerd Font icon and unlock Nerd Font loader palettes.\nRequires a Nerd Font configured in your terminal; otherwise glyphs may appear as boxes.\nOff by default. Braille and ASCII loaders work with this Off. Save and apply to update immediately.",
+          },
+          {
+            id: "loaderStyle",
+            label: "[lab] Loader style",
+            value:
+              AGENT_LOADERS[effectiveLoaderStyle(draft.loaderStyle, draft.nerdFontIcons)].label,
+            help: "Preview every animation frame and settled state.\nNerd Fonts Off: Braille (standard Unicode), ASCII, ASCII Star and ASCII Pulse. On: all palettes, including Circle and Hourglass.\nNerd-only saved styles fall back to ASCII while Nerd Fonts are off. Save and apply to update immediately.",
+          },
+          {
+            id: "subagentExtensions",
+            label: "[lab] Subagent extensions",
+            value: Array.isArray(draft.subagentExtensions)
+              ? `${draft.subagentExtensions.length} selected`
+              : draft.subagentExtensions
+                ? "All (legacy)"
+                : "None",
+            help: "Experimental: reload selected user/trusted-project extension hooks, including auto-discovered .ts/.js files and subdirectory entry points, in separate subagent sessions (not CLI-only or inline extensions). Bugs and unintended consequences may occur if hooks assume main-session state.\nRead limitations: https://github.com/championswimmer/pi-subagent-manager/blob/main/docs/subagent-extension-limitations.md\nSelect individual extensions in the submenu. None by default. Save and apply affects newly opened sessions, not already-open agents.",
+          },
+          checklistRow(draft.checklistIntegration, checklistStatus()),
+          {
+            id: "finalRecap",
+            label: "[lab] Final Recap",
+            value: draft.finalRecap ? "On" : "Off",
+            help: "Experimental: when detached agents finish or fail and the main agent is idle, automatically ask the main agent to summarize their results.\nEnabling this may cause extra model turns and uses more tokens and context.\nOff by default. Subagent Mode Off suppresses automatic summaries.",
+          },
+          {
+            id: "scope",
+            label: "Save scope",
+            value: scope === "user" ? "Global" : "Current Project",
+            help: "Global: save overrides of built-in defaults for all projects.\nCurrent Project: save overrides of global settings for this trusted project.\nSwitching requires confirmation: enabling Project creates its settings file; switching to Global deletes it and discards unsaved edits. Confirmed scope changes happen immediately, even if you later cancel.",
+          },
+          {
+            id: "types",
+            label: "Agent definitions",
+            value: `${options.store.list().length} types`,
+            help: "Create or edit agent definitions.\nConfigure model preferences and tool policy for each agent type.",
+          },
+          {
+            id: "defaults",
+            label: "Restore defaults",
+            help: "Pick Global or Project, then delete that scope's settings.json so its defaults apply again.\nThe file is removed, not rewritten; unsaved edits are discarded. This cannot be undone.",
+          },
+          {
+            id: "save",
+            label: "Save and apply",
+            value: dirty ? "(changes)" : undefined,
+            valueColor: dirty ? ("warning" as const) : undefined,
+            help: "Save only overrides to the selected scope and reload settings now.\nUnchanged values inherit from the lower layer.\nRunning agents and retained sessions are kept.",
+          },
+          {
+            id: "cancel",
+            label: "Cancel",
+            help: "Close without saving manager settings.",
+          },
+        ] as DialogRow[]
+      ).map((row) => {
+        const keys =
+          row.id === "costDisplay"
+            ? (["costDisplay", "costValue", "costIcon"] as (keyof ManagerSettings)[])
+            : row.id === "housekeeping"
+              ? (["housekeepingEnabled", "housekeepingModel"] as (keyof ManagerSettings)[])
+              : row.id in DEFAULT_MANAGER_SETTINGS
+                ? [row.id as keyof ManagerSettings]
+                : [];
         return keys.length ? withProvenance(row, keys, layers) : row;
       }),
       {
@@ -517,12 +635,7 @@ async function configureAgentsDialog(
     try {
       const field = FIELDS.find((field) => field.id === action);
       if (field) {
-        const value = await dialogInput(
-          ctx,
-          field.label,
-          String(draft[field.id]),
-          field.help,
-        );
+        const value = await dialogInput(ctx, field.label, String(draft[field.id]), field.help);
         if (value === undefined) continue;
         const number = Number(value.trim());
         if (
@@ -578,26 +691,34 @@ async function configureAgentsDialog(
         const status = checklistStatus();
         // Turning Off is always allowed; turning On requires current eligibility.
         if (!draft.checklistIntegration && !status.eligible)
-          ctx.ui.notify(`Checklist integration cannot be enabled: ${status.reason ?? "requirements not met"}. ${CHECKLIST_REQUIREMENTS}`, "warning");
+          ctx.ui.notify(
+            `Checklist integration cannot be enabled: ${status.reason ?? "requirements not met"}. ${CHECKLIST_REQUIREMENTS}`,
+            "warning",
+          );
         else draft.checklistIntegration = !draft.checklistIntegration;
       } else if (action === "finalRecap") {
         draft.finalRecap = !draft.finalRecap;
       } else if (action === "scope") {
         if (!ctx.isProjectTrusted())
-          ctx.ui.notify(
-            "Project settings require a trusted project; saving globally.",
-            "warning",
-          );
+          ctx.ui.notify("Project settings require a trusted project; saving globally.", "warning");
         else {
           const nextScope = scope === "user" ? "project" : "user";
-          const message = nextScope === "project"
-            ? "Create project file now; outer Cancel cannot undo.\nThis will create this project's settings.json. Further changes will be saved there. Unsaved edits are kept until Save and apply."
-            : "Delete project file now. Discard edits. No undo.\nUnsaved edits will be discarded. Outer Cancel cannot undo. We reload global settings; further changes are saved globally.";
-          const confirmation = await dialogMenu(ctx,
-            nextScope === "project" ? "Enable project settings?" : "Clear project settings and use Global?",
+          const message =
+            nextScope === "project"
+              ? "Create project file now; outer Cancel cannot undo.\nThis will create this project's settings.json. Further changes will be saved there. Unsaved edits are kept until Save and apply."
+              : "Delete project file now. Discard edits. No undo.\nUnsaved edits will be discarded. Outer Cancel cannot undo. We reload global settings; further changes are saved globally.";
+          const confirmation = await dialogMenu(
+            ctx,
+            nextScope === "project"
+              ? "Enable project settings?"
+              : "Clear project settings and use Global?",
             [
               { id: "confirm", label: "Confirm", help: message },
-              { id: "cancel", label: "Cancel", help: message + "\nCancel leaves files, scope and unsaved edits unchanged." },
+              {
+                id: "cancel",
+                label: "Cancel",
+                help: message + "\nCancel leaves files, scope and unsaved edits unchanged.",
+              },
             ],
             { selectedId: "cancel", footer: "↑↓/Tab choose · Enter select · Esc cancel" },
           );
@@ -619,22 +740,45 @@ async function configureAgentsDialog(
           }
         }
       } else if (action === "defaults") {
-        const target = { cwd: ctx.cwd, agentDir: options.agentDir, includeProject: ctx.isProjectTrusted() };
+        const target = {
+          cwd: ctx.cwd,
+          agentDir: options.agentDir,
+          includeProject: ctx.isProjectTrusted(),
+        };
         const globalPath = managerSettingsPath(target, "user");
-        const projectPath = target.includeProject ? managerSettingsPath(target, "project") : undefined;
+        const projectPath = target.includeProject
+          ? managerSettingsPath(target, "project")
+          : undefined;
         const explain = (path: string) =>
           `Deletes this file now (nothing is written):\n${path}\nIf it does not exist, nothing happens. Unsaved edits are discarded. No undo.`;
         const rows: DialogRow[] = [
-          { id: "user", label: "Global", value: "Restore global defaults", help: explain(globalPath) },
+          {
+            id: "user",
+            label: "Global",
+            value: "Restore global defaults",
+            help: explain(globalPath),
+          },
           ...(projectPath
-            ? [{ id: "project", label: "Project", value: "Restore project defaults", help: explain(projectPath) }]
+            ? [
+                {
+                  id: "project",
+                  label: "Project",
+                  value: "Restore project defaults",
+                  help: explain(projectPath),
+                },
+              ]
             : []),
           { id: "cancel", label: "Cancel", help: "Delete nothing." },
         ];
-        const choice = await dialogMenu(ctx, "Restore defaults: delete which settings file?", rows, {
-          selectedId: "cancel",
-          footer: "↑↓/Tab choose · Enter delete file · Esc cancel",
-        });
+        const choice = await dialogMenu(
+          ctx,
+          "Restore defaults: delete which settings file?",
+          rows,
+          {
+            selectedId: "cancel",
+            footer: "↑↓/Tab choose · Enter delete file · Esc cancel",
+          },
+        );
         if (choice === "user" || choice === "project") {
           const { filePath, deleted } = deleteManagerSettings({ ...target, scope: choice });
           layers = readLayers();
@@ -644,12 +788,13 @@ async function configureAgentsDialog(
           scope = layers.scope;
           options.apply();
           ctx.ui.notify(
-            deleted ? `Deleted ${filePath}. Defaults restored.` : `No settings file at ${filePath}; nothing to delete.`,
+            deleted
+              ? `Deleted ${filePath}. Defaults restored.`
+              : `No settings file at ${filePath}; nothing to delete.`,
             "info",
           );
         }
-      }
-      else if (action === "types") {
+      } else if (action === "types") {
         await editAgentTypes(ctx, options.store, draft.nerdFontIcons, {
           getAllTools: options.getAllTools ?? (() => []),
           toolFiltering: draft.toolFiltering,
@@ -660,7 +805,9 @@ async function configureAgentsDialog(
         if (draft.checklistIntegration && !baseline.checklistIntegration) {
           const status = checklistStatus();
           if (!status.eligible)
-            throw new Error(`Checklist integration cannot be enabled: ${status.reason ?? "requirements not met"}. Turn it Off or satisfy: ${CHECKLIST_REQUIREMENTS}`);
+            throw new Error(
+              `Checklist integration cannot be enabled: ${status.reason ?? "requirements not met"}. Turn it Off or satisfy: ${CHECKLIST_REQUIREMENTS}`,
+            );
         }
         const file = saveManagerOverrides({
           cwd: ctx.cwd,
@@ -678,10 +825,7 @@ async function configureAgentsDialog(
         return;
       }
     } catch (error) {
-      ctx.ui.notify(
-        error instanceof Error ? error.message : String(error),
-        "error",
-      );
+      ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
     }
   }
 }

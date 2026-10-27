@@ -105,7 +105,18 @@ async function withCommands(
   try {
     piSubagent(pi);
     await hooks.get("session_start")!({}, ctx);
-    await body({ command, ctx, hooks, renders, replies, cwd, notifications, tools, widgets, events });
+    await body({
+      command,
+      ctx,
+      hooks,
+      renders,
+      replies,
+      cwd,
+      notifications,
+      tools,
+      widgets,
+      events,
+    });
   } finally {
     await hooks.get("session_shutdown")?.({}, ctx);
     if (oldDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -493,17 +504,29 @@ test("agents reap refuses to bypass confirmation outside the TUI", async () => {
   });
 });
 
-
 test("parent public capability probe reports version/protocol only while manager enabled and alive", async () => {
   for (const initialMode of ["off", "orchestration"] as const) {
-    await withCommands(async ({ events, hooks, ctx }) => {
-      let reply: any;
-      const probe = () => events.emit("pi-subagent-manager:capabilities:probe", { respond(value: unknown) { reply = value; } });
-      probe();
-      if (initialMode === "off") assert.equal(reply, undefined);
-      else { assert.equal(reply.protocol, 1); assert.match(reply.version, /^\d+\.\d+\.\d+$/); }
-      await hooks.get("session_shutdown")!({}, ctx);
-      reply = undefined; probe(); assert.equal(reply, undefined);
-    }, { initialMode });
+    await withCommands(
+      async ({ events, hooks, ctx }) => {
+        let reply: any;
+        const probe = () =>
+          events.emit("pi-subagent-manager:capabilities:probe", {
+            respond(value: unknown) {
+              reply = value;
+            },
+          });
+        probe();
+        if (initialMode === "off") assert.equal(reply, undefined);
+        else {
+          assert.equal(reply.protocol, 1);
+          assert.match(reply.version, /^\d+\.\d+\.\d+$/);
+        }
+        await hooks.get("session_shutdown")!({}, ctx);
+        reply = undefined;
+        probe();
+        assert.equal(reply, undefined);
+      },
+      { initialMode },
+    );
   }
 });

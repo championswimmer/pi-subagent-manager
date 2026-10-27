@@ -17,10 +17,7 @@ import { fileURLToPath } from "node:url";
 // Exercises the committing-push-merge publish script against real git in temp repositories
 // (a local bare "origin", no network) with PATH shims for gh and npm. Nothing is published.
 const root = fileURLToPath(new URL("..", import.meta.url));
-const script = join(
-  root,
-  ".agents/skills/committing-push-merge/scripts/publish.mjs",
-);
+const script = join(root, ".agents/skills/committing-push-merge/scripts/publish.mjs");
 
 const ghShim = String.raw`#!/usr/bin/env node
 const fs = require("node:fs");
@@ -77,10 +74,7 @@ interface Fixture {
   bare: string;
   dir: string;
   git: (...args: string[]) => string;
-  run: (
-    args: string[],
-    extra?: Record<string, string>,
-  ) => { status: number; out: string };
+  run: (args: string[], extra?: Record<string, string>) => { status: number; out: string };
   calls: () => string[][];
 }
 
@@ -124,8 +118,7 @@ function fixture(t: TestContext): Fixture {
   spawnSync("git", ["init", "--bare", "-b", "main", bare], { env: baseEnv });
   git("init", "-b", "main");
   git("remote", "add", "origin", bare);
-  for (const file of ["a.txt", "b.txt", "c.txt"])
-    writeFileSync(join(work, file), `${file}\n`);
+  for (const file of ["a.txt", "b.txt", "c.txt"]) writeFileSync(join(work, file), `${file}\n`);
   git("add", ".");
   git("commit", "-m", "chore: initial");
   git("push", "-u", "origin", "main");
@@ -160,13 +153,9 @@ function fixture(t: TestContext): Fixture {
 
 const msg = ["--message", "feat: add thing"];
 const bareRev = (f: Fixture, ref: string) =>
-  spawnSync(
-    "git",
-    ["--git-dir", f.bare, "rev-parse", "--verify", "--quiet", ref],
-    {
-      encoding: "utf8",
-    },
-  ).stdout.trim();
+  spawnSync("git", ["--git-dir", f.bare, "rev-parse", "--verify", "--quiet", ref], {
+    encoding: "utf8",
+  }).stdout.trim();
 const ghCalls = (f: Fixture, sub: string) =>
   f.calls().filter((c) => c[0] === "gh" && c[1] === "pr" && c[2] === sub);
 
@@ -177,17 +166,14 @@ test("default: tests, new branch, commit ALL changes, PR, pinned gh merge, then 
 
   const result = f.run(msg);
   assert.equal(result.status, 0, result.out);
-  assert.match(
-    result.out,
-    /RESULT: merged https:\/\/github\.com\/o\/r\/pull\/1/,
-  );
+  assert.match(result.out, /RESULT: merged https:\/\/github\.com\/o\/r\/pull\/1/);
 
   const branchSha = bareRev(f, "refs/heads/feat/add-thing");
   assert.ok(branchSha, "topic branch was pushed (generated name)");
-  assert.deepEqual(
-    f.git("show", "--name-only", "--format=", branchSha).split("\n").sort(),
-    ["a.txt", "new.txt"],
-  );
+  assert.deepEqual(f.git("show", "--name-only", "--format=", branchSha).split("\n").sort(), [
+    "a.txt",
+    "new.txt",
+  ]);
   assert.equal(f.git("log", "-1", "--format=%s", branchSha), "feat: add thing");
   const create = ghCalls(f, "create")[0];
   assert.equal(create[create.indexOf("--title") + 1], "feat: add thing");
@@ -207,10 +193,7 @@ test("default: tests, new branch, commit ALL changes, PR, pinned gh merge, then 
   );
   for (const call of f.calls()) {
     for (const banned of ["--admin", "--auto", "--force", "-f", "--watch"]) {
-      assert.ok(
-        !call.includes(banned),
-        `${call.join(" ")} must not include ${banned}`,
-      );
+      assert.ok(!call.includes(banned), `${call.join(" ")} must not include ${banned}`);
     }
   }
   // Left on main, up to date with the merge result, clean.
@@ -239,10 +222,10 @@ test("listed paths: only those are committed, unrelated staged/unstaged/untracke
     "new.txt",
   ]);
   assert.equal(result.status, 0, result.out);
-  assert.deepEqual(
-    f.git("show", "--name-only", "--format=", "feat/thing").split("\n").sort(),
-    ["a.txt", "new.txt"],
-  );
+  assert.deepEqual(f.git("show", "--name-only", "--format=", "feat/thing").split("\n").sort(), [
+    "a.txt",
+    "new.txt",
+  ]);
   assert.equal(f.git("diff", "--cached", "--name-only"), "b.txt");
   assert.match(f.git("status", "--porcelain"), /^ M c\.txt$/m);
   assert.match(f.git("status", "--porcelain"), /^\?\? scratch\.txt$/m);
@@ -261,10 +244,9 @@ test("a new branch starts from origin/main so commits on another topic branch ar
   const result = f.run(msg);
   assert.equal(result.status, 0, result.out);
   assert.match(result.out, /feat\/other has 1 commit\(s\) not on origin\/main/);
-  assert.deepEqual(
-    f.git("show", "--name-only", "--format=", "feat/add-thing").split("\n"),
-    ["a.txt"],
-  );
+  assert.deepEqual(f.git("show", "--name-only", "--format=", "feat/add-thing").split("\n"), [
+    "a.txt",
+  ]);
   assert.equal(f.git("rev-list", "--count", "origin/main..feat/other"), "1");
   assert.equal(f.git("branch", "--show-current"), "main");
 });
@@ -365,10 +347,7 @@ test("PR body defaults to message plus validation, and --body-file overrides it"
 
   const f2 = fixture(t);
   writeFileSync(join(f2.work, "a.txt"), "changed a\n");
-  assert.equal(
-    f2.run([...msg, "--body-file", join(f2.dir, "body.md")]).status,
-    0,
-  );
+  assert.equal(f2.run([...msg, "--body-file", join(f2.dir, "body.md")]).status, 0);
   const state2 = JSON.parse(readFileSync(join(f2.dir, "state.json"), "utf8"));
   assert.equal(state2.prs[0].body, "## Summary\nDoes a thing.\n");
 });

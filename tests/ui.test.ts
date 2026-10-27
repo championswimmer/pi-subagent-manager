@@ -25,7 +25,12 @@ import { configureAgents } from "../src/ui/settings-ui.ts";
 import { ToolPickerComponent } from "../src/ui/tool-picker.ts";
 import { DEFAULT_MANAGER_SETTINGS } from "../src/prefs/settings.ts";
 import { bindDialogDriver, createDialogDriver, dialogDriverFor } from "./helpers/dialogDriver.ts";
-import { AGENT_COLORS, ConfigStore, parseAgentType, serializeAgentType } from "../src/prefs/config.ts";
+import {
+  AGENT_COLORS,
+  ConfigStore,
+  parseAgentType,
+  serializeAgentType,
+} from "../src/prefs/config.ts";
 import {
   AGENT_PROGRESS_INTERVAL,
   agentProgressIcon,
@@ -653,12 +658,21 @@ test("type field editor handles YAML fields without changing Markdown", async ()
     let picker = 0;
     driver.onChild = (component) => {
       if (!(component instanceof ToolPickerComponent)) return false;
-      const values = picker++ === 0 ? ["action:empty", "action:done"] : ["tool:bash", "tool:read", "action:done"];
-      for (const value of values) component.getSelectList().onSelect!(component.getCurrentItems().find((item) => item.value === value)!);
+      const values =
+        picker++ === 0
+          ? ["action:empty", "action:done"]
+          : ["tool:bash", "tool:read", "action:done"];
+      for (const value of values)
+        component.getSelectList().onSelect!(
+          component.getCurrentItems().find((item) => item.value === value)!,
+        );
       return true;
     };
     await editAgentTypes(ctx, store, false, {
-      getAllTools: () => [{ name: "bash", description: "Run shell" }, { name: "read", description: "Read file" }],
+      getAllTools: () => [
+        { name: "bash", description: "Run shell" },
+        { name: "read", description: "Read file" },
+      ],
       toolFiltering: "allowed",
     });
     const saved = store.get("renamed");
@@ -691,7 +705,8 @@ test("model picker uses current draft suggestions, including unsaved edits to th
     driver.onChild = (component) => {
       if (typeof component.getMode !== "function") return false;
       pickerOrders.push(
-        component.getCurrentItems()
+        component
+          .getCurrentItems()
           .filter((item: { value: string }) => !item.value.startsWith("action:"))
           .map((item: { value: string }) => item.value),
       );
@@ -757,12 +772,7 @@ test("saving model preferences stores canonical ordered models after add and reo
         scopedModels: ["openai/gpt-4.1", "anthropic/claude-3.7-sonnet"],
       },
     );
-    pickModels(driver, [
-      "openai/gpt-4.1",
-      "anthropic/claude-3.7-sonnet",
-      "key:w",
-      "action:done",
-    ]);
+    pickModels(driver, ["openai/gpt-4.1", "anthropic/claude-3.7-sonnet", "key:w", "action:done"]);
     await editAgentTypes(ctx, store);
     const saved = store.get("worker");
     assert.deepEqual(saved.models, ["anthropic/claude-3.7-sonnet", "openai/gpt-4.1"]);
@@ -842,14 +852,19 @@ test("agent picker uses runtime name pills with definition colors and no bracket
               assert.equal(component.getSelectedId(), "worker");
             }
             const lines: string[] = component.render(100);
-            const row: string = lines.find((line) => stripTerminalSequences(line).includes("worker"))!;
+            const row: string = lines.find((line) =>
+              stripTerminalSequences(line).includes("worker"),
+            )!;
             assert.ok(row.includes(expectedBadge(theme, "worker", color)));
             assert.deepEqual(backgroundCoveredText(row), [" worker "]);
             assert.doesNotMatch(stripTerminalSequences(row), /\[worker\]/);
             for (const width of [1, 10, 40, 100]) {
               const narrow = component.render(width);
               assert.ok(narrow.every((line) => visibleWidth(line) <= width));
-              assert.equal(narrow.length, width < 4 ? 1 : dialogHeight({ terminal: { rows: 24 }, requestRender() {} }));
+              assert.equal(
+                narrow.length,
+                width < 4 ? 1 : dialogHeight({ terminal: { rows: 24 }, requestRender() {} }),
+              );
             }
           }
           checked = true;
@@ -913,16 +928,7 @@ test("invalid field edits and untrusted project saves leave configuration unchan
   await withFixture(async ({ root, store, body }) => {
     const { ctx, diagnostics, scopes } = editorContext(
       root,
-      [
-        "worker",
-        "name",
-        "Edit frontmatter YAML",
-        "Cancel",
-        "Save",
-        undefined,
-        "Cancel",
-        undefined,
-      ],
+      ["worker", "name", "Edit frontmatter YAML", "Cancel", "Save", undefined, "Cancel", undefined],
       ["../escape", "name: worker\ndescription: Worker\ntools:\n  allow: [read, read]"],
     );
     await editAgentTypes(ctx, store);
@@ -1163,9 +1169,15 @@ test("field editor prefills current values and cancelled or invalid edits keep t
     const initial: (readonly string[] | undefined)[] = [];
     driver.onChild = (component) => {
       if (!(component instanceof ToolPickerComponent)) return false;
-      initial.push(component.getDraftTools() === undefined ? undefined : [...component.getDraftTools()!]);
-      const values = picker++ === 0 ? ["tool:read", "tool:bash", "tool:edit", "action:done"] : ["action:cancel"];
-      for (const value of values) component.getSelectList().onSelect!(component.getCurrentItems().find((item) => item.value === value)!);
+      initial.push(
+        component.getDraftTools() === undefined ? undefined : [...component.getDraftTools()!],
+      );
+      const values =
+        picker++ === 0 ? ["tool:read", "tool:bash", "tool:edit", "action:done"] : ["action:cancel"];
+      for (const value of values)
+        component.getSelectList().onSelect!(
+          component.getCurrentItems().find((item) => item.value === value)!,
+        );
       return true;
     };
     await editAgentTypes(ctx, store, false, {
@@ -1201,8 +1213,15 @@ test("agent save shows warning-colored changes for edited and new drafts, cleari
     const { ctx, driver } = editorContext(
       root,
       [
-        "worker", "description", "description", "description", "Edit frontmatter YAML",
-        "Cancel", "Create new type", "Cancel", undefined,
+        "worker",
+        "description",
+        "description",
+        "description",
+        "Edit frontmatter YAML",
+        "Cancel",
+        "Create new type",
+        "Cancel",
+        undefined,
       ],
       [undefined, "Changed description", original.description, undefined],
     );
@@ -1472,9 +1491,11 @@ test("agent browser shows only the live runtime resolution beneath the descripti
       resolveAgentSettings: () => ({ model: "provider/settings", thinkingLevel: "low" }),
       apply() {},
     });
-    assert.ok(settingsContext.frames.some((frame) =>
-      frame.some((line) => line.includes("Model: provider/settings · thinking: low")),
-    ));
+    assert.ok(
+      settingsContext.frames.some((frame) =>
+        frame.some((line) => line.includes("Model: provider/settings · thinking: low")),
+      ),
+    );
     const { ctx, frames } = editorContext(fixture.root, [undefined]);
     await editAgentTypes(ctx, fixture.store);
     assert.ok(frames.some((frame) => frame.some((line) => line.includes("Model: unavailable"))));
@@ -1582,10 +1603,19 @@ test("cancelling the customization picker leaves bundled definitions untouched",
 test("tool picker unset removes fields, preserves other lists, and cleans an empty tools object on save", async () => {
   await withFixture(async ({ root, store, writeWorker }) => {
     await writeWorker({ tools: { allow: ["read"], block: ["bash"] } });
-    const { ctx, driver } = editorContext(root, ["worker", "tools.allow", "Save", "Global", undefined]);
+    const { ctx, driver } = editorContext(root, [
+      "worker",
+      "tools.allow",
+      "Save",
+      "Global",
+      undefined,
+    ]);
     driver.onChild = (component) => {
       if (!(component instanceof ToolPickerComponent)) return false;
-      for (const value of ["action:unset", "action:done"]) component.getSelectList().onSelect!(component.getCurrentItems().find((item) => item.value === value)!);
+      for (const value of ["action:unset", "action:done"])
+        component.getSelectList().onSelect!(
+          component.getCurrentItems().find((item) => item.value === value)!,
+        );
       return true;
     };
     await editAgentTypes(ctx, store);
@@ -1600,21 +1630,40 @@ test("tool picker unset removes fields, preserves other lists, and cleans an emp
 
 test("nested tool pickers use the settings draft policy and freshly fetch session tools", async () => {
   await withFixture(async ({ root, store, agentDir }) => {
-    const { ctx, driver } = editorContext(root, ["toolFiltering", "all", "types", "worker", "tools.allow", "tools.block", "Cancel", undefined, "cancel"]);
+    const { ctx, driver } = editorContext(root, [
+      "toolFiltering",
+      "all",
+      "types",
+      "worker",
+      "tools.allow",
+      "tools.block",
+      "Cancel",
+      undefined,
+      "cancel",
+    ]);
     ctx.isProjectTrusted = () => false;
     let fetched = 0;
     let pickers = 0;
     driver.onChild = (component) => {
       if (!(component instanceof ToolPickerComponent)) return false;
       pickers++;
-      assert.match(stripTerminalSequences(component.render(100)[1]!), /list is not used until Tool Filtering/);
-      assert.ok(component.getCurrentItems().some((item) => item.value === `tool:inactive_${pickers}`));
+      assert.match(
+        stripTerminalSequences(component.render(100)[1]!),
+        /list is not used until Tool Filtering/,
+      );
+      assert.ok(
+        component.getCurrentItems().some((item) => item.value === `tool:inactive_${pickers}`),
+      );
       component.handleInput("\x1b");
       return true;
     };
     await configureAgents(ctx, {
-      store, agentDir, settings: { ...DEFAULT_MANAGER_SETTINGS },
-      getAllTools: () => [{ name: `inactive_${++fetched}`, description: "Registered session tool" }],
+      store,
+      agentDir,
+      settings: { ...DEFAULT_MANAGER_SETTINGS },
+      getAllTools: () => [
+        { name: `inactive_${++fetched}`, description: "Registered session tool" },
+      ],
       apply: () => assert.fail("Cancelled settings must not apply"),
     });
     assert.equal(fetched, 2);
@@ -1646,7 +1695,6 @@ test("saving an unchanged bundled settings draft creates an empty overlay and fo
     assert.equal(fixture.store.get("coder").systemPrompt, "Updated prompt");
     assert.deepEqual(fixture.store.get("coder").models, ["provider/new"]);
     assert.equal(fixture.store.get("coder").thinkingLevel, "low");
-
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }
@@ -1754,26 +1802,49 @@ test("sparse agent settings show saved scope dots and the full source cascade", 
     const projectPath = join(projectDir, "coder.yaml");
     await writeFile(globalPath, "thinkingLevel: high\nmodels: null\ntools:\n  allow: []\n");
     await writeFile(projectPath, "thinkingLevel: low\ncolor: null\ntools:\n  block: []\n");
-    const store = new ConfigStore({ cwd: fixture.root, agentDir: fixture.agentDir, bundledDir: fixture.bundledDir, includeProject: true });
-    assert.deepEqual(store.getLayers("coder").map((layer) => layer.source), ["bundled", "user", "project"]);
+    const store = new ConfigStore({
+      cwd: fixture.root,
+      agentDir: fixture.agentDir,
+      bundledDir: fixture.bundledDir,
+      includeProject: true,
+    });
+    assert.deepEqual(
+      store.getLayers("coder").map((layer) => layer.source),
+      ["bundled", "user", "project"],
+    );
     assert.equal(store.get("coder").thinkingLevel, "low");
     assert.deepEqual(store.get("coder").tools, { allow: [], block: [] });
-    const context = editorContext(fixture.root, ["coder", "thinkingLevel", "medium", "Cancel", undefined]);
+    const context = editorContext(fixture.root, [
+      "coder",
+      "thinkingLevel",
+      "medium",
+      "Cancel",
+      undefined,
+    ]);
     const edits: DialogMenu[] = [];
     let sourceHelp = "";
     context.driver.onChild = (component) => {
       if (!(component instanceof DialogMenu)) return false;
-      if (component.title === "Agent types") sourceHelp = component.rows.find((row) => row.id === "coder")!.help!;
+      if (component.title === "Agent types")
+        sourceHelp = component.rows.find((row) => row.id === "coder")!.help!;
       if (component.title.startsWith("Edit coder")) edits.push(component);
       return false;
     };
     await editAgentTypes(context.ctx, store);
     assert.match(sourceHelp, /^bundled → user → project/);
-    for (const path of [join(fixture.bundledDir, "coder.md"), globalPath, projectPath]) assert.ok(sourceHelp.includes(path));
+    for (const path of [join(fixture.bundledDir, "coder.md"), globalPath, projectPath])
+      assert.ok(sourceHelp.includes(path));
     assert.equal(edits.length, 2);
     for (const menu of edits) {
-      const dots = (id: string) => stripTerminalSequences(menu.rows.find((row) => row.id === id)!.renderIndicators!(darkTheme));
-      assert.equal(dots("thinkingLevel"), "● ●", "saved scopes remain visible through unsaved edits");
+      const dots = (id: string) =>
+        stripTerminalSequences(
+          menu.rows.find((row) => row.id === id)!.renderIndicators!(darkTheme),
+        );
+      assert.equal(
+        dots("thinkingLevel"),
+        "● ●",
+        "saved scopes remain visible through unsaved edits",
+      );
       assert.equal(dots("models"), "●  ", "explicit global clear counts as an override");
       assert.equal(dots("color"), "  ●", "explicit project clear counts as an override");
       assert.equal(dots("tools.allow"), "●  ");
@@ -1790,14 +1861,25 @@ test("sparse agent settings show saved scope dots and the full source cascade", 
     assert.equal(store.getSettingsOverride("coder", "user")!.thinkingLevel, "high");
     assert.equal(store.getLayers("coder")[0]!.description, "Bundled coder");
 
-    const untrusted = new ConfigStore({ cwd: fixture.root, agentDir: fixture.agentDir, bundledDir: fixture.bundledDir, includeProject: false });
-    assert.deepEqual(untrusted.getLayers("coder").map((layer) => layer.source), ["bundled", "user"]);
+    const untrusted = new ConfigStore({
+      cwd: fixture.root,
+      agentDir: fixture.agentDir,
+      bundledDir: fixture.bundledDir,
+      includeProject: false,
+    });
+    assert.deepEqual(
+      untrusted.getLayers("coder").map((layer) => layer.source),
+      ["bundled", "user"],
+    );
     assert.equal(untrusted.getSettingsOverride("coder", "project"), undefined);
     assert.throws(() => untrusted.getLayers("missing"), /Unknown or invalid/);
     await rm(projectPath);
     await rm(globalPath);
     store.reload();
-    assert.deepEqual(store.getLayers("coder").map((layer) => layer.source), ["bundled"]);
+    assert.deepEqual(
+      store.getLayers("coder").map((layer) => layer.source),
+      ["bundled"],
+    );
     assert.equal(store.getSettingsOverride("coder", "user"), undefined);
     assert.equal(store.getSettingsOverride("coder", "project"), undefined);
   } finally {

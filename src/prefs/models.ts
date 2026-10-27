@@ -12,15 +12,12 @@ export function getModelPreferences(type: {
 }): string[] | undefined {
   const hasModels = type.models !== undefined;
   const hasModel = type.model !== undefined;
-  if (hasModels && hasModel)
-    throw new Error("Specify either models or model, not both");
+  if (hasModels && hasModel) throw new Error("Specify either models or model, not both");
   if (hasModels) {
     if (!Array.isArray(type.models))
       throw new Error("models must be an array of provider/model-id strings");
     if (type.models.length === 0)
-      throw new Error(
-        "models must not be empty; omit models to inherit the parent/default model",
-      );
+      throw new Error("models must not be empty; omit models to inherit the parent/default model");
     const models = type.models.map((value, index) =>
       validateModelPreference(value, `models[${index}]`),
     );
