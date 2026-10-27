@@ -114,6 +114,26 @@ test("menu restores selection, navigates, selects, saves, and cancels within bou
   for (const width of [1, 10, 40, 100]) bounded(menu.render(width), width, 12);
 });
 
+test("menu value details align under descriptions and scroll as two-line rows", () => {
+  const rows = Array.from({ length: 20 }, (_, i) => ({
+    id: String(i),
+    label: `Agent ${i}`,
+    value: `Description ${i}`,
+    valueDetail: `Model: provider/model-${i}-${"界".repeat(60)}`,
+  }));
+  const menu = new DialogMenu(host(12), theme, "Agents", rows, () => {});
+  const lines = menu.render(80).map(stripTerminalSequences);
+  const description = lines.findIndex((line) => line.includes("Description 0"));
+  assert.equal(lines[description + 1]!.indexOf("Model:"), lines[description]!.indexOf("Description"));
+  assert.ok(lines[description + 1]!.includes("..."), "model detail is truncated");
+  for (let i = 0; i < 19; i++) menu.handleInput(DOWN);
+  const last = menu.render(80).join("\n");
+  assert.match(last, /Description 19/);
+  assert.match(last, /Model: provider\/model-19/);
+  assert.equal(menu.getSelectedId(), "19");
+  for (const width of [0, 1, 10, 40, 80, 120]) bounded(menu.render(width), width, 12);
+});
+
 test("menu values keep their warning color and column even on the selected row", () => {
   const coloredTheme = {
     fg: (color: string, text: string) => {

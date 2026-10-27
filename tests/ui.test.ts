@@ -1439,6 +1439,50 @@ async function bundledFixture() {
   return { root, agentDir, bundledDir, store, body };
 }
 
+test("agent browser shows only the live runtime resolution beneath the description", async () => {
+  const fixture = await bundledFixture();
+  try {
+    const resolvedTypes: string[] = [];
+    for (const model of ["provider/scoped", "provider/current", undefined]) {
+      const { ctx, frames } = editorContext(fixture.root, [undefined]);
+      await editAgentTypes(ctx, fixture.store, false, {
+        getAllTools: () => [],
+        toolFiltering: "allowed",
+        resolveAgentSettings(type) {
+          resolvedTypes.push(type.name);
+          if (!model) throw new Error("No available model");
+          return { model, thinkingLevel: "high" };
+        },
+      });
+      const lines = frames.find((frame) => frame.some((line) => line.includes("Bundled coder")))!;
+      assert.ok(lines);
+      const descriptionIndex = lines.findIndex((line) => line.includes("Bundled coder"));
+      const detail = lines[descriptionIndex + 1]!;
+      assert.ok(detail.includes(model ? `Model: ${model} · thinking: high` : "Model: unavailable"));
+      assert.equal(detail.indexOf("Model:"), lines[descriptionIndex]!.indexOf("Bundled coder"));
+      assert.equal(lines.filter((line) => line.includes("Model:")).length, 1);
+    }
+    assert.deepEqual(resolvedTypes, ["coder", "coder", "coder"]);
+    const settingsContext = editorContext(fixture.root, ["types", undefined, undefined]);
+    settingsContext.ctx.isProjectTrusted = () => false;
+    await configureAgents(settingsContext.ctx, {
+      store: fixture.store,
+      agentDir: fixture.agentDir,
+      settings: { ...DEFAULT_MANAGER_SETTINGS },
+      resolveAgentSettings: () => ({ model: "provider/settings", thinkingLevel: "low" }),
+      apply() {},
+    });
+    assert.ok(settingsContext.frames.some((frame) =>
+      frame.some((line) => line.includes("Model: provider/settings · thinking: low")),
+    ));
+    const { ctx, frames } = editorContext(fixture.root, [undefined]);
+    await editAgentTypes(ctx, fixture.store);
+    assert.ok(frames.some((frame) => frame.some((line) => line.includes("Model: unavailable"))));
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("bundled tweak-settings saves a sparse .yml and locks prompt and name", async () => {
   const fixture = await bundledFixture();
   try {

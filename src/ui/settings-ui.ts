@@ -29,7 +29,7 @@ import {
   type ToolFilteringMode,
   type WidgetMode,
 } from "../prefs/settings.ts";
-import { editAgentTypes } from "./ui.ts";
+import { editAgentTypes, type AgentEditorOptions } from "./ui.ts";
 import { HOUSEKEEPING_PICKER_CANCEL, pickHousekeepingModel } from "./model-picker.ts";
 import type { ToolEditorOptions } from "./tool-picker.ts";
 import { AGENT_LOADERS, availableLoaderStyles, effectiveLoaderStyle } from "./agent-loader.ts";
@@ -331,6 +331,7 @@ export async function configureAgents(
     settings: ManagerSettings;
     agentDir: string;
     getAllTools?: ToolEditorOptions["getAllTools"];
+    resolveAgentSettings?: AgentEditorOptions["resolveAgentSettings"];
     /** Live pi-checklist eligibility; absent means unavailable (fail closed). */
     checklistStatus?: () => ChecklistStatus;
     apply(): void;
@@ -368,6 +369,7 @@ async function configureAgentsDialog(
     settings: ManagerSettings;
     agentDir: string;
     getAllTools?: ToolEditorOptions["getAllTools"];
+    resolveAgentSettings?: AgentEditorOptions["resolveAgentSettings"];
     /** Live pi-checklist eligibility; absent means unavailable (fail closed). */
     checklistStatus?: () => ChecklistStatus;
     apply(): void;
@@ -651,6 +653,7 @@ async function configureAgentsDialog(
         await editAgentTypes(ctx, options.store, draft.nerdFontIcons, {
           getAllTools: options.getAllTools ?? (() => []),
           toolFiltering: draft.toolFiltering,
+          resolveAgentSettings: options.resolveAgentSettings,
         });
         options.store.reload();
       } else if (action === "save") {
