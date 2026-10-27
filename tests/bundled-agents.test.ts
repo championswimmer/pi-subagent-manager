@@ -105,7 +105,10 @@ test("bundled agents load cleanly, resolve their tools, and carry only advisory 
       suggestions.every((alias) => !alias.includes("/")),
       type.name,
     );
-    assert.ok(suggestions.every((alias) => /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(alias)), type.name);
+    assert.ok(
+      suggestions.every((alias) => /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(alias)),
+      type.name,
+    );
     assert.equal(type.models, undefined);
     const eligible = suggestions.map((id) => ({ model: { provider: "advisory", id } }));
     assert.equal(selectPreferredModel(type, eligible), undefined);
@@ -117,14 +120,26 @@ test("researcher is non-delegating; tasker stays cheap-first", (t) => {
   const store = new ConfigStore(fixture(t));
   const researcher = store.get("researcher");
   assert.deepEqual(researcher.tools?.allow, [
-    "read", "bash", "grep", "find", "ls", "agent_update", "agent_pause",
+    "read",
+    "bash",
+    "grep",
+    "find",
+    "ls",
+    "agent_update",
+    "agent_pause",
   ]);
   assert.equal(researcher.thinkingLevel, "high");
   assert.deepEqual(store.get("architect").modelSuggestions, [
-    "opus-5.5", "gpt-6-astra", "fable-5.1", "kimi-k3",
+    "opus-5.5",
+    "gpt-6-astra",
+    "fable-5.1",
+    "kimi-k3",
   ]);
   assert.deepEqual(researcher.modelSuggestions, [
-    "gemini-4-argon", "gpt-5.6-sol", "muse-spark-1.3", "sonnet-5.5",
+    "gemini-4-argon",
+    "gpt-5.6-sol",
+    "muse-spark-1.3",
+    "sonnet-5.5",
   ]);
   assert.ok(store.get("writer").modelSuggestions?.includes("gemini-4-argon"));
   assert.equal(store.get("tasker").thinkingLevel, "low");

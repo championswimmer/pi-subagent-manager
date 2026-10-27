@@ -3,9 +3,16 @@ import test from "node:test";
 // Production receives this public implementation from the editor factory.
 import { KeybindingsManager } from "../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
 import {
-  setKeybindings, TuiMainScreen, type EditorTheme, type KeybindingsConfig, type Terminal,
+  setKeybindings,
+  TuiMainScreen,
+  type EditorTheme,
+  type KeybindingsConfig,
+  type Terminal,
 } from "@earendil-works/pi-tui";
-import { AgentNavigationEditor, type AgentNavigationEditorOptions } from "../src/ui/agent-navigation-editor.ts";
+import {
+  AgentNavigationEditor,
+  type AgentNavigationEditorOptions,
+} from "../src/ui/agent-navigation-editor.ts";
 
 const UP = "\x1b[A";
 const DOWN = "\x1b[B";
@@ -16,28 +23,55 @@ const END = "\x1b[F";
 const theme: EditorTheme = {
   borderColor: (text) => text,
   selectList: {
-    selectedPrefix: (text) => text, selectedText: (text) => text,
-    description: (text) => text, scrollInfo: (text) => text, noMatch: (text) => text,
+    selectedPrefix: (text) => text,
+    selectedText: (text) => text,
+    description: (text) => text,
+    scrollInfo: (text) => text,
+    noMatch: (text) => text,
   },
 };
 class FakeTerminal implements Terminal {
-  columns = 80; rows = 24; kittyProtocolActive = false;
-  start() {} stop() {} async drainInput() {} write() {} moveBy() {}
-  hideCursor() {} showCursor() {} clearLine() {} clearFromCursor() {}
-  clearScreen() {} setTitle() {} setProgress() {}
+  columns = 80;
+  rows = 24;
+  kittyProtocolActive = false;
+  start() {}
+  stop() {}
+  async drainInput() {}
+  write() {}
+  moveBy() {}
+  hideCursor() {}
+  showCursor() {}
+  clearLine() {}
+  clearFromCursor() {}
+  clearScreen() {}
+  setTitle() {}
+  setProgress() {}
 }
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
-function setup(bindings: KeybindingsConfig = {}, options: Partial<AgentNavigationEditorOptions> = {}) {
+function setup(
+  bindings: KeybindingsConfig = {},
+  options: Partial<AgentNavigationEditorOptions> = {},
+) {
   const keys = new KeybindingsManager(bindings);
   setKeybindings(keys);
   let opens = 0;
   let collapses = 0;
   let expands = 0;
   const editor = new AgentNavigationEditor(new TuiMainScreen(new FakeTerminal()), theme, keys, {
-    openTree: () => { opens++; }, canOpen: () => true,
-    collapseWidget: () => { collapses++; }, canCollapse: () => true,
-    expandWidget: () => { expands++; }, canExpand: () => false,
-    generation: () => 1, ...options,
+    openTree: () => {
+      opens++;
+    },
+    canOpen: () => true,
+    collapseWidget: () => {
+      collapses++;
+    },
+    canCollapse: () => true,
+    expandWidget: () => {
+      expands++;
+    },
+    canExpand: () => false,
+    generation: () => 1,
+    ...options,
   });
   editor.focused = true;
   editor.render(80);
@@ -99,9 +133,12 @@ test("Down never opens: empty, end-of-draft, exhausted history, and ordinary his
 
 test("only physical unmodified Left opens, and configured conflicts retain precedence", async () => {
   for (const bindings of [
-    { "tui.editor.cursorLeft": "ctrl+b" }, { "tui.editor.historyNext": "left" },
-    { "tui.editor.deleteCharForward": "left" }, { "tui.editor.jumpForward": "left" },
-    { "app.clear": "left" }, { "tui.altScreen.lineDown": "left" },
+    { "tui.editor.cursorLeft": "ctrl+b" },
+    { "tui.editor.historyNext": "left" },
+    { "tui.editor.deleteCharForward": "left" },
+    { "tui.editor.jumpForward": "left" },
+    { "app.clear": "left" },
+    { "tui.altScreen.lineDown": "left" },
   ] satisfies KeybindingsConfig[]) {
     const { editor, opens } = setup(bindings);
     editor.handleInput(LEFT);
@@ -120,7 +157,10 @@ test("only physical unmodified Left opens, and configured conflicts retain prece
 test("extension shortcuts and application actions dispatch once and prevent navigation", async () => {
   const { editor, opens } = setup();
   let shortcuts = 0;
-  const shortcut = (data: string) => { shortcuts++; return data === LEFT; };
+  const shortcut = (data: string) => {
+    shortcuts++;
+    return data === LEFT;
+  };
   editor.onExtensionShortcut = shortcut;
   editor.handleInput(LEFT);
   await settle();
@@ -129,7 +169,9 @@ test("extension shortcuts and application actions dispatch once and prevent navi
   assert.equal(opens(), 0);
   const second = setup({ "app.model.select": "left" });
   let actions = 0;
-  second.editor.onAction("app.model.select", () => { actions++; });
+  second.editor.onAction("app.model.select", () => {
+    actions++;
+  });
   second.editor.handleInput(LEFT);
   await settle();
   assert.equal(actions, 1);
@@ -160,8 +202,18 @@ test("jump cancellation and bracketed paste, including recursive suffixes, never
 test("active autocomplete owns input", async () => {
   const { editor, opens } = setup();
   editor.setAutocompleteProvider({
-    async getSuggestions() { return { items: [{ value: "one", label: "one" }, { value: "two", label: "two" }], prefix: "" }; },
-    applyCompletion(lines, cursorLine, cursorCol) { return { lines, cursorLine, cursorCol }; },
+    async getSuggestions() {
+      return {
+        items: [
+          { value: "one", label: "one" },
+          { value: "two", label: "two" },
+        ],
+        prefix: "",
+      };
+    },
+    applyCompletion(lines, cursorLine, cursorCol) {
+      return { lines, cursorLine, cursorCol };
+    },
   });
   editor.handleInput("\t");
   await settle();
@@ -174,8 +226,18 @@ test("active autocomplete owns input", async () => {
 test("repeated Left coalesces until the entire browser interaction finishes", async () => {
   let opens = 0;
   let close!: () => void;
-  const open = new Promise<void>((resolve) => { close = resolve; });
-  const { editor } = setup({}, { openTree: () => { opens++; return open; } });
+  const open = new Promise<void>((resolve) => {
+    close = resolve;
+  });
+  const { editor } = setup(
+    {},
+    {
+      openTree: () => {
+        opens++;
+        return open;
+      },
+    },
+  );
   for (let i = 0; i < 3; i++) editor.handleInput(LEFT);
   await settle();
   assert.equal(opens, 1);
@@ -187,7 +249,15 @@ test("repeated Left coalesces until the entire browser interaction finishes", as
 });
 
 test("queued transitions revalidate generation, focus, ownership, draft, cursor, disposal, and input", async () => {
-  for (const change of ["generation", "focus", "ownership", "draft", "cursor", "dispose", "input"]) {
+  for (const change of [
+    "generation",
+    "focus",
+    "ownership",
+    "draft",
+    "cursor",
+    "dispose",
+    "input",
+  ]) {
     let generation = 1;
     let allowed = true;
     const { editor, opens } = setup({}, { generation: () => generation, canOpen: () => allowed });
@@ -209,10 +279,18 @@ test("queued transitions revalidate generation, focus, ownership, draft, cursor,
 test("navigation failures report errors and release ownership", async () => {
   let errors = 0;
   let opens = 0;
-  const { editor } = setup({}, {
-    openTree: async () => { opens++; throw new Error("failed to mount"); },
-    onError: () => { errors++; },
-  });
+  const { editor } = setup(
+    {},
+    {
+      openTree: async () => {
+        opens++;
+        throw new Error("failed to mount");
+      },
+      onError: () => {
+        errors++;
+      },
+    },
+  );
   editor.handleInput(LEFT);
   await settle();
   assert.equal(errors, 1);
@@ -224,7 +302,10 @@ test("navigation failures report errors and release ownership", async () => {
 test("startup history hydration and replacement history preserve intentional repeated prompts", () => {
   for (const startup of [true, false]) {
     const { editor } = setup({}, startup ? {} : { initialHistory: ["oldest", "newest"] });
-    if (startup) { editor.addToHistory("oldest"); editor.addToHistory("newest"); }
+    if (startup) {
+      editor.addToHistory("oldest");
+      editor.addToHistory("newest");
+    }
     editor.addToHistory("oldest");
     editor.handleInput(UP);
     assert.equal(editor.getText(), "oldest");
@@ -236,11 +317,19 @@ test("startup history hydration and replacement history preserve intentional rep
 test("openTree runs in the validated microtask", async () => {
   let generation = 1;
   let openedGeneration: number | undefined;
-  const { editor } = setup({}, {
-    generation: () => generation, openTree: () => { openedGeneration = generation; },
-  });
+  const { editor } = setup(
+    {},
+    {
+      generation: () => generation,
+      openTree: () => {
+        openedGeneration = generation;
+      },
+    },
+  );
   editor.handleInput(LEFT);
-  queueMicrotask(() => { generation = 2; });
+  queueMicrotask(() => {
+    generation = 2;
+  });
   await settle();
   assert.equal(openedGeneration, 1);
 });
@@ -255,11 +344,16 @@ test("global keybinding conflicts disable navigation", async () => {
 
 test("Left steps minimal → full before opening the tree, and Right never expands", async () => {
   let collapsed = true;
-  const { editor, opens, expands, collapses } = setup({}, {
-    canExpand: () => collapsed,
-    canCollapse: () => !collapsed,
-    expandWidget: () => { collapsed = false; },
-  });
+  const { editor, opens, expands, collapses } = setup(
+    {},
+    {
+      canExpand: () => collapsed,
+      canCollapse: () => !collapsed,
+      expandWidget: () => {
+        collapsed = false;
+      },
+    },
+  );
   editor.setText("keep");
   editor.handleInput(HOME);
   editor.handleInput(LEFT);
@@ -330,11 +424,36 @@ test("Right respects shortcuts, remappings, focus, paste, jumps and autocomplete
   const cases: Array<[KeybindingsConfig, (editor: AgentNavigationEditor) => void]> = [
     [{ "tui.editor.cursorRight": "ctrl+f" }, () => {}],
     [{ "tui.editor.deleteCharForward": "right" }, () => {}],
-    [{}, (editor) => { editor.focused = false; }],
-    [{}, (editor) => { editor.onExtensionShortcut = (data) => data === RIGHT; }],
-    [{}, (editor) => { editor.handleInput("\x1b[200~paste"); }],
-    [{ "tui.editor.jumpForward": "ctrl+]" }, (editor) => { editor.handleInput("\x1d"); }],
-    [{}, (editor) => { editor.isShowingAutocomplete = () => true; }],
+    [
+      {},
+      (editor) => {
+        editor.focused = false;
+      },
+    ],
+    [
+      {},
+      (editor) => {
+        editor.onExtensionShortcut = (data) => data === RIGHT;
+      },
+    ],
+    [
+      {},
+      (editor) => {
+        editor.handleInput("\x1b[200~paste");
+      },
+    ],
+    [
+      { "tui.editor.jumpForward": "ctrl+]" },
+      (editor) => {
+        editor.handleInput("\x1d");
+      },
+    ],
+    [
+      {},
+      (editor) => {
+        editor.isShowingAutocomplete = () => true;
+      },
+    ],
   ];
   for (const [index, [bindings, prepare]] of cases.entries()) {
     const { editor, collapses } = setup(bindings);
@@ -354,9 +473,13 @@ test("queued collapse is cancelled by new input, disposal, root replacement or c
   for (const cancel of ["input", "dispose", "root", "mode", "focus"] as const) {
     let generation = 1;
     let allowed = true;
-    const { editor, collapses } = setup({}, {
-      generation: () => generation, canCollapse: () => allowed,
-    });
+    const { editor, collapses } = setup(
+      {},
+      {
+        generation: () => generation,
+        canCollapse: () => allowed,
+      },
+    );
     editor.handleInput(RIGHT);
     if (cancel === "input") editor.handleInput("x");
     if (cancel === "dispose") editor.dispose();
@@ -371,10 +494,18 @@ test("queued collapse is cancelled by new input, disposal, root replacement or c
 test("collapse failures report errors and release ownership", async () => {
   let errors = 0;
   let attempts = 0;
-  const { editor } = setup({}, {
-    collapseWidget: async () => { attempts++; throw new Error("failed collapse"); },
-    onError: () => { errors++; },
-  });
+  const { editor } = setup(
+    {},
+    {
+      collapseWidget: async () => {
+        attempts++;
+        throw new Error("failed collapse");
+      },
+      onError: () => {
+        errors++;
+      },
+    },
+  );
   editor.handleInput(RIGHT);
   await settle();
   editor.handleInput(RIGHT);
@@ -386,10 +517,14 @@ test("collapse failures report errors and release ownership", async () => {
 test("host callbacks survive stock dispatch, replacement, and errors", () => {
   const { editor } = setup();
   const replacement = () => {};
-  editor.onChange = () => { editor.onChange = replacement; };
+  editor.onChange = () => {
+    editor.onChange = replacement;
+  };
   editor.handleInput("x");
   assert.equal(editor.onChange, replacement);
-  const failingShortcut = () => { throw new Error("shortcut failure"); };
+  const failingShortcut = () => {
+    throw new Error("shortcut failure");
+  };
   editor.onExtensionShortcut = failingShortcut;
   assert.throws(() => editor.handleInput(LEFT), /shortcut failure/);
   assert.equal(editor.onExtensionShortcut, failingShortcut);

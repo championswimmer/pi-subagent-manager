@@ -92,8 +92,11 @@ export class AgentNavigationEditor extends CustomEditor {
 
   override handleInput(data: string): void {
     const outer = this.dispatchDepth === 0;
-    const direction = this.ordinaryArrow(data, "left") ? "left"
-      : this.ordinaryArrow(data, "right") ? "right" : undefined;
+    const direction = this.ordinaryArrow(data, "left")
+      ? "left"
+      : this.ordinaryArrow(data, "right")
+        ? "right"
+        : undefined;
     if (outer && (!direction || (this.pending && this.pending !== direction))) this.inputEpoch++;
     const previousPaste = this.pastePending;
     const wasPaste = previousPaste || data.includes("\x1b[200~");
@@ -105,10 +108,12 @@ export class AgentNavigationEditor extends CustomEditor {
     const cursor = this.getCursor();
     const text = this.getText();
     const lines = text.split("\n");
-    const atBoundary = direction === "left"
-      ? cursor.line === 0 && cursor.col === 0
-      : direction === "right" && cursor.line === lines.length - 1 &&
-        cursor.col === lines.at(-1)!.length;
+    const atBoundary =
+      direction === "left"
+        ? cursor.line === 0 && cursor.col === 0
+        : direction === "right" &&
+          cursor.line === lines.length - 1 &&
+          cursor.col === lines.at(-1)!.length;
     const eligible =
       outer &&
       direction !== undefined &&
@@ -180,7 +185,8 @@ export class AgentNavigationEditor extends CustomEditor {
     const action = (): "expand" | "tree" | "collapse" | undefined => {
       if (direction === "right")
         return this.navigation.collapseWidget && (this.navigation.canCollapse?.() ?? false)
-          ? "collapse" : undefined;
+          ? "collapse"
+          : undefined;
       if (this.navigation.expandWidget && (this.navigation.canExpand?.() ?? false)) return "expand";
       return this.navigation.canOpen() ? "tree" : undefined;
     };
@@ -207,9 +213,13 @@ export class AgentNavigationEditor extends CustomEditor {
       try {
         // Call within the checked microtask: an extra Promise.then would leave
         // a gap in which root ownership could change after validation.
-        void Promise.resolve(chosen === "tree" ? this.navigation.openTree()
-          : chosen === "expand" ? this.navigation.expandWidget!()
-          : this.navigation.collapseWidget!())
+        void Promise.resolve(
+          chosen === "tree"
+            ? this.navigation.openTree()
+            : chosen === "expand"
+              ? this.navigation.expandWidget!()
+              : this.navigation.collapseWidget!(),
+        )
           .catch((error: unknown) => this.navigation.onError?.(error))
           .finally(() => {
             this.pending = undefined;

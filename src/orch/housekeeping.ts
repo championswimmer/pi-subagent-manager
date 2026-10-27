@@ -3,10 +3,7 @@ import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ThreadActivity } from "../types.ts";
 import { modelIdentity } from "../prefs/models.ts";
-import {
-  captureHousekeepingUsageSession,
-  reportHousekeepingUsage,
-} from "./housekeeping-usage.ts";
+import { captureHousekeepingUsageSession, reportHousekeepingUsage } from "./housekeeping-usage.ts";
 
 /**
  * [labs] Housekeeping: a user-chosen model names each active agent's current work in one line.

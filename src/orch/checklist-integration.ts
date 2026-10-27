@@ -15,7 +15,11 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 
 export const CHECKLIST_PACKAGE = "pi-checklist";
 export const CHECKLIST_MIN_MAJOR = 3;
-export const CHECKLIST_TOOL_NAMES = ["checklist_create", "checklist_read", "checklist_update"] as const;
+export const CHECKLIST_TOOL_NAMES = [
+  "checklist_create",
+  "checklist_read",
+  "checklist_update",
+] as const;
 /** Session entry type pi-checklist appends for every snapshot (src/index.ts CUSTOM_TYPE). */
 const CHECKLIST_ENTRY_TYPE = "pi-checklist";
 const PREFS_FILE = "pi-checklist.json";
@@ -32,7 +36,10 @@ export interface ChecklistStatus {
 /** Strict `x.y.z`: prereleases/build metadata fail closed. */
 export function checklistVersionSupported(version: unknown): boolean {
   if (typeof version !== "string") return false;
-  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(version.trim());
+  const match =
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(
+      version.trim(),
+    );
   return match !== null && Number(match[1]) >= CHECKLIST_MIN_MAJOR;
 }
 
@@ -42,7 +49,9 @@ function owningPackage(file: string): { name?: unknown; version?: unknown } | un
     const manifest = join(directory, "package.json");
     if (existsSync(manifest)) {
       const parsed: unknown = JSON.parse(readFileSync(manifest, "utf8"));
-      return typeof parsed === "object" && parsed !== null ? (parsed as { name?: unknown; version?: unknown }) : undefined;
+      return typeof parsed === "object" && parsed !== null
+        ? (parsed as { name?: unknown; version?: unknown })
+        : undefined;
     }
     const parent = dirname(directory);
     if (parent === directory) return undefined;
@@ -51,7 +60,9 @@ function owningPackage(file: string): { name?: unknown; version?: unknown } | un
 }
 
 /** Identity/version/reachability of the loaded checklist tools; metadata state is separate. */
-export function detectChecklistPackage(pi: Pick<ExtensionAPI, "getAllTools" | "getActiveTools">): ChecklistStatus {
+export function detectChecklistPackage(
+  pi: Pick<ExtensionAPI, "getAllTools" | "getActiveTools">,
+): ChecklistStatus {
   try {
     const all = pi.getAllTools();
     const active = new Set(pi.getActiveTools());
@@ -62,14 +73,20 @@ export function detectChecklistPackage(pi: Pick<ExtensionAPI, "getAllTools" | "g
         return { eligible: false, reason: `pi-checklist tool ${name} is not loaded and active` };
       const path = tool.sourceInfo?.path;
       if (typeof path !== "string" || !isAbsolute(path))
-        return { eligible: false, reason: `${name} does not come from a pi-checklist package file` };
+        return {
+          eligible: false,
+          reason: `${name} does not come from a pi-checklist package file`,
+        };
       sources.add(realpathSync(path));
     }
     if (sources.size !== 1)
       return { eligible: false, reason: "checklist tools come from different extensions" };
     const pkg = owningPackage([...sources][0]!);
     if (pkg?.name !== CHECKLIST_PACKAGE)
-      return { eligible: false, reason: "checklist tools are not provided by the pi-checklist package" };
+      return {
+        eligible: false,
+        reason: "checklist tools are not provided by the pi-checklist package",
+      };
     if (!checklistVersionSupported(pkg.version))
       return {
         eligible: false,
@@ -77,7 +94,10 @@ export function detectChecklistPackage(pi: Pick<ExtensionAPI, "getAllTools" | "g
       };
     return { eligible: true };
   } catch (error) {
-    return { eligible: false, reason: `could not verify pi-checklist: ${error instanceof Error ? error.message : String(error)}` };
+    return {
+      eligible: false,
+      reason: `could not verify pi-checklist: ${error instanceof Error ? error.message : String(error)}`,
+    };
   }
 }
 
@@ -98,7 +118,8 @@ function snapshotOf(value: unknown): { metaEnabled?: unknown } | undefined {
 
 /** The snapshot an entry carries, using pi-checklist's loadFromBranch() rules. */
 function entrySnapshot(entry: BranchEntry): { metaEnabled?: unknown } | undefined {
-  if (entry.type === "custom" && entry.customType === CHECKLIST_ENTRY_TYPE) return snapshotOf(entry.data);
+  if (entry.type === "custom" && entry.customType === CHECKLIST_ENTRY_TYPE)
+    return snapshotOf(entry.data);
   if (
     entry.type === "message" &&
     entry.message?.role === "toolResult" &&
@@ -188,7 +209,10 @@ export function checklistStatus(
   const installed = detectChecklistPackage(pi);
   if (!installed.eligible) return installed;
   if (!mirror.metaEnabled(ctx))
-    return { eligible: false, reason: "pi-checklist task meta is disabled; run /checklist settings meta" };
+    return {
+      eligible: false,
+      reason: "pi-checklist task meta is disabled; run /checklist settings meta",
+    };
   return { eligible: true };
 }
 

@@ -12,7 +12,9 @@ export function respondDiagnosticCapability(payload: unknown): void {
     if (!payload || typeof payload !== "object") return;
     const respond = (payload as { respond?: unknown }).respond;
     if (typeof respond === "function") respond({ version: packageVersion, protocol: 1 });
-  } catch { /* Discovery callbacks must not escape into EventBus stderr. */ }
+  } catch {
+    /* Discovery callbacks must not escape into EventBus stderr. */
+  }
 }
 
 function clean(value: string, limit: number): string {

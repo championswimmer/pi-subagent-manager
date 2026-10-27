@@ -25,7 +25,20 @@ type Menu = { title: string; rows: DialogRow[]; selectedId: string | undefined }
 async function run(
   t: TestContext,
   actions: (string | undefined)[],
-  { settings, trusted = false, width = 80, rows = 24, root: existingRoot, agentDir: existingAgentDir, global, project, onMenu, uiTheme = theme, checklistStatus, extensions = [] } = {} as {
+  {
+    settings,
+    trusted = false,
+    width = 80,
+    rows = 24,
+    root: existingRoot,
+    agentDir: existingAgentDir,
+    global,
+    project,
+    onMenu,
+    uiTheme = theme,
+    checklistStatus,
+    extensions = [],
+  } = {} as {
     extensions?: string[];
     settings?: ManagerSettings;
     trusted?: boolean;
@@ -49,12 +62,16 @@ async function run(
   }
   const userFile = join(agentDir, "subagent-manager", "settings.json");
   const projectFile = join(root, ".pi", "agent", "subagent-manager", "settings.json");
-  for (const [file, contents] of [[userFile, global ?? settings], [projectFile, project]] as const) {
+  for (const [file, contents] of [
+    [userFile, global ?? settings],
+    [projectFile, project],
+  ] as const) {
     if (contents === undefined) continue;
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, typeof contents === "string" ? contents : JSON.stringify(contents));
   }
-  const initialSettings = settings ?? loadManagerSettings({ cwd: root, agentDir, includeProject: trusted }).settings;
+  const initialSettings =
+    settings ?? loadManagerSettings({ cwd: root, agentDir, includeProject: trusted }).settings;
   const notifications: string[] = [];
   const notificationTypes: string[] = [];
   const menus: Menu[] = [];
@@ -98,7 +115,9 @@ async function run(
     checklistStatus,
     apply: () => {
       applied++;
-      appliedSettings.push(loadManagerSettings({ cwd: root, agentDir, includeProject: trusted }).settings);
+      appliedSettings.push(
+        loadManagerSettings({ cwd: root, agentDir, includeProject: trusted }).settings,
+      );
     },
   });
   // Every settings flow stays inside one outer overlay with a fixed frame height.
@@ -129,10 +148,16 @@ test("[lab] Loader style previews all families and states together, and saves ev
       settings: { ...DEFAULT_MANAGER_SETTINGS, nerdFontIcons: true },
     });
     const chooser = result.menus[1]!;
-    assert.equal(result.menus[0]!.rows.find((row) => row.id === "loaderStyle")!.label, "[lab] Loader style");
+    assert.equal(
+      result.menus[0]!.rows.find((row) => row.id === "loaderStyle")!.label,
+      "[lab] Loader style",
+    );
     assert.equal(result.value(0, "loaderStyle"), "Circle");
     assert.equal(chooser.title, "[lab] Loader style");
-    assert.deepEqual(chooser.rows.map((row) => row.id), [...LOADER_STYLES]);
+    assert.deepEqual(
+      chooser.rows.map((row) => row.id),
+      [...LOADER_STYLES],
+    );
     const preview = result.renders.find((lines) => lines[0]?.includes("[lab] Loader style"))!;
     assert.ok(preview, "loader picker rendered");
     const text = stripTerminalSequences(preview.join("\n"));
@@ -180,21 +205,34 @@ test("[lab] Loader style cancel, restore-defaults and narrow layouts preserve dr
 
 test("lab labels remain in the name column with saved dots between name and value", async (t) => {
   const result = await run(t, ["nerdFontIcons", "cancel"], {
-    trusted: true, width: 100,
+    trusted: true,
+    width: 100,
     global: { nerdFontIcons: true },
     project: { nerdFontIcons: false },
   });
-  for (const id of ["costDisplay", "nerdFontIcons", "loaderStyle", "subagentExtensions", "checklistIntegration", "finalRecap"]) {
+  for (const id of [
+    "costDisplay",
+    "nerdFontIcons",
+    "loaderStyle",
+    "subagentExtensions",
+    "checklistIntegration",
+    "finalRecap",
+  ]) {
     const row = result.menus[0]!.rows.find((row) => row.id === id)!;
     assert.match(row.label, /^\[lab\] /);
     assert.equal(row.renderLabel, undefined, "lab label is not stripped by a formatter");
   }
-  const line = result.renders.at(-1)!.map(stripTerminalSequences)
+  const line = result.renders
+    .at(-1)!
+    .map(stripTerminalSequences)
     .find((line) => line.includes("› [lab] Nerd Font icons"))!;
   assert.ok(line, "selected lab setting is rendered with its label");
   assert.match(line, /› \[lab\] Nerd Font icons\s+│ ● ● │ On/);
-  assert.equal(savedIndicators(result.menus[1]!, "nerdFontIcons"), "<accent>●</accent> <warning>●</warning>",
-    "unsaved toggle leaves the persisted indicator pair unchanged");
+  assert.equal(
+    savedIndicators(result.menus[1]!, "nerdFontIcons"),
+    "<accent>●</accent> <warning>●</warning>",
+    "unsaved toggle leaves the persisted indicator pair unchanged",
+  );
 });
 
 test("[lab] Nerd Font setting toggles, persists, and cancels without saving", async (t) => {
@@ -234,14 +272,19 @@ test("selecting each subagent mode saves it", async (t) => {
     assert.equal(field.value, "Opportunistic");
     const chooser = result.menus[1]!;
     assert.equal(chooser.title, "Subagent Mode");
-    assert.deepEqual(chooser.rows.map((row) => row.id), ["off", "opportunistic", "orchestration"]);
+    assert.deepEqual(
+      chooser.rows.map((row) => row.id),
+      ["off", "opportunistic", "orchestration"],
+    );
     assert.ok(chooser.rows.every((row) => row.value && row.help));
     assert.equal(result.value(2, "subagentMode"), label);
     assert.equal(result.applied, 1);
     assert.equal(result.loaded.settings.subagentMode, mode);
     assert.equal(result.loaded.diagnostics.length, 0);
-    assert.equal(JSON.parse(readFileSync(result.userFile, "utf8")).subagentMode,
-      mode === DEFAULT_MANAGER_SETTINGS.subagentMode ? undefined : mode);
+    assert.equal(
+      JSON.parse(readFileSync(result.userFile, "utf8")).subagentMode,
+      mode === DEFAULT_MANAGER_SETTINGS.subagentMode ? undefined : mode,
+    );
   }
 });
 
@@ -262,9 +305,11 @@ test("mode selection and chooser cancellation remain draft-only", async (t) => {
 for (const width of [32, 80]) {
   test(`mode screen and chooser render bordered frames at width ${width}`, async (t) => {
     const result = await run(t, ["subagentMode", "orchestration", "cancel"], { width });
-    assert.ok(result.renders.every((lines) =>
-      lines[0]!.includes("Subagent Mode") || lines[0]!.includes("Agents settings"),
-    ));
+    assert.ok(
+      result.renders.every(
+        (lines) => lines[0]!.includes("Subagent Mode") || lines[0]!.includes("Agents settings"),
+      ),
+    );
     // The shared two-column menu clips labels at narrow widths; the selected
     // mode's full name remains visible in its help and in the settings value.
     assert.ok(result.renders[1]!.join("\n").includes(width === 32 ? "Orchestra" : "Orchestration"));
@@ -282,29 +327,42 @@ test("Model Picking saves all three modes", async (t) => {
     const field = result.menus[0]!.rows.find((row) => row.id === "modelSelection")!;
     assert.equal(field.label, "Model Picking");
     assert.equal(field.value, "Pick First (scoped)");
-    assert.equal(result.menus[0]!.rows.some((row) => row.id === "scopedModelFiltering"), false);
+    assert.equal(
+      result.menus[0]!.rows.some((row) => row.id === "scopedModelFiltering"),
+      false,
+    );
     const chooser = result.menus[1]!;
     assert.equal(chooser.title, "Model Picking");
-    assert.deepEqual(chooser.rows.map((row) => row.id), [
-      "pick-first-available", "pick-first-scoped", "use-current",
-    ]);
-    assert.deepEqual(chooser.rows.map((row) => row.label), [
-      "Pick First (available)", "Pick First (scoped)", "Use Current",
-    ]);
+    assert.deepEqual(
+      chooser.rows.map((row) => row.id),
+      ["pick-first-available", "pick-first-scoped", "use-current"],
+    );
+    assert.deepEqual(
+      chooser.rows.map((row) => row.label),
+      ["Pick First (available)", "Pick First (scoped)", "Use Current"],
+    );
     assert.ok(chooser.rows.every((row) => row.value && row.help));
     assert.equal(result.value(2, "modelSelection"), label);
     assert.equal(result.applied, 1);
     assert.equal(result.loaded.settings.modelSelection, mode);
     assert.equal(result.loaded.diagnostics.length, 0);
     const stored = JSON.parse(readFileSync(result.userFile, "utf8"));
-    assert.equal(stored.modelSelection,
-      mode === DEFAULT_MANAGER_SETTINGS.modelSelection ? undefined : mode);
+    assert.equal(
+      stored.modelSelection,
+      mode === DEFAULT_MANAGER_SETTINGS.modelSelection ? undefined : mode,
+    );
     assert.equal(Object.hasOwn(stored, "scopedModelFiltering"), false);
   }
 });
 
 test("Model Picking and other edits stay draft-only until save; chooser cancellation keeps the value", async (t) => {
-  const canceled = await run(t, ["modelSelection", "pick-first-available", "maxLevels", "4", "cancel"]);
+  const canceled = await run(t, [
+    "modelSelection",
+    "pick-first-available",
+    "maxLevels",
+    "4",
+    "cancel",
+  ]);
   assert.equal(canceled.applied, 0);
   assert.equal(existsSync(canceled.userFile), false);
   assert.deepEqual(canceled.loaded.settings, DEFAULT_MANAGER_SETTINGS);
@@ -320,7 +378,9 @@ test("Model Picking and other edits stay draft-only until save; chooser cancella
 });
 
 test("Model Picking saves to a trusted project", async (t) => {
-  const saved = await run(t, ["scope", "confirm", "modelSelection", "use-current", "save"], { trusted: true });
+  const saved = await run(t, ["scope", "confirm", "modelSelection", "use-current", "save"], {
+    trusted: true,
+  });
   assert.equal(saved.applied, 1);
   assert.equal(saved.loaded.settings.modelSelection, "use-current");
   assert.equal(JSON.parse(readFileSync(saved.projectFile, "utf8")).modelSelection, "use-current");
@@ -329,8 +389,15 @@ test("Model Picking saves to a trusted project", async (t) => {
 
 test("save shows a warning-colored changes value only while the draft is dirty", async (t) => {
   const result = await run(t, [
-    "modelSelection", "pick-first-available", "modelSelection", "pick-first-scoped",
-    "maxLevels", "5", "defaults", "user", "cancel",
+    "modelSelection",
+    "pick-first-available",
+    "modelSelection",
+    "pick-first-scoped",
+    "maxLevels",
+    "5",
+    "defaults",
+    "user",
+    "cancel",
   ]);
   const settingsMenus = result.menus.filter((menu) => menu.title.startsWith("Agents settings"));
   const save = (index: number) => settingsMenus[index]!.rows.find((row) => row.id === "save")!;
@@ -348,9 +415,11 @@ test("save shows a warning-colored changes value only while the draft is dirty",
 for (const width of [32, 80]) {
   test(`Model Picking screen and chooser render bordered frames at width ${width}`, async (t) => {
     const result = await run(t, ["modelSelection", "use-current", "cancel"], { width });
-    assert.ok(result.renders.every((lines) =>
-      lines[0]!.includes("Model Picking") || lines[0]!.includes("Agents settings"),
-    ));
+    assert.ok(
+      result.renders.every(
+        (lines) => lines[0]!.includes("Model Picking") || lines[0]!.includes("Agents settings"),
+      ),
+    );
     assert.equal(result.value(2, "modelSelection"), "Use Current");
     assert.ok(result.renders[2]!.join("\n").includes("Use Current"));
   });
@@ -375,7 +444,8 @@ test("Global to Project confirmation Cancel and Esc preserve files, scope and un
 
 test("confirming Project creates an empty layer immediately and preserves edits until save", async (t) => {
   const result = await run(t, ["maxLevels", "5", "scope", "confirm", "cancel"], {
-    trusted: true, global: { maxThreads: 20 },
+    trusted: true,
+    global: { maxThreads: 20 },
   });
   assert.equal(result.value(3, "scope"), "Current Project");
   assert.equal(result.value(3, "maxLevels"), "5");
@@ -394,12 +464,16 @@ test("confirming Project creates an empty layer immediately and preserves edits 
 
 test("edits made before confirming Project are saved there rather than copied into Global", async (t) => {
   const result = await run(t, ["maxLevels", "8", "scope", "confirm", "save"], {
-    trusted: true, global: { maxLevels: 5, maxThreads: 20 },
+    trusted: true,
+    global: { maxLevels: 5, maxThreads: 20 },
   });
   assert.equal(result.value(3, "maxLevels"), "8");
   assert.equal(result.value(3, "scope"), "Current Project");
   assert.deepEqual(JSON.parse(readFileSync(result.projectFile, "utf8")), { maxLevels: 8 });
-  assert.deepEqual(JSON.parse(readFileSync(result.userFile, "utf8")), { maxLevels: 5, maxThreads: 20 });
+  assert.deepEqual(JSON.parse(readFileSync(result.userFile, "utf8")), {
+    maxLevels: 5,
+    maxThreads: 20,
+  });
   assert.equal(result.applied, 1);
   assert.equal(result.appliedSettings[0]!.maxLevels, 8);
   assert.equal(result.appliedSettings[0]!.maxThreads, 20);
@@ -421,7 +495,10 @@ test("restore defaults deletes the chosen scope's file and resets the draft", as
   assert.equal(result.value(2, "toolFiltering"), "Allowed (except blocked)");
   assert.deepEqual(result.loaded.settings, DEFAULT_MANAGER_SETTINGS);
   assert.equal(existsSync(result.userFile), false, "file is deleted, not rewritten");
-  assert.match(result.notifications.join("\n"), new RegExp(`Deleted ${result.userFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.match(
+    result.notifications.join("\n"),
+    new RegExp(`Deleted ${result.userFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+  );
 });
 
 test("restore defaults picker shows the exact file each choice deletes and can be cancelled", async (t) => {
@@ -431,7 +508,10 @@ test("restore defaults picker shows the exact file each choice deletes and can b
     project: { maxThreads: 9 },
   });
   const picker = result.menus[1]!;
-  assert.deepEqual(picker.rows.map((row) => row.id), ["user", "project", "cancel"]);
+  assert.deepEqual(
+    picker.rows.map((row) => row.id),
+    ["user", "project", "cancel"],
+  );
   assert.equal(picker.selectedId, "cancel");
   assert.ok(picker.rows.find((row) => row.id === "user")!.help!.includes(result.userFile));
   assert.ok(picker.rows.find((row) => row.id === "project")!.help!.includes(result.projectFile));
@@ -464,12 +544,18 @@ test("restore defaults Global keeps the project file and tolerates a missing fil
   assert.equal(existsSync(result.projectFile), true);
   assert.match(result.notifications.join("\n"), /nothing to delete/);
   assert.equal(result.value(2, "maxThreads"), "9");
-  assert.deepEqual(result.notificationTypes.filter((type) => type === "error"), []);
+  assert.deepEqual(
+    result.notificationTypes.filter((type) => type === "error"),
+    [],
+  );
 });
 
 test("restore defaults omits Project when untrusted", async (t) => {
   const result = await run(t, ["defaults", undefined, "cancel"]);
-  assert.deepEqual(result.menus[1]!.rows.map((row) => row.id), ["user", "cancel"]);
+  assert.deepEqual(
+    result.menus[1]!.rows.map((row) => row.id),
+    ["user", "cancel"],
+  );
   assert.equal(result.applied, 0);
 });
 
@@ -479,19 +565,29 @@ test("trusted projects without a project file start Global; confirmed Project sa
   assert.deepEqual(JSON.parse(readFileSync(global.userFile, "utf8")), { maxLevels: 7 });
   assert.equal(existsSync(global.projectFile), false);
 
-  const project = await run(t, ["scope", "confirm", "subagentMode", "off", "maxThreads", "9", "save"], {
-    trusted: true, root: global.root,
-  });
+  const project = await run(
+    t,
+    ["scope", "confirm", "subagentMode", "off", "maxThreads", "9", "save"],
+    {
+      trusted: true,
+      root: global.root,
+    },
+  );
   assert.equal(project.applied, 1);
   assert.equal(project.loaded.settings.maxLevels, 7);
-  assert.deepEqual(JSON.parse(readFileSync(project.projectFile, "utf8")), { maxThreads: 9, subagentMode: "off" });
+  assert.deepEqual(JSON.parse(readFileSync(project.projectFile, "utf8")), {
+    maxThreads: 9,
+    subagentMode: "off",
+  });
   assert.deepEqual(JSON.parse(readFileSync(project.userFile, "utf8")), { maxLevels: 7 });
 });
 
 test("Project to Global Cancel and Esc leave overrides and draft unchanged", async (t) => {
   for (const choice of ["cancel", undefined]) {
     const result = await run(t, ["maxLevels", "9", "scope", choice, "cancel"], {
-      trusted: true, global: { maxLevels: 5 }, project: { maxLevels: 7 },
+      trusted: true,
+      global: { maxLevels: 5 },
+      project: { maxLevels: 7 },
     });
     assert.equal(result.value(0, "scope"), "Current Project");
     assert.equal(result.menus[2]!.selectedId, "cancel");
@@ -509,7 +605,9 @@ test("Project to Global Cancel and Esc leave overrides and draft unchanged", asy
 
 test("Project to Global Confirm clears project immediately, discards draft, reloads and routes future saves", async (t) => {
   const result = await run(t, ["maxLevels", "9", "scope", "confirm", "cancel"], {
-    trusted: true, global: { maxLevels: 5 }, project: { maxLevels: 7, widgetMode: "minimal" },
+    trusted: true,
+    global: { maxLevels: 5 },
+    project: { maxLevels: 7, widgetMode: "minimal" },
   });
   assert.equal(result.value(3, "scope"), "Global");
   assert.equal(result.value(3, "maxLevels"), "5");
@@ -528,8 +626,14 @@ test("Project to Global Confirm clears project immediately, discards draft, relo
 });
 
 test("save scope is project-local and ignores the legacy remembered preference", async (t) => {
-  const project = await run(t, ["scope", "confirm", "cancel"], { trusted: true, global: { maxLevels: 5 } });
-  writeFileSync(join(dirname(project.userFile), "ui-state.json"), JSON.stringify({ saveScope: "user" }));
+  const project = await run(t, ["scope", "confirm", "cancel"], {
+    trusted: true,
+    global: { maxLevels: 5 },
+  });
+  writeFileSync(
+    join(dirname(project.userFile), "ui-state.json"),
+    JSON.stringify({ saveScope: "user" }),
+  );
   const reopened = await run(t, ["cancel"], { trusted: true, root: project.root });
   assert.equal(reopened.value(0, "scope"), "Current Project");
   const otherProject = await run(t, ["cancel"], { trusted: true, agentDir: project.root });
@@ -540,12 +644,16 @@ test("save scope is project-local and ignores the legacy remembered preference",
 
 test("untrusted projects ignore project values and cannot switch scope or alter the project file", async (t) => {
   const result = await run(t, ["scope", "maxLevels", "6", "save"], {
-    global: { maxLevels: 5 }, project: { maxLevels: 7 },
+    global: { maxLevels: 5 },
+    project: { maxLevels: 7 },
   });
   assert.equal(result.value(0, "scope"), "Global");
   assert.equal(result.value(0, "maxLevels"), "5");
   assert.ok(result.notifications.some((message) => message.includes("trusted project")));
-  assert.equal(result.menus.some((menu) => menu.title.includes("project settings?")), false);
+  assert.equal(
+    result.menus.some((menu) => menu.title.includes("project settings?")),
+    false,
+  );
   assert.deepEqual(JSON.parse(readFileSync(result.projectFile, "utf8")), { maxLevels: 7 });
   assert.deepEqual(JSON.parse(readFileSync(result.userFile, "utf8")), { maxLevels: 6 });
   assert.equal(result.loaded.settings.maxLevels, 6);
@@ -556,27 +664,37 @@ test("untrusted projects ignore project values and cannot switch scope or alter 
 
 test("Save rejects concurrent Global or Project changes instead of persisting stale draft overrides", async (t) => {
   for (const scope of ["global", "project"] as const) {
-    for (const changedLayer of scope === "global" ? ["global"] as const : ["global", "project"] as const) {
+    for (const changedLayer of scope === "global"
+      ? (["global"] as const)
+      : (["global", "project"] as const)) {
       const result = await run(t, ["maxThreads", "9", "save", "cancel"], {
         trusted: true,
         global: { maxLevels: 5 },
         ...(scope === "project" ? { project: { maxLevels: 7 } } : {}),
         onMenu: (_menu, index, files) => {
           if (index !== 1) return;
-          writeFileSync(changedLayer === "global" ? files.userFile : files.projectFile,
-            JSON.stringify({ maxLevels: 8 }));
+          writeFileSync(
+            changedLayer === "global" ? files.userFile : files.projectFile,
+            JSON.stringify({ maxLevels: 8 }),
+          );
         },
       });
       assert.equal(result.applied, 0, `${scope} save rejected after ${changedLayer} changed`);
-      assert.ok(result.notifications.some((message) => /Settings changed on disk.*Reopen settings/.test(message)));
+      assert.ok(
+        result.notifications.some((message) =>
+          /Settings changed on disk.*Reopen settings/.test(message),
+        ),
+      );
       assert.equal(result.notificationTypes.at(-1), "error");
       assert.equal(result.value(2, "maxThreads"), "9", "failed save preserves unsaved draft");
       assert.match(result.menus[2]!.title, /unsaved/);
-      assert.deepEqual(JSON.parse(readFileSync(result.userFile, "utf8")),
-        { maxLevels: changedLayer === "global" ? 8 : 5 });
+      assert.deepEqual(JSON.parse(readFileSync(result.userFile, "utf8")), {
+        maxLevels: changedLayer === "global" ? 8 : 5,
+      });
       if (scope === "project") {
-        assert.deepEqual(JSON.parse(readFileSync(result.projectFile, "utf8")),
-          { maxLevels: changedLayer === "project" ? 8 : 7 });
+        assert.deepEqual(JSON.parse(readFileSync(result.projectFile, "utf8")), {
+          maxLevels: changedLayer === "project" ? 8 : 7,
+        });
       } else assert.equal(existsSync(result.projectFile), false);
     }
   }
@@ -585,7 +703,8 @@ test("Save rejects concurrent Global or Project changes instead of persisting st
 test("confirming Project rejects concurrent changes without creating or overwriting its file", async (t) => {
   for (const changedLayer of ["global", "project"] as const) {
     const result = await run(t, ["scope", "confirm", "cancel"], {
-      trusted: true, global: { maxLevels: 5 },
+      trusted: true,
+      global: { maxLevels: 5 },
       onMenu: (menu, _index, files) => {
         if (menu.title !== "Enable project settings?") return;
         const file = changedLayer === "global" ? files.userFile : files.projectFile;
@@ -595,9 +714,14 @@ test("confirming Project rejects concurrent changes without creating or overwrit
     });
     assert.equal(result.applied, 0);
     assert.equal(result.value(2, "scope"), "Global");
-    assert.ok(result.notifications.some((message) => /Settings changed on disk.*Reopen settings/.test(message)));
-    assert.deepEqual(JSON.parse(readFileSync(result.userFile, "utf8")),
-      { maxLevels: changedLayer === "global" ? 8 : 5 });
+    assert.ok(
+      result.notifications.some((message) =>
+        /Settings changed on disk.*Reopen settings/.test(message),
+      ),
+    );
+    assert.deepEqual(JSON.parse(readFileSync(result.userFile, "utf8")), {
+      maxLevels: changedLayer === "global" ? 8 : 5,
+    });
     if (changedLayer === "project")
       assert.deepEqual(JSON.parse(readFileSync(result.projectFile, "utf8")), { maxLevels: 8 });
     else assert.equal(existsSync(result.projectFile), false);
@@ -607,22 +731,32 @@ test("confirming Project rejects concurrent changes without creating or overwrit
 test("confirming Global rejects concurrent changes without deleting the project file or dropping edits", async (t) => {
   for (const changedLayer of ["global", "project"] as const) {
     const result = await run(t, ["maxLevels", "9", "scope", "confirm", "cancel"], {
-      trusted: true, global: { maxLevels: 5 }, project: { maxLevels: 7 },
+      trusted: true,
+      global: { maxLevels: 5 },
+      project: { maxLevels: 7 },
       onMenu: (menu, _index, files) => {
         if (!menu.title.startsWith("Clear project settings")) return;
-        writeFileSync(changedLayer === "global" ? files.userFile : files.projectFile,
-          JSON.stringify({ maxLevels: 8 }));
+        writeFileSync(
+          changedLayer === "global" ? files.userFile : files.projectFile,
+          JSON.stringify({ maxLevels: 8 }),
+        );
       },
     });
     assert.equal(result.applied, 0);
     assert.equal(result.value(3, "scope"), "Current Project");
     assert.equal(result.value(3, "maxLevels"), "9");
     assert.match(result.menus[3]!.title, /unsaved/);
-    assert.ok(result.notifications.some((message) => /Settings changed on disk.*Reopen settings/.test(message)));
-    assert.deepEqual(JSON.parse(readFileSync(result.userFile, "utf8")),
-      { maxLevels: changedLayer === "global" ? 8 : 5 });
-    assert.deepEqual(JSON.parse(readFileSync(result.projectFile, "utf8")),
-      { maxLevels: changedLayer === "project" ? 8 : 7 });
+    assert.ok(
+      result.notifications.some((message) =>
+        /Settings changed on disk.*Reopen settings/.test(message),
+      ),
+    );
+    assert.deepEqual(JSON.parse(readFileSync(result.userFile, "utf8")), {
+      maxLevels: changedLayer === "global" ? 8 : 5,
+    });
+    assert.deepEqual(JSON.parse(readFileSync(result.projectFile, "utf8")), {
+      maxLevels: changedLayer === "project" ? 8 : 7,
+    });
   }
 });
 
@@ -632,16 +766,28 @@ test("invalid files warn on opening and reloading and contribute no values or do
     global: JSON.stringify({ maxLevels: 5, unknownSetting: true }),
     project: "{",
   });
-  const globalWarnings = result.notifications.filter((message) => message.startsWith(result.userFile + ":"));
-  const projectWarnings = result.notifications.filter((message) => message.startsWith(result.projectFile + ":"));
-  assert.equal(globalWarnings.length, 2, "initial and post-switch reload both report invalid global settings");
+  const globalWarnings = result.notifications.filter((message) =>
+    message.startsWith(result.userFile + ":"),
+  );
+  const projectWarnings = result.notifications.filter((message) =>
+    message.startsWith(result.projectFile + ":"),
+  );
+  assert.equal(
+    globalWarnings.length,
+    2,
+    "initial and post-switch reload both report invalid global settings",
+  );
   assert.match(globalWarnings[0]!, /Unknown settings key: unknownSetting/);
   assert.equal(projectWarnings.length, 1);
   assert.match(projectWarnings[0]!, /Invalid JSON/);
   assert.ok(result.notificationTypes.every((type) => type === "warning"));
   assert.equal(result.value(0, "maxLevels"), String(DEFAULT_MANAGER_SETTINGS.maxLevels));
   assert.equal(savedIndicators(result.menus[0]!, "maxLevels"), "   ");
-  assert.equal(result.value(0, "scope"), "Current Project", "invalid project file can still be explicitly cleared");
+  assert.equal(
+    result.value(0, "scope"),
+    "Current Project",
+    "invalid project file can still be explicitly cleared",
+  );
   assert.equal(result.value(2, "scope"), "Global");
   assert.equal(existsSync(result.projectFile), false);
   assert.deepEqual(result.appliedSettings[0], DEFAULT_MANAGER_SETTINGS);
@@ -649,7 +795,11 @@ test("invalid files warn on opening and reloading and contribute no values or do
 
 test("destructive scope warning renders delete, discard and no-undo consequences at 60x12", async (t) => {
   const result = await run(t, ["scope", "cancel", "cancel"], {
-    trusted: true, width: 60, rows: 12, global: { maxLevels: 5 }, project: { maxLevels: 7 },
+    trusted: true,
+    width: 60,
+    rows: 12,
+    global: { maxLevels: 5 },
+    project: { maxLevels: 7 },
   });
   const confirmation = result.renders[1]!;
   const text = stripTerminalSequences(confirmation.join("\n"));
@@ -687,30 +837,59 @@ const savedIndicators = (menu: Menu, id: string) => {
 test("saved provenance distinguishes both layers, equal values, and projects reverting a default", async (t) => {
   for (const width of [20, 40, 80]) {
     const result = await run(t, ["maxLevels", "8", "cancel"], {
-      trusted: true, width,
-      global: { maxLevels: 5, widgetMode: "minimal", maxConcurrent: DEFAULT_MANAGER_SETTINGS.maxConcurrent },
-      project: { maxLevels: DEFAULT_MANAGER_SETTINGS.maxLevels, widgetMode: "minimal", maxConcurrent: 8 },
+      trusted: true,
+      width,
+      global: {
+        maxLevels: 5,
+        widgetMode: "minimal",
+        maxConcurrent: DEFAULT_MANAGER_SETTINGS.maxConcurrent,
+      },
+      project: {
+        maxLevels: DEFAULT_MANAGER_SETTINGS.maxLevels,
+        widgetMode: "minimal",
+        maxConcurrent: 8,
+      },
     });
     assert.equal(result.value(0, "maxLevels"), String(DEFAULT_MANAGER_SETTINGS.maxLevels));
-    assert.equal(savedIndicators(result.menus[0]!, "maxLevels"),
-      "<accent>●</accent> <warning>●</warning>");
-    assert.equal(savedIndicators(result.menus[0]!, "widgetMode"), "<accent>●</accent>  ",
-      "project value equal to global does not count as changed");
-    assert.equal(savedIndicators(result.menus[0]!, "maxConcurrent"), "  <warning>●</warning>",
-      "explicit global value equal to default does not count as changed");
+    assert.equal(
+      savedIndicators(result.menus[0]!, "maxLevels"),
+      "<accent>●</accent> <warning>●</warning>",
+    );
+    assert.equal(
+      savedIndicators(result.menus[0]!, "widgetMode"),
+      "<accent>●</accent>  ",
+      "project value equal to global does not count as changed",
+    );
+    assert.equal(
+      savedIndicators(result.menus[0]!, "maxConcurrent"),
+      "  <warning>●</warning>",
+      "explicit global value equal to default does not count as changed",
+    );
     assert.equal(savedIndicators(result.menus[0]!, "modelSelection"), "   ");
-    assert.equal(savedIndicators(result.menus[1]!, "maxLevels"), savedIndicators(result.menus[0]!, "maxLevels"),
-      "unsaved edits do not change saved provenance");
-    assert.doesNotMatch(result.menus[0]!.rows.find((row) => row.id === "maxLevels")!.help!, /Dots|Saved:/);
+    assert.equal(
+      savedIndicators(result.menus[1]!, "maxLevels"),
+      savedIndicators(result.menus[0]!, "maxLevels"),
+      "unsaved edits do not change saved provenance",
+    );
+    assert.doesNotMatch(
+      result.menus[0]!.rows.find((row) => row.id === "maxLevels")!.help!,
+      /Dots|Saved:/,
+    );
     const text = stripTerminalSequences(result.renders[0]!.join("\n"));
     assert.match(text, /Saved:/);
     assert.match(text, /Global/);
     assert.match(text.replace(/[│\n]/g, " ").replace(/\s+/g, " "), /Current Project/);
     assert.match(text, /Both/);
     assert.ok(result.renders.every((lines) => lines.every((line) => visibleWidth(line) <= width)));
-    assert.equal(result.menus[1]!.selectedId, "maxLevels", "the captured final frame focuses the changed setting");
-    assert.ok(stripTerminalSequences(result.renders.at(-1)!.join("\n")).includes("● ●"),
-      "both saved-layer dots render when Maximum levels is selected, including narrow viewports");
+    assert.equal(
+      result.menus[1]!.selectedId,
+      "maxLevels",
+      "the captured final frame focuses the changed setting",
+    );
+    assert.ok(
+      stripTerminalSequences(result.renders.at(-1)!.join("\n")).includes("● ●"),
+      "both saved-layer dots render when Maximum levels is selected, including narrow viewports",
+    );
   }
 });
 
@@ -723,9 +902,15 @@ test("saved legend keeps themed dots in a fixed bottom row, outside muted hints"
   } as Theme;
   const result = await run(t, ["maxLevels", "8", "cancel"], { uiTheme });
   assert.ok(result.renders.some((frame) => frame.some((line) => line.includes("Saved:"))));
-  for (const lines of result.renders.filter((frame) => frame.some((line) => line.includes("Saved:")))) {
+  for (const lines of result.renders.filter((frame) =>
+    frame.some((line) => line.includes("Saved:")),
+  )) {
     const legendIndex = lines.findIndex((line) => line.includes("Saved:"));
-    assert.equal(legendIndex, lines.length - 4, "legend stays immediately above the footer separator");
+    assert.equal(
+      legendIndex,
+      lines.length - 4,
+      "legend stays immediately above the footer separator",
+    );
     const legend = lines[legendIndex]!;
     assert.match(legend, /\x1b\[35m●\x1b\[0m Global/);
     assert.match(legend, /\x1b\[33m●\x1b\[0m Current Project/);
@@ -739,22 +924,35 @@ test("Footer aggregate provenance covers all three settings while the submenu ma
     global: { costDisplay: "pi-status", costValue: "total" },
     project: { costDisplay: "pi-status", costIcon: "wallet" },
   });
-  assert.equal(savedIndicators(result.menus[0]!, "costDisplay"),
-    "<accent>●</accent> <warning>●</warning>");
-  assert.equal(result.menus[0]!.rows.find((row) => row.id === "costDisplay")!.label, "[lab] Footer display");
+  assert.equal(
+    savedIndicators(result.menus[0]!, "costDisplay"),
+    "<accent>●</accent> <warning>●</warning>",
+  );
+  assert.equal(
+    result.menus[0]!.rows.find((row) => row.id === "costDisplay")!.label,
+    "[lab] Footer display",
+  );
   assert.equal(savedIndicators(result.menus[1]!, "location"), "<accent>●</accent>  ");
   assert.equal(savedIndicators(result.menus[1]!, "value"), "<accent>●</accent>  ");
   assert.equal(savedIndicators(result.menus[1]!, "icon"), "  <warning>●</warning>");
   assert.equal(savedIndicators(result.menus[1]!, "back"), "");
-  assert.equal(savedIndicators(result.menus[3]!, "icon"), "  <warning>●</warning>",
-    "changing the draft icon keeps the persisted dot");
+  assert.equal(
+    savedIndicators(result.menus[3]!, "icon"),
+    "  <warning>●</warning>",
+    "changing the draft icon keeps the persisted dot",
+  );
   assert.equal(result.applied, 0);
-  assert.deepEqual(JSON.parse(readFileSync(result.projectFile, "utf8")), { costDisplay: "pi-status", costIcon: "wallet" });
+  assert.deepEqual(JSON.parse(readFileSync(result.projectFile, "utf8")), {
+    costDisplay: "pi-status",
+    costIcon: "wallet",
+  });
 });
 
 test("sparse Project saves inherit future global changes and Restore defaults removes the project file", async (t) => {
   const saved = await run(t, ["maxThreads", "9", "save"], {
-    trusted: true, global: { maxLevels: 5, widgetMode: "minimal" }, project: {},
+    trusted: true,
+    global: { maxLevels: 5, widgetMode: "minimal" },
+    project: {},
   });
   assert.deepEqual(JSON.parse(readFileSync(saved.projectFile, "utf8")), { maxThreads: 9 });
   writeFileSync(saved.userFile, JSON.stringify({ maxLevels: 6, widgetMode: "full" }));
@@ -762,16 +960,28 @@ test("sparse Project saves inherit future global changes and Restore defaults re
   assert.equal(reopened.value(0, "maxLevels"), "6");
   assert.equal(reopened.value(0, "widgetMode"), "Full");
   assert.equal(reopened.value(0, "maxThreads"), "9");
-  const restored = await run(t, ["defaults", "project", "cancel"], { trusted: true, root: saved.root });
+  const restored = await run(t, ["defaults", "project", "cancel"], {
+    trusted: true,
+    root: saved.root,
+  });
   assert.equal(existsSync(restored.projectFile), false);
-  assert.deepEqual(restored.loaded.settings, { ...DEFAULT_MANAGER_SETTINGS, maxLevels: 6, widgetMode: "full" });
-  assert.deepEqual(JSON.parse(readFileSync(restored.userFile, "utf8")), { maxLevels: 6, widgetMode: "full" });
+  assert.deepEqual(restored.loaded.settings, {
+    ...DEFAULT_MANAGER_SETTINGS,
+    maxLevels: 6,
+    widgetMode: "full",
+  });
+  assert.deepEqual(JSON.parse(readFileSync(restored.userFile, "utf8")), {
+    maxLevels: 6,
+    widgetMode: "full",
+  });
 });
 
 for (const width of [20, 40, 80]) {
   test(`scope confirmation and two-layer settings fit bordered frames at width ${width}`, async (t) => {
     const result = await run(t, ["scope", "confirm", "scope", "cancel", "cancel"], {
-      trusted: true, width, global: { maxLevels: 5 },
+      trusted: true,
+      width,
+      global: { maxLevels: 5 },
     });
     assert.equal(result.menus[1]!.selectedId, "cancel");
     assert.equal(result.menus[3]!.selectedId, "cancel");
@@ -806,8 +1016,10 @@ test("Tool Filtering saves every mode", async (t) => {
     assert.equal(result.applied, 1);
     assert.equal(result.loaded.settings.toolFiltering, mode);
     assert.equal(result.loaded.diagnostics.length, 0);
-    assert.equal(JSON.parse(readFileSync(result.userFile, "utf8")).toolFiltering,
-      mode === DEFAULT_MANAGER_SETTINGS.toolFiltering ? undefined : mode);
+    assert.equal(
+      JSON.parse(readFileSync(result.userFile, "utf8")).toolFiltering,
+      mode === DEFAULT_MANAGER_SETTINGS.toolFiltering ? undefined : mode,
+    );
   }
 });
 
@@ -826,7 +1038,9 @@ test("Tool Filtering selection and chooser cancellation remain draft-only", asyn
 });
 
 test("Tool Filtering saves to a trusted project and restores defaults without saving on cancel", async (t) => {
-  const saved = await run(t, ["scope", "confirm", "toolFiltering", "all-except-blocked", "save"], { trusted: true });
+  const saved = await run(t, ["scope", "confirm", "toolFiltering", "all-except-blocked", "save"], {
+    trusted: true,
+  });
   assert.equal(saved.applied, 1);
   assert.equal(saved.loaded.settings.toolFiltering, "all-except-blocked");
   assert.equal(
@@ -857,22 +1071,33 @@ for (const width of [32, 80]) {
 }
 
 test("Status Widget saves each mode", async (t) => {
-  for (const [mode, label] of [["full", "Full"], ["minimal", "Minimal"]]) {
+  for (const [mode, label] of [
+    ["full", "Full"],
+    ["minimal", "Minimal"],
+  ]) {
     const result = await run(t, ["widgetMode", mode, "save"]);
     const field = result.menus[0]!.rows.find((row) => row.id === "widgetMode")!;
     assert.equal(field.label, "Status Widget");
     assert.equal(field.value, "Full");
     const chooser = result.menus[1]!;
     assert.equal(chooser.title, "Status Widget");
-    assert.deepEqual(chooser.rows.map((row) => row.id), ["full", "minimal"]);
-    assert.deepEqual(chooser.rows.map((row) => row.label), ["Full", "Minimal"]);
+    assert.deepEqual(
+      chooser.rows.map((row) => row.id),
+      ["full", "minimal"],
+    );
+    assert.deepEqual(
+      chooser.rows.map((row) => row.label),
+      ["Full", "Minimal"],
+    );
     assert.ok(chooser.rows.every((row) => row.value && row.help));
     assert.equal(result.value(2, "widgetMode"), label);
     assert.equal(result.applied, 1);
     assert.equal(result.loaded.settings.widgetMode, mode);
     assert.equal(result.loaded.diagnostics.length, 0);
-    assert.equal(JSON.parse(readFileSync(result.userFile, "utf8")).widgetMode,
-      mode === DEFAULT_MANAGER_SETTINGS.widgetMode ? undefined : mode);
+    assert.equal(
+      JSON.parse(readFileSync(result.userFile, "utf8")).widgetMode,
+      mode === DEFAULT_MANAGER_SETTINGS.widgetMode ? undefined : mode,
+    );
   }
 });
 
@@ -897,7 +1122,9 @@ test("Status Widget cancellation leaves settings unchanged and defaults restore 
 });
 
 test("Status Widget saves to a trusted project", async (t) => {
-  const result = await run(t, ["scope", "confirm", "widgetMode", "minimal", "save"], { trusted: true });
+  const result = await run(t, ["scope", "confirm", "widgetMode", "minimal", "save"], {
+    trusted: true,
+  });
   assert.equal(result.applied, 1);
   assert.equal(JSON.parse(readFileSync(result.projectFile, "utf8")).widgetMode, "minimal");
   assert.equal(existsSync(result.userFile), false);
@@ -906,9 +1133,11 @@ test("Status Widget saves to a trusted project", async (t) => {
 for (const width of [32, 80]) {
   test(`Status Widget screen and chooser render bordered frames at width ${width}`, async (t) => {
     const result = await run(t, ["widgetMode", "minimal", "cancel"], { width });
-    assert.ok(result.renders.every((lines) =>
-      lines[0]!.includes("Status Widget") || lines[0]!.includes("Agents settings"),
-    ));
+    assert.ok(
+      result.renders.every(
+        (lines) => lines[0]!.includes("Status Widget") || lines[0]!.includes("Agents settings"),
+      ),
+    );
     assert.ok(result.renders[1]!.join("\n").includes("Full"));
     assert.ok(result.renders[1]!.join("\n").includes("Minimal"));
     assert.equal(result.value(2, "widgetMode"), "Minimal");
@@ -927,7 +1156,9 @@ test("[lab] Final Recap toggles and saves to both scopes", async (t) => {
   assert.equal(JSON.parse(readFileSync(enabled.userFile, "utf8")).finalRecap, true);
 
   const disabled = await run(t, ["finalRecap", "save"], {
-    global: { finalRecap: true }, project: {}, trusted: true,
+    global: { finalRecap: true },
+    project: {},
+    trusted: true,
   });
   assert.equal(disabled.value(1, "finalRecap"), "Off");
   assert.equal(disabled.loaded.settings.finalRecap, false);
@@ -959,15 +1190,23 @@ for (const width of [32, 80]) {
   });
 }
 
-
 test("Footer display opens a submenu and saves all three locations with integration IDs", async (t) => {
   for (const mode of ["pi-footer-event", "pi-footer-status", "pi-status"] as const) {
     const result = await run(t, ["costDisplay", "location", mode, "back", "save"]);
-    assert.equal(result.menus[0]!.rows.find((row) => row.id === "costDisplay")!.label, "[lab] Footer display");
+    assert.equal(
+      result.menus[0]!.rows.find((row) => row.id === "costDisplay")!.label,
+      "[lab] Footer display",
+    );
     assert.equal(result.menus[1]!.title, "[lab] Footer display");
-    assert.deepEqual(result.menus[1]!.rows.map((row) => row.id), ["location", "value", "icon", "back"]);
+    assert.deepEqual(
+      result.menus[1]!.rows.map((row) => row.id),
+      ["location", "value", "icon", "back"],
+    );
     const locations = result.menus[2]!.rows;
-    assert.deepEqual(locations.map((row) => row.id), ["pi-status", "pi-footer-status", "pi-footer-event"]);
+    assert.deepEqual(
+      locations.map((row) => row.id),
+      ["pi-status", "pi-footer-status", "pi-footer-event"],
+    );
     assert.equal(locations[1]!.value, "subagent_cost");
     assert.equal(locations[2]!.value, "subagent_cost");
     assert.match(locations[2]!.help!, /pi-footer:update-widget/);
@@ -979,7 +1218,10 @@ test("Footer display opens a submenu and saves all three locations with integrat
 test("Footer display saves both cost values independently of location", async (t) => {
   for (const value of ["subagents", "total"] as const) {
     const result = await run(t, ["costDisplay", "value", value, "back", "save"]);
-    assert.deepEqual(result.menus[2]!.rows.map((row) => row.id), ["subagents", "total"]);
+    assert.deepEqual(
+      result.menus[2]!.rows.map((row) => row.id),
+      ["subagents", "total"],
+    );
     assert.equal(result.loaded.settings.costValue, value);
     assert.equal(result.loaded.settings.costDisplay, DEFAULT_MANAGER_SETTINGS.costDisplay);
   }
@@ -990,12 +1232,22 @@ test("Footer icon offers three previews from the draft Nerd Font setting", async
     for (const icon of ["money", "coins", "wallet"] as const) {
       const result = await run(t, [
         ...(nerd ? ["nerdFontIcons"] : []),
-        "costDisplay", "icon", icon, "back", "save",
+        "costDisplay",
+        "icon",
+        icon,
+        "back",
+        "save",
       ]);
       const picker = result.menus.find((menu) => menu.title.startsWith("Footer icon"))!;
       assert.equal(picker.title, `Footer icon · ${nerd ? "Nerd Font" : "Emoji"}`);
-      assert.deepEqual(picker.rows.map((row) => row.id), ["money", "coins", "wallet"]);
-      assert.deepEqual(picker.rows.map((row) => row.value), nerd ? ["\uf0d6", "\uede8", "\uee1e"] : ["💵", "🪙", "👛"]);
+      assert.deepEqual(
+        picker.rows.map((row) => row.id),
+        ["money", "coins", "wallet"],
+      );
+      assert.deepEqual(
+        picker.rows.map((row) => row.value),
+        nerd ? ["\uf0d6", "\uede8", "\uee1e"] : ["💵", "🪙", "👛"],
+      );
       assert.equal(result.loaded.settings.costIcon, icon);
       assert.equal(result.loaded.settings.nerdFontIcons, nerd);
     }
@@ -1003,11 +1255,40 @@ test("Footer icon offers three previews from the draft Nerd Font setting", async
 });
 
 test("Footer edits remain draft-only, picker Esc preserves values, and defaults reset choices", async (t) => {
-  const cancelled = await run(t, ["costDisplay", "location", "pi-status", "value", "total", "icon", "wallet", "back", "cancel"]);
+  const cancelled = await run(t, [
+    "costDisplay",
+    "location",
+    "pi-status",
+    "value",
+    "total",
+    "icon",
+    "wallet",
+    "back",
+    "cancel",
+  ]);
   assert.equal(cancelled.applied, 0);
   assert.equal(existsSync(cancelled.userFile), false);
-  const settings = { ...DEFAULT_MANAGER_SETTINGS, costDisplay: "pi-status", costValue: "total", costIcon: "wallet" } as const;
-  const escaped = await run(t, ["costDisplay", "location", undefined, "value", undefined, "icon", undefined, undefined, "save"], { settings });
+  const settings = {
+    ...DEFAULT_MANAGER_SETTINGS,
+    costDisplay: "pi-status",
+    costValue: "total",
+    costIcon: "wallet",
+  } as const;
+  const escaped = await run(
+    t,
+    [
+      "costDisplay",
+      "location",
+      undefined,
+      "value",
+      undefined,
+      "icon",
+      undefined,
+      undefined,
+      "save",
+    ],
+    { settings },
+  );
   assert.equal(escaped.loaded.settings.costDisplay, "pi-status");
   assert.equal(escaped.loaded.settings.costValue, "total");
   assert.equal(escaped.loaded.settings.costIcon, "wallet");
@@ -1017,7 +1298,23 @@ test("Footer edits remain draft-only, picker Esc preserves values, and defaults 
 
 test("Footer submenu and pickers fit narrow terminals and save to project scope", async (t) => {
   for (const width of [20, 40, 60]) {
-    const result = await run(t, ["scope", "confirm", "costDisplay", "location", "pi-footer-event", "value", "total", "icon", "coins", "back", "save"], { width, trusted: true });
+    const result = await run(
+      t,
+      [
+        "scope",
+        "confirm",
+        "costDisplay",
+        "location",
+        "pi-footer-event",
+        "value",
+        "total",
+        "icon",
+        "coins",
+        "back",
+        "save",
+      ],
+      { width, trusted: true },
+    );
     assert.ok(result.renders.every((lines) => lines.every((line) => visibleWidth(line) <= width)));
     assert.equal(result.loaded.settings.costValue, "total");
     assert.equal(result.loaded.settings.costIcon, "coins");
@@ -1031,28 +1328,35 @@ test("[lab] Subagent extensions chooses files, saves, cancels and handles empty/
   const file = join(root, "extensions", "one.ts");
   const second = join(root, "extensions", "two.ts");
   const enabled = await run(t, ["subagentExtensions", file, "back", "save"], {
-    root, extensions: ["one.ts", "two.ts"],
+    root,
+    extensions: ["one.ts", "two.ts"],
   });
   assert.deepEqual(enabled.loaded.settings.subagentExtensions, [file]);
-  assert.equal(enabled.menus[0]!.rows.find((row) => row.id === "subagentExtensions")!.value, "None");
+  assert.equal(
+    enabled.menus[0]!.rows.find((row) => row.id === "subagentExtensions")!.value,
+    "None",
+  );
   assert.equal(enabled.menus[2]!.rows.find((row) => row.id === file)!.value, "On");
   assert.equal(enabled.menus[2]!.rows.find((row) => row.id === second)!.value, "Off");
   const cancelled = await run(t, ["subagentExtensions", second, undefined, "cancel"], { root });
   assert.deepEqual(cancelled.loaded.settings.subagentExtensions, [file]);
   assert.equal(cancelled.applied, 0);
   const legacyAll = await run(t, ["subagentExtensions", undefined, "save"], {
-    root, settings: { ...DEFAULT_MANAGER_SETTINGS, subagentExtensions: true },
+    root,
+    settings: { ...DEFAULT_MANAGER_SETTINGS, subagentExtensions: true },
   });
   assert.deepEqual(legacyAll.loaded.settings.subagentExtensions, [file, second]);
   const legacy = await run(t, ["subagentExtensions", file, undefined, "save"], {
-    root, settings: { ...DEFAULT_MANAGER_SETTINGS, subagentExtensions: true },
+    root,
+    settings: { ...DEFAULT_MANAGER_SETTINGS, subagentExtensions: true },
   });
   assert.deepEqual(legacy.loaded.settings.subagentExtensions, [second]);
   const disabled = await run(t, ["subagentExtensions", second, undefined, "save"], { root });
   assert.deepEqual(disabled.loaded.settings.subagentExtensions, []);
   const unavailable = join(root, "missing.ts");
   const stale = await run(t, ["subagentExtensions", unavailable, undefined, "save"], {
-    root, settings: { ...DEFAULT_MANAGER_SETTINGS, subagentExtensions: [unavailable] },
+    root,
+    settings: { ...DEFAULT_MANAGER_SETTINGS, subagentExtensions: [unavailable] },
   });
   assert.equal(stale.menus[1]!.rows.find((row) => row.id === unavailable)!.value, "Unavailable");
   assert.deepEqual(stale.loaded.settings.subagentExtensions, []);
@@ -1067,20 +1371,41 @@ test("extension chooser lists auto-discovered files from custom agentDir and onl
   const root = mkdtempSync(join(tmpdir(), "pi-auto-extension-picker-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const agentDir = join(root, "custom-agent-dir");
-  const userFiles = ["standalone.ts", "standalone.js", "nested/index.ts"].map((file) => join(agentDir, "extensions", file));
-  const projectFiles = ["standalone.ts", "nested/index.js"].map((file) => join(root, ".pi", "extensions", file));
+  const userFiles = ["standalone.ts", "standalone.js", "nested/index.ts"].map((file) =>
+    join(agentDir, "extensions", file),
+  );
+  const projectFiles = ["standalone.ts", "nested/index.js"].map((file) =>
+    join(root, ".pi", "extensions", file),
+  );
   for (const file of [...userFiles, ...projectFiles]) {
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, "export default function() {}");
   }
   // No settings.json or package manifest is needed for these extensions.
   const userFile = userFiles[0]!;
-  const untrusted = await run(t, ["subagentExtensions", userFile, "back", "save"], { root, agentDir });
-  assert.deepEqual(untrusted.menus[1]!.rows.filter((row) => row.id !== "back").map((row) => row.id).sort(), [...userFiles].sort());
+  const untrusted = await run(t, ["subagentExtensions", userFile, "back", "save"], {
+    root,
+    agentDir,
+  });
+  assert.deepEqual(
+    untrusted.menus[1]!.rows.filter((row) => row.id !== "back")
+      .map((row) => row.id)
+      .sort(),
+    [...userFiles].sort(),
+  );
   assert.deepEqual(untrusted.loaded.settings.subagentExtensions, [userFile]);
   const projectFile = projectFiles[0]!;
-  const trusted = await run(t, ["subagentExtensions", projectFile, "back", "save"], { root, agentDir, trusted: true });
-  assert.deepEqual(trusted.menus[1]!.rows.filter((row) => row.id !== "back").map((row) => row.id).sort(), [...userFiles, ...projectFiles].sort());
+  const trusted = await run(t, ["subagentExtensions", projectFile, "back", "save"], {
+    root,
+    agentDir,
+    trusted: true,
+  });
+  assert.deepEqual(
+    trusted.menus[1]!.rows.filter((row) => row.id !== "back")
+      .map((row) => row.id)
+      .sort(),
+    [...userFiles, ...projectFiles].sort(),
+  );
   assert.deepEqual(trusted.loaded.settings.subagentExtensions, [userFile, projectFile].sort());
 });
 test("Nerd Fonts off filters loader previews, uses ASCII fallback, and saves non-Nerd selections", async (t) => {
@@ -1130,7 +1455,10 @@ test("turning Nerd Fonts off preserves the saved family and turning them back on
 });
 
 const ELIGIBLE = () => ({ eligible: true }) as ChecklistStatus;
-const UNAVAILABLE = (reason = "pi-checklist task meta is disabled") => () => ({ eligible: false, reason }) as ChecklistStatus;
+const UNAVAILABLE =
+  (reason = "pi-checklist task meta is disabled") =>
+  () =>
+    ({ eligible: false, reason }) as ChecklistStatus;
 
 test("[lab] Checklist integration row is always visible with requirements, muted when unavailable", async (t) => {
   for (const status of [undefined, UNAVAILABLE(), ELIGIBLE]) {
@@ -1151,12 +1479,19 @@ test("[lab] Checklist integration row is always visible with requirements, muted
       assert.match(row.help!, /Cannot be turned On/);
     }
   }
-  const reason = await run(t, ["cancel"], { checklistStatus: UNAVAILABLE("pi-checklist 2.9.0 is unsupported") });
-  assert.match(reason.menus[0]!.rows.find((row) => row.id === "checklistIntegration")!.help!, /2\.9\.0 is unsupported/);
+  const reason = await run(t, ["cancel"], {
+    checklistStatus: UNAVAILABLE("pi-checklist 2.9.0 is unsupported"),
+  });
+  assert.match(
+    reason.menus[0]!.rows.find((row) => row.id === "checklistIntegration")!.help!,
+    /2\.9\.0 is unsupported/,
+  );
 });
 
 test("[lab] Checklist integration cannot be turned on while ineligible, nothing is saved", async (t) => {
-  const result = await run(t, ["checklistIntegration", "save"], { checklistStatus: UNAVAILABLE("meta is off") });
+  const result = await run(t, ["checklistIntegration", "save"], {
+    checklistStatus: UNAVAILABLE("meta is off"),
+  });
   assert.equal(result.value(1, "checklistIntegration"), "Off · unavailable");
   assert.ok(result.notifications.some((message) => /cannot be enabled: meta is off/.test(message)));
   assert.ok(result.notificationTypes.includes("warning"));
@@ -1184,11 +1519,18 @@ test("[lab] Saved-On checklist integration shows inactive when unavailable and c
   const row = shown.menus[0]!.rows.find((row) => row.id === "checklistIntegration")!;
   assert.equal(row.value, "On · inactive (unavailable)");
   assert.match(row.help!, /Saved On but inactive/);
-  const off = await run(t, ["checklistIntegration", "save"], { settings, checklistStatus: UNAVAILABLE() });
+  const off = await run(t, ["checklistIntegration", "save"], {
+    settings,
+    checklistStatus: UNAVAILABLE(),
+  });
   assert.equal(off.loaded.settings.checklistIntegration, false);
   assert.equal(off.applied, 1);
   // Saving other changes does not disturb a stored On that is merely inactive.
-  const keep = await run(t, ["finalRecap", "save"], { settings, global: settings, checklistStatus: UNAVAILABLE() });
+  const keep = await run(t, ["finalRecap", "save"], {
+    settings,
+    global: settings,
+    checklistStatus: UNAVAILABLE(),
+  });
   assert.equal(keep.loaded.settings.checklistIntegration, true);
 });
 
@@ -1197,24 +1539,37 @@ test("[lab] Checklist integration eligibility is rechecked at toggle and at save
   const status = () => ({ eligible, reason: "meta was disabled" }) as ChecklistStatus;
   const toggled = await run(t, ["checklistIntegration", "save"], {
     checklistStatus: status,
-    onMenu: (_menu, index) => { if (index === 1) eligible = false; },
+    onMenu: (_menu, index) => {
+      if (index === 1) eligible = false;
+    },
   });
-  assert.ok(toggled.notifications.some((message) => /cannot be enabled: meta was disabled/.test(message)));
+  assert.ok(
+    toggled.notifications.some((message) => /cannot be enabled: meta was disabled/.test(message)),
+  );
   assert.equal(toggled.loaded.settings.checklistIntegration, false);
   assert.equal(toggled.applied, 0);
   eligible = true;
   const drift = await run(t, ["checklistIntegration", "save"], {
     checklistStatus: status,
-    onMenu: (menu, _index) => { if (menu.rows.find((row) => row.id === "checklistIntegration")?.value === "On") eligible = false; },
+    onMenu: (menu, _index) => {
+      if (menu.rows.find((row) => row.id === "checklistIntegration")?.value === "On")
+        eligible = false;
+    },
   });
   assert.equal(drift.loaded.settings.checklistIntegration, false);
   assert.equal(drift.applied, 0);
   assert.ok(drift.notificationTypes.includes("error"));
-  assert.ok(drift.notifications.some((message) => /cannot be enabled: meta was disabled/.test(message)));
+  assert.ok(
+    drift.notifications.some((message) => /cannot be enabled: meta was disabled/.test(message)),
+  );
 });
 
 test("[lab] Checklist integration status errors fail closed and defaults restore Off", async (t) => {
-  const throwing = await run(t, ["checklistIntegration", "cancel"], { checklistStatus: () => { throw new Error("boom"); } });
+  const throwing = await run(t, ["checklistIntegration", "cancel"], {
+    checklistStatus: () => {
+      throw new Error("boom");
+    },
+  });
   assert.equal(throwing.value(1, "checklistIntegration"), "Off · unavailable");
   const defaults = await run(t, ["defaults", "user", "cancel"], {
     settings: { ...DEFAULT_MANAGER_SETTINGS, checklistIntegration: true },

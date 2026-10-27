@@ -365,10 +365,7 @@ test("settings overrides parse, reject bodies, and round-trip sparse fields", ()
     "description: ''\n",
     "tools:\n  deny: [bash]\n",
   ])
-    assert.throws(
-      () => parseAgentSettings(content, "example.yml", "example"),
-      /example\.yml:/,
-    );
+    assert.throws(() => parseAgentSettings(content, "example.yml", "example"), /example\.yml:/);
 });
 
 test("merges keep unset fields on the base and null clears optional fields", () => {

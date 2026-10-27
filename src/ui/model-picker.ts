@@ -524,7 +524,9 @@ export class HousekeepingModelPickerComponent extends Container {
         (model) => modelSearchText(model.name),
       ],
     });
-    this.scopedIdentities = new Set(options.scopedModels.map((entry) => modelIdentity(entry.model)));
+    this.scopedIdentities = new Set(
+      options.scopedModels.map((entry) => modelIdentity(entry.model)),
+    );
     this.current = options.current ?? "";
     this.onDone = options.onDone;
     this.onCancel = options.onCancel;
@@ -554,7 +556,10 @@ export class HousekeepingModelPickerComponent extends Container {
     const hint = this.scopedIdentities.size
       ? "Scoped models first, then every other available model. Type to search."
       : "No scoped models in this session; all available models are listed. Type to search.";
-    const header = [truncateToWidth(this.theme.fg("muted", hint), inner, ""), ...this.searchInput.render(inner)];
+    const header = [
+      truncateToWidth(this.theme.fg("muted", hint), inner, ""),
+      ...this.searchInput.render(inner),
+    ];
     const budget = Math.max(1, height - 4 - header.length);
     const display: (HousekeepingRow | string)[] = [];
     let previous: string | undefined;
@@ -564,7 +569,10 @@ export class HousekeepingModelPickerComponent extends Container {
       display.push(row);
     }
     const selectedRow = this.rows[this.selected];
-    const index = Math.max(0, display.findIndex((row) => row === selectedRow));
+    const index = Math.max(
+      0,
+      display.findIndex((row) => row === selectedRow),
+    );
     const start = Math.max(0, Math.min(index - budget + 1, display.length - budget));
     const lines = display.slice(start, start + budget).map((row) => {
       if (typeof row === "string") return this.theme.fg("muted", row);
@@ -642,8 +650,12 @@ export class HousekeepingModelPickerComponent extends Container {
             },
           ]
         : []),
-      ...matches.filter((m) => this.scopedIdentities.has(modelIdentity(m))).map((m) => row(m, SCOPED_GROUP)),
-      ...matches.filter((m) => !this.scopedIdentities.has(modelIdentity(m))).map((m) => row(m, OTHER_GROUP)),
+      ...matches
+        .filter((m) => this.scopedIdentities.has(modelIdentity(m)))
+        .map((m) => row(m, SCOPED_GROUP)),
+      ...matches
+        .filter((m) => !this.scopedIdentities.has(modelIdentity(m)))
+        .map((m) => row(m, OTHER_GROUP)),
     ];
     const previous = this.rows[this.selected]?.value;
     this.rows = rows;

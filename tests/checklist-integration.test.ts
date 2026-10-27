@@ -3,7 +3,11 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
-import { SessionManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  SessionManager,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import piSubagent from "../src/index.ts";
 import {
   ChecklistMetaMirror,
@@ -29,7 +33,10 @@ function temp(t: TestContext): string {
 /** Writes <root>/<pkg>/{package.json,src/index.ts}; returns the registered extension file. */
 function installPackage(root: string, dir: string, manifest: unknown): string {
   mkdirSync(join(root, dir, "src"), { recursive: true });
-  writeFileSync(join(root, dir, "package.json"), typeof manifest === "string" ? manifest : JSON.stringify(manifest));
+  writeFileSync(
+    join(root, dir, "package.json"),
+    typeof manifest === "string" ? manifest : JSON.stringify(manifest),
+  );
   const file = join(root, dir, "src", "index.ts");
   writeFileSync(file, "export default function () {}\n");
   return file;
@@ -42,13 +49,48 @@ function fakePi(tools: FakeTool[], active: string[] = tools.map((tool) => tool.n
     getActiveTools: () => active,
   } as unknown as Pick<ExtensionAPI, "getAllTools" | "getActiveTools">;
 }
-const checklistTools = (file: string, overrides: Partial<Record<string, FakeTool>> = {}): FakeTool[] =>
+const checklistTools = (
+  file: string,
+  overrides: Partial<Record<string, FakeTool>> = {},
+): FakeTool[] =>
   CHECKLIST_TOOL_NAMES.map((name) => overrides[name] ?? { name, sourceInfo: { path: file } });
 
 test("checklist versions: only strict 3.x.y or later is supported", () => {
-  for (const version of ["3.0.0", "3.4.1", "4.0.0", "10.2.3", " 3.0.0 ", "3.0.0+build", "3.0.0+build.1", "3.1.0+20130313144700", "3.0.0+001", "3.0.0+a-b.C-1"])
+  for (const version of [
+    "3.0.0",
+    "3.4.1",
+    "4.0.0",
+    "10.2.3",
+    " 3.0.0 ",
+    "3.0.0+build",
+    "3.0.0+build.1",
+    "3.1.0+20130313144700",
+    "3.0.0+001",
+    "3.0.0+a-b.C-1",
+  ])
     assert.equal(checklistVersionSupported(version), true, version);
-  for (const version of ["2.9.9", "0.3.0", "3.0.0-beta.1", "3.0.0-beta.1+build", "2.9.9+build", "3.0", "v3.0.0", "03.0.0", "3.0.0+", "3.0.0+build.", "3.0.0+.build", "3.0.0+build..1", "3.0.0+bu_ild", "3.0.0+build+1", "3.0.0+bui ld", "3.0.0+bu\u00efld", "", undefined, 3, null])
+  for (const version of [
+    "2.9.9",
+    "0.3.0",
+    "3.0.0-beta.1",
+    "3.0.0-beta.1+build",
+    "2.9.9+build",
+    "3.0",
+    "v3.0.0",
+    "03.0.0",
+    "3.0.0+",
+    "3.0.0+build.",
+    "3.0.0+.build",
+    "3.0.0+build..1",
+    "3.0.0+bu_ild",
+    "3.0.0+build+1",
+    "3.0.0+bui ld",
+    "3.0.0+bu\u00efld",
+    "",
+    undefined,
+    3,
+    null,
+  ])
     assert.equal(checklistVersionSupported(version), false, String(version));
 });
 
@@ -65,26 +107,96 @@ test("detection requires reachable checklist tools from the real pi-checklist pa
   // Missing / hidden / inactive tools.
   assert.match(reason(fakePi([])), /checklist_create is not loaded and active/);
   assert.match(reason(fakePi(checklistTools(good).slice(0, 2))), /checklist_update is not loaded/);
-  assert.match(reason(fakePi(checklistTools(good, { checklist_read: { name: "checklist_read", exposure: "hidden", sourceInfo: { path: good } } }))), /checklist_read is not loaded/);
-  assert.match(reason(fakePi(checklistTools(good), ["checklist_create", "checklist_read"])), /checklist_update is not loaded/);
+  assert.match(
+    reason(
+      fakePi(
+        checklistTools(good, {
+          checklist_read: {
+            name: "checklist_read",
+            exposure: "hidden",
+            sourceInfo: { path: good },
+          },
+        }),
+      ),
+    ),
+    /checklist_read is not loaded/,
+  );
+  assert.match(
+    reason(fakePi(checklistTools(good), ["checklist_create", "checklist_read"])),
+    /checklist_update is not loaded/,
+  );
   // Origin problems.
-  assert.match(reason(fakePi(checklistTools(good, { checklist_read: { name: "checklist_read" } }))), /does not come from a pi-checklist package file/);
-  assert.match(reason(fakePi(checklistTools(good, { checklist_read: { name: "checklist_read", sourceInfo: { path: "<inline:1>" } } }))), /does not come from/);
-  assert.match(reason(fakePi(checklistTools(good, { checklist_read: { name: "checklist_read", sourceInfo: { path: 5 } } }))), /does not come from/);
+  assert.match(
+    reason(fakePi(checklistTools(good, { checklist_read: { name: "checklist_read" } }))),
+    /does not come from a pi-checklist package file/,
+  );
+  assert.match(
+    reason(
+      fakePi(
+        checklistTools(good, {
+          checklist_read: { name: "checklist_read", sourceInfo: { path: "<inline:1>" } },
+        }),
+      ),
+    ),
+    /does not come from/,
+  );
+  assert.match(
+    reason(
+      fakePi(
+        checklistTools(good, {
+          checklist_read: { name: "checklist_read", sourceInfo: { path: 5 } },
+        }),
+      ),
+    ),
+    /does not come from/,
+  );
   const other = installPackage(root, "other", { name: "pi-checklist", version: "3.0.0" });
-  assert.match(reason(fakePi(checklistTools(good, { checklist_read: { name: "checklist_read", sourceInfo: { path: other } } }))), /different extensions/);
+  assert.match(
+    reason(
+      fakePi(
+        checklistTools(good, {
+          checklist_read: { name: "checklist_read", sourceInfo: { path: other } },
+        }),
+      ),
+    ),
+    /different extensions/,
+  );
   // Look-alike tools from another package are not pi-checklist.
   const imposter = installPackage(root, "imposter", { name: "not-pi-checklist", version: "9.0.0" });
-  assert.match(reason(fakePi(checklistTools(imposter))), /not provided by the pi-checklist package/);
+  assert.match(
+    reason(fakePi(checklistTools(imposter))),
+    /not provided by the pi-checklist package/,
+  );
   // Versions.
   for (const version of ["2.9.9", "3.0.0-rc.1", "3", 3, undefined]) {
     const file = installPackage(root, `v-${String(version)}`, { name: "pi-checklist", version });
-    assert.match(reason(fakePi(checklistTools(file))), /unsupported; ≥3\.0\.0 is required/, String(version));
+    assert.match(
+      reason(fakePi(checklistTools(file))),
+      /unsupported; ≥3\.0\.0 is required/,
+      String(version),
+    );
   }
-  assert.match(reason(fakePi(checklistTools(installPackage(root, "bad-json", "{not json")))), /could not verify pi-checklist/);
-  assert.match(reason(fakePi(checklistTools(installPackage(root, "array-json", "[]")))), /not provided by the pi-checklist package/);
-  assert.match(reason({ getAllTools: () => { throw new Error("boom"); }, getActiveTools: () => [] } as never), /could not verify pi-checklist: boom/);
-  assert.match(reason(fakePi(checklistTools(join(root, "missing", "index.ts")))), /could not verify pi-checklist/);
+  assert.match(
+    reason(fakePi(checklistTools(installPackage(root, "bad-json", "{not json")))),
+    /could not verify pi-checklist/,
+  );
+  assert.match(
+    reason(fakePi(checklistTools(installPackage(root, "array-json", "[]")))),
+    /not provided by the pi-checklist package/,
+  );
+  assert.match(
+    reason({
+      getAllTools: () => {
+        throw new Error("boom");
+      },
+      getActiveTools: () => [],
+    } as never),
+    /could not verify pi-checklist: boom/,
+  );
+  assert.match(
+    reason(fakePi(checklistTools(join(root, "missing", "index.ts")))),
+    /could not verify pi-checklist/,
+  );
 });
 
 test("detection resolves symlinks to the owning package and newer majors pass", (t) => {
@@ -92,8 +204,14 @@ test("detection resolves symlinks to the owning package and newer majors pass", 
   const real = installPackage(root, "real", { name: "pi-checklist", version: "4.1.0" });
   mkdirSync(join(root, "linked", "src"), { recursive: true });
   symlinkSync(real, join(root, "linked", "src", "index.ts"));
-  writeFileSync(join(root, "linked", "package.json"), JSON.stringify({ name: "not-it", version: "0.0.1" }));
-  assert.deepEqual(detectChecklistPackage(fakePi(checklistTools(join(root, "linked", "src", "index.ts")))), { eligible: true });
+  writeFileSync(
+    join(root, "linked", "package.json"),
+    JSON.stringify({ name: "not-it", version: "0.0.1" }),
+  );
+  assert.deepEqual(
+    detectChecklistPackage(fakePi(checklistTools(join(root, "linked", "src", "index.ts")))),
+    { eligible: true },
+  );
 });
 
 function sessionContext(): { sessionManager: SessionManager } {
@@ -102,7 +220,11 @@ function sessionContext(): { sessionManager: SessionManager } {
 const entries = (ctx: { sessionManager: SessionManager }) => ctx.sessionManager;
 function withPrefs(t: TestContext, prefs?: unknown): string {
   const dir = temp(t);
-  if (prefs !== undefined) writeFileSync(join(dir, "pi-checklist.json"), typeof prefs === "string" ? prefs : JSON.stringify(prefs));
+  if (prefs !== undefined)
+    writeFileSync(
+      join(dir, "pi-checklist.json"),
+      typeof prefs === "string" ? prefs : JSON.stringify(prefs),
+    );
   return dir;
 }
 function toolResult(toolName: string, details: unknown) {
@@ -132,7 +254,8 @@ test("mirror: global preference beats branch snapshot, snapshot beats default, u
   for (const [prefs, branchMeta, expected] of cases) {
     const dir = withPrefs(t, prefs);
     const ctx = sessionContext();
-    if (branchMeta !== undefined) entries(ctx).appendCustomEntry(CHECKLIST_ENTRY, snapshot(branchMeta));
+    if (branchMeta !== undefined)
+      entries(ctx).appendCustomEntry(CHECKLIST_ENTRY, snapshot(branchMeta));
     const mirror = new ChecklistMetaMirror(() => dir);
     mirror.reset(ctx as never);
     assert.equal(mirror.metaEnabled(ctx as never), expected, JSON.stringify({ prefs, branchMeta }));
@@ -183,7 +306,13 @@ test("mirror reseeds when the branch checkpoint disappears and fails closed on e
   // Without an explicit reset the mirror seeds lazily on first use.
   const lazy = new ChecklistMetaMirror(() => dir);
   assert.equal(lazy.metaEnabled(ctx as never), true);
-  const broken = { sessionManager: { getBranch: () => { throw new Error("no session"); } } };
+  const broken = {
+    sessionManager: {
+      getBranch: () => {
+        throw new Error("no session");
+      },
+    },
+  };
   mirror.reset(broken as never);
   assert.equal(mirror.metaEnabled(broken as never), false);
   assert.equal(new ChecklistMetaMirror(() => dir).metaEnabled(broken as never), false);
@@ -207,8 +336,14 @@ test("checklistStatus needs both the package and live meta", (t) => {
   assert.equal(withMetaOff.eligible, false);
   assert.match(withMetaOff.reason!, /\/checklist settings meta/);
   entries(ctx).appendCustomEntry(CHECKLIST_ENTRY, snapshot(true));
-  assert.deepEqual(checklistStatus(fakePi(checklistTools(file)), mirror, ctx as never), { eligible: true });
-  assert.equal(checklistStatus(fakePi([]), mirror, ctx as never).eligible, false, "meta alone is not enough");
+  assert.deepEqual(checklistStatus(fakePi(checklistTools(file)), mirror, ctx as never), {
+    eligible: true,
+  });
+  assert.equal(
+    checklistStatus(fakePi([]), mirror, ctx as never).eligible,
+    false,
+    "meta alone is not enough",
+  );
 });
 
 const GUIDANCE = /## pi-checklist integration/;
@@ -216,11 +351,20 @@ test("prompt gating: guidance only when opt-in AND eligible, never in off mode",
   for (const subagentMode of ["off", "opportunistic", "orchestration"] as const)
     for (const checklistIntegration of [false, true])
       for (const eligible of [false, true]) {
-        const settings: ManagerSettings = { ...DEFAULT_MANAGER_SETTINGS, subagentMode, checklistIntegration };
+        const settings: ManagerSettings = {
+          ...DEFAULT_MANAGER_SETTINGS,
+          subagentMode,
+          checklistIntegration,
+        };
         const prompt = subagentPrompt(settings, eligible);
         if (subagentMode === "off") assert.equal(prompt, undefined);
         else if (checklistIntegration && eligible) assert.match(prompt!, GUIDANCE);
-        else assert.equal(prompt, subagentPrompt({ ...settings, checklistIntegration: false }), "unchanged when gated");
+        else
+          assert.equal(
+            prompt,
+            subagentPrompt({ ...settings, checklistIntegration: false }),
+            "unchanged when gated",
+          );
       }
   assert.equal(
     subagentPrompt({ ...DEFAULT_MANAGER_SETTINGS, subagentMode: "orchestration" }),
@@ -239,9 +383,14 @@ test("guidance text: root orchestration must use the checklist, opportunistic is
   assert.match(opportunistic, /optional in opportunistic mode/);
   assert.match(opportunistic, /meta\.agent|agent: "\/root\/task-slug"/);
   const base = subagentPrompt({ ...DEFAULT_MANAGER_SETTINGS, subagentMode: "orchestration" })!;
-  const full = subagentPrompt({ ...DEFAULT_MANAGER_SETTINGS, subagentMode: "orchestration", checklistIntegration: true }, true)!;
+  const full = subagentPrompt(
+    { ...DEFAULT_MANAGER_SETTINGS, subagentMode: "orchestration", checklistIntegration: true },
+    true,
+  )!;
   assert.ok(full.startsWith(base), "existing prompt is preserved verbatim; guidance is appended");
-  assert.ok(Object.keys({ agent: "/root/research-checklist-integration" }).every((key) => key.length <= 40));
+  assert.ok(
+    Object.keys({ agent: "/root/research-checklist-integration" }).every((key) => key.length <= 40),
+  );
 });
 
 type Harness = {
@@ -254,22 +403,36 @@ type Harness = {
 };
 async function withExtension(
   t: TestContext,
-  options: { settings: Partial<ManagerSettings>; tools?: (file: string) => FakeTool[]; version?: string; prefs?: unknown },
+  options: {
+    settings: Partial<ManagerSettings>;
+    tools?: (file: string) => FakeTool[];
+    version?: string;
+    prefs?: unknown;
+  },
 ): Promise<Harness> {
   const dir = temp(t);
   const old = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = dir;
   mkdirSync(join(dir, "subagent-manager"), { recursive: true });
   writeFileSync(join(dir, "subagent-manager", "settings.json"), JSON.stringify(options.settings));
-  if (options.prefs !== undefined) writeFileSync(join(dir, "pi-checklist.json"), JSON.stringify(options.prefs));
+  if (options.prefs !== undefined)
+    writeFileSync(join(dir, "pi-checklist.json"), JSON.stringify(options.prefs));
   markImportOffered(dir);
-  const file = installPackage(dir, "ext", { name: "pi-checklist", version: options.version ?? "3.0.0" });
+  const file = installPackage(dir, "ext", {
+    name: "pi-checklist",
+    version: options.version ?? "3.0.0",
+  });
   const toolList = (options.tools ?? ((f) => checklistTools(f)))(file);
   const session = SessionManager.inMemory(dir);
   const hooks = new Map<string, Function>();
   const pi = {
     getCommands: () => [],
-    events: { emit() {}, on() { return () => {}; } },
+    events: {
+      emit() {},
+      on() {
+        return () => {};
+      },
+    },
     registerTool() {},
     registerCommand() {},
     on: (name: string, handler: Function) => hooks.set(name, handler),
@@ -294,13 +457,21 @@ async function withExtension(
   const start = async () => void (await hooks.get("session_start")!({ reason: "startup" }, ctx));
   await start();
   return {
-    hooks, ctx, dir, session, start,
-    prompt: async () => (await hooks.get("before_agent_start")!({ systemPrompt: "Main", prompt: "Work" }, ctx))?.systemPrompt,
+    hooks,
+    ctx,
+    dir,
+    session,
+    start,
+    prompt: async () =>
+      (await hooks.get("before_agent_start")!({ systemPrompt: "Main", prompt: "Work" }, ctx))
+        ?.systemPrompt,
   };
 }
 
 test("root prompt: checklist guidance tracks live eligibility every turn", async (t) => {
-  const h = await withExtension(t, { settings: { subagentMode: "orchestration", checklistIntegration: true } });
+  const h = await withExtension(t, {
+    settings: { subagentMode: "orchestration", checklistIntegration: true },
+  });
   assert.doesNotMatch((await h.prompt())!, GUIDANCE, "meta disabled: no guidance");
   h.session.appendCustomEntry(CHECKLIST_ENTRY, snapshot(true));
   const enabled = (await h.prompt())!;
@@ -308,28 +479,52 @@ test("root prompt: checklist guidance tracks live eligibility every turn", async
   assert.match(enabled, /MUST use checklist_create/);
   assert.ok(enabled.startsWith("Main\n\n"), "existing system prompt preserved");
   h.session.appendCustomEntry(CHECKLIST_ENTRY, snapshot(false));
-  assert.doesNotMatch((await h.prompt())!, GUIDANCE, "local /checklist settings no-meta removes it next turn");
+  assert.doesNotMatch(
+    (await h.prompt())!,
+    GUIDANCE,
+    "local /checklist settings no-meta removes it next turn",
+  );
 });
 
 test("root prompt: no guidance without opt-in, wrong version, missing tools or off mode", async (t) => {
-  const optedOut = await withExtension(t, { settings: { subagentMode: "orchestration" }, prefs: { metaEnabled: true } });
+  const optedOut = await withExtension(t, {
+    settings: { subagentMode: "orchestration" },
+    prefs: { metaEnabled: true },
+  });
   assert.doesNotMatch((await optedOut.prompt())!, GUIDANCE);
-  const old = await withExtension(t, { settings: { subagentMode: "orchestration", checklistIntegration: true }, version: "2.9.0", prefs: { metaEnabled: true } });
+  const old = await withExtension(t, {
+    settings: { subagentMode: "orchestration", checklistIntegration: true },
+    version: "2.9.0",
+    prefs: { metaEnabled: true },
+  });
   assert.doesNotMatch((await old.prompt())!, GUIDANCE);
-  const missing = await withExtension(t, { settings: { subagentMode: "orchestration", checklistIntegration: true }, tools: () => [], prefs: { metaEnabled: true } });
+  const missing = await withExtension(t, {
+    settings: { subagentMode: "orchestration", checklistIntegration: true },
+    tools: () => [],
+    prefs: { metaEnabled: true },
+  });
   assert.doesNotMatch((await missing.prompt())!, GUIDANCE);
   const inactiveOnly = await withExtension(t, {
     settings: { subagentMode: "opportunistic", checklistIntegration: true },
-    tools: (file) => checklistTools(file, { checklist_read: { name: "checklist_read", exposure: "hidden", sourceInfo: { path: file } } }),
+    tools: (file) =>
+      checklistTools(file, {
+        checklist_read: { name: "checklist_read", exposure: "hidden", sourceInfo: { path: file } },
+      }),
     prefs: { metaEnabled: true },
   });
   assert.doesNotMatch((await inactiveOnly.prompt())!, GUIDANCE);
-  const off = await withExtension(t, { settings: { subagentMode: "off", checklistIntegration: true }, prefs: { metaEnabled: true } });
+  const off = await withExtension(t, {
+    settings: { subagentMode: "off", checklistIntegration: true },
+    prefs: { metaEnabled: true },
+  });
   assert.equal(await off.prompt(), undefined);
 });
 
 test("root prompt: opportunistic gets optional wording; reseeding follows global > branch > off", async (t) => {
-  const h = await withExtension(t, { settings: { subagentMode: "opportunistic", checklistIntegration: true }, prefs: { metaEnabled: true } });
+  const h = await withExtension(t, {
+    settings: { subagentMode: "opportunistic", checklistIntegration: true },
+    prefs: { metaEnabled: true },
+  });
   const prompt = (await h.prompt())!;
   assert.match(prompt, GUIDANCE);
   assert.doesNotMatch(prompt, /MUST use checklist/);
@@ -337,7 +532,11 @@ test("root prompt: opportunistic gets optional wording; reseeding follows global
   writeFileSync(join(h.dir, "pi-checklist.json"), JSON.stringify({ metaEnabled: false }));
   assert.match((await h.prompt())!, GUIDANCE);
   await h.hooks.get("session_tree")!({}, h.ctx);
-  assert.doesNotMatch((await h.prompt())!, GUIDANCE, "navigation reseeds from explicit global false, ignoring snapshots");
+  assert.doesNotMatch(
+    (await h.prompt())!,
+    GUIDANCE,
+    "navigation reseeds from explicit global false, ignoring snapshots",
+  );
   // Global removed: latest branch snapshot decides.
   rmSync(join(h.dir, "pi-checklist.json"));
   h.session.appendCustomEntry(CHECKLIST_ENTRY, snapshot(true));

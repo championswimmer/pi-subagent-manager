@@ -738,7 +738,10 @@ test("Ctrl+O cycles all views in both modes without changing the draft; t no lon
       assert.equal(live.viewport.detail, "preview", "t never changes the detail level");
     }
     live.view.handleInput("\t");
-    assert.equal(stripTerminalSequences(live.view.render(120).at(-1)!).trimEnd(), " Steer > draftt");
+    assert.equal(
+      stripTerminalSequences(live.view.render(120).at(-1)!).trimEnd(),
+      " Steer > draftt",
+    );
     assert.deepEqual(live.steers, []);
     assert.deepEqual(live.done, []);
   } finally {

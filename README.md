@@ -40,11 +40,11 @@ The **Agents** widget above the input shows what's running. Open `/agents tree`,
 
 | Agent        | Use it for                              |
 | ------------ | --------------------------------------- |
-| `architect`  | Plans, tradeoffs, coordinating helpers   |
+| `architect`  | Plans, tradeoffs, coordinating helpers  |
 | `coder`      | Implementation and debugging            |
-| `researcher` | Codebase and web research                |
-| `reviewer`   | Finding correctness and security issues  |
-| `tasker`     | Small jobs and quick lookups             |
+| `researcher` | Codebase and web research               |
+| `reviewer`   | Finding correctness and security issues |
+| `tasker`     | Small jobs and quick lookups            |
 | `writer`     | Drafting and editing prose              |
 
 They use your current model until you configure preferences. Open `/agents types` to change a role's model, tools, or instructions, or [add your own agent](docs/custom-agents.md).

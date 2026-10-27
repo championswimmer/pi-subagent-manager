@@ -124,7 +124,10 @@ test("menu value details align under descriptions and scroll as two-line rows", 
   const menu = new DialogMenu(host(12), theme, "Agents", rows, () => {});
   const lines = menu.render(80).map(stripTerminalSequences);
   const description = lines.findIndex((line) => line.includes("Description 0"));
-  assert.equal(lines[description + 1]!.indexOf("Model:"), lines[description]!.indexOf("Description"));
+  assert.equal(
+    lines[description + 1]!.indexOf("Model:"),
+    lines[description]!.indexOf("Description"),
+  );
   assert.ok(lines[description + 1]!.includes("..."), "model detail is truncated");
   for (let i = 0; i < 19; i++) menu.handleInput(DOWN);
   const last = menu.render(80).join("\n");
@@ -142,10 +145,16 @@ test("menu values keep their warning color and column even on the selected row",
       return text;
     },
   } as Theme;
-  const menu = new DialogMenu(host(), coloredTheme, "Settings", [
-    { id: "other", label: "Other", value: "42" },
-    { id: "save", label: "Save and apply", value: "(changes)", valueColor: "warning" },
-  ], () => {});
+  const menu = new DialogMenu(
+    host(),
+    coloredTheme,
+    "Settings",
+    [
+      { id: "other", label: "Other", value: "42" },
+      { id: "save", label: "Save and apply", value: "(changes)", valueColor: "warning" },
+    ],
+    () => {},
+  );
   for (const selected of [false, true]) {
     if (selected) menu.handleInput(DOWN);
     const rendered = menu.render(80).join("\n");
@@ -169,16 +178,34 @@ test("menu indicators occupy fixed middle slots without shifting labels or value
     },
   } as Theme;
   const indicators = ["● ●", "●  ", "  ●", "   ", "   "];
-  const menu = new DialogMenu(host(), coloredTheme, "Settings", [
-    { id: "both", label: "Maximum levels", value: "1",
-      renderIndicators: (theme) => theme.fg("accent", "●") + " " + theme.fg("warning", "●") },
-    { id: "global", label: "[lab] Nerd Font icons", value: "2",
-      renderIndicators: (theme) => theme.fg("accent", "●") + "  " },
-    { id: "project", label: "Concurrent agents", value: "3",
-      renderIndicators: (theme) => "  " + theme.fg("warning", "●") },
-    { id: "default", label: "Status Widget", value: "4", renderIndicators: () => "   " },
-    { id: "save", label: "Save and apply", value: "5", valueColor: "warning" },
-  ], () => {});
+  const menu = new DialogMenu(
+    host(),
+    coloredTheme,
+    "Settings",
+    [
+      {
+        id: "both",
+        label: "Maximum levels",
+        value: "1",
+        renderIndicators: (theme) => theme.fg("accent", "●") + " " + theme.fg("warning", "●"),
+      },
+      {
+        id: "global",
+        label: "[lab] Nerd Font icons",
+        value: "2",
+        renderIndicators: (theme) => theme.fg("accent", "●") + "  ",
+      },
+      {
+        id: "project",
+        label: "Concurrent agents",
+        value: "3",
+        renderIndicators: (theme) => "  " + theme.fg("warning", "●"),
+      },
+      { id: "default", label: "Status Widget", value: "4", renderIndicators: () => "   " },
+      { id: "save", label: "Save and apply", value: "5", valueColor: "warning" },
+    ],
+    () => {},
+  );
   for (let selected = 0; selected < indicators.length; selected++) {
     for (const width of [20, 40, 80]) {
       const lines = menu.render(width);
@@ -190,7 +217,10 @@ test("menu indicators occupy fixed middle slots without shifting labels or value
         assert.equal(columns[1]!.includes("●"), false, "dots never prefix the name");
         assert.equal(columns[3]!.trim(), String(index + 1));
         assert.equal(line.indexOf("│", 1), fields[0]!.indexOf("│", 1));
-        assert.equal(line.lastIndexOf("│", line.length - 2), fields[0]!.lastIndexOf("│", fields[0]!.length - 2));
+        assert.equal(
+          line.lastIndexOf("│", line.length - 2),
+          fields[0]!.lastIndexOf("│", fields[0]!.length - 2),
+        );
       }
       assert.match(lines[2]!, /\x1b\[36m●\x1b\[0m \x1b\[33m●\x1b\[0m/);
       assert.match(lines[4]!, /\x1b\[33m●\x1b\[0m/);
@@ -201,14 +231,22 @@ test("menu indicators occupy fixed middle slots without shifting labels or value
 });
 
 test("menu wraps long help text and reserves space for it", () => {
-  const help = "Global saves your defaults for every project. Trusted project settings override these defaults in this project. Switching scope only changes where you save, not the values shown.";
-  const rows = Array.from({ length: 20 }, (_, index) => ({ id: String(index), label: `Field ${index}`, help }));
+  const help =
+    "Global saves your defaults for every project. Trusted project settings override these defaults in this project. Switching scope only changes where you save, not the values shown.";
+  const rows = Array.from({ length: 20 }, (_, index) => ({
+    id: String(index),
+    label: `Field ${index}`,
+    help,
+  }));
   const menu = new DialogMenu(host(), theme, "Settings", rows, () => {}, "19");
   const lines = menu.render(60);
   bounded(lines, 60, 24);
   assert.ok(lines.some((line) => line.includes("Field 19")));
-  const text = lines.slice(0, -3).map(stripTerminalSequences)
-    .map((line) => line.slice(1, -1).trim()).join(" ");
+  const text = lines
+    .slice(0, -3)
+    .map(stripTerminalSequences)
+    .map((line) => line.slice(1, -1).trim())
+    .join(" ");
   assert.ok(text.includes(help), "the full help survives wrapping and framing");
   for (const height of [6, 12, 24]) {
     const shortMenu = new DialogMenu(host(height), theme, "Settings", rows, () => {}, "19");
@@ -631,8 +669,14 @@ for (const Renderer of [TuiMainScreen, TuiAltScreen]) {
     await selectRow("scope");
     await input("\r");
     // Default Enter cancels the new scope confirmation without losing the draft.
-    assert.equal((tui.getFocusedComponent() as DialogSession).getComponent() instanceof DialogMenu, true);
-    assert.equal(((tui.getFocusedComponent() as DialogSession).getComponent() as DialogMenu).getSelectedId(), "cancel");
+    assert.equal(
+      (tui.getFocusedComponent() as DialogSession).getComponent() instanceof DialogMenu,
+      true,
+    );
+    assert.equal(
+      ((tui.getFocusedComponent() as DialogSession).getComponent() as DialogMenu).getSelectedId(),
+      "cancel",
+    );
     await input("\r");
     await selectRow("types");
     await input("\r");
@@ -647,11 +691,13 @@ for (const Renderer of [TuiMainScreen, TuiAltScreen]) {
       5,
     );
     assert.equal(
-      loadManagerSettings({ cwd: root, agentDir: root, includeProject: false }).settings.subagentMode,
+      loadManagerSettings({ cwd: root, agentDir: root, includeProject: false }).settings
+        .subagentMode,
       "orchestration",
     );
     assert.equal(
-      loadManagerSettings({ cwd: root, agentDir: root, includeProject: false }).settings.modelSelection,
+      loadManagerSettings({ cwd: root, agentDir: root, includeProject: false }).settings
+        .modelSelection,
       "use-current",
     );
   });
@@ -715,12 +761,23 @@ for (const Renderer of [TuiMainScreen, TuiAltScreen]) {
   }
 }
 
-
 test("extension chooser menu supports Space, Enter, navigation and Escape", () => {
   const results: (string | undefined)[] = [];
-  const menu = new DialogMenu(host(), theme, "Extensions", [
-    { id: "a", label: "[ ] A" }, { id: "b", label: "[x] B" },
-  ], (id) => results.push(id), undefined, undefined, undefined, undefined, true);
+  const menu = new DialogMenu(
+    host(),
+    theme,
+    "Extensions",
+    [
+      { id: "a", label: "[ ] A" },
+      { id: "b", label: "[x] B" },
+    ],
+    (id) => results.push(id),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    true,
+  );
   menu.handleInput(" ");
   menu.handleInput("\x1b[32u");
   menu.handleInput("\x1b[32;65u");
