@@ -13,6 +13,20 @@ Generated from version tags and merged GitHub pull requests. Do not edit this fi
 
 **Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v0.30.0...v1.0.0
 
+### [v1.3.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v1.3.0) — Minor release (2026-10-30)
+
+<!-- Release notes generated using configuration in .github/release.yml at v1.3.0 -->
+
+#### What's Changed
+##### Merged pull requests
+* fix: persist subagent registry changes as deltas by @msf in https://github.com/championswimmer/pi-subagent-manager/pull/78
+* fix: refresh cost footer during main-session activity by @championswimmer in https://github.com/championswimmer/pi-subagent-manager/pull/79
+
+#### New Contributors
+* @msf made their first contribution in https://github.com/championswimmer/pi-subagent-manager/pull/78
+
+**Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v1.2.1...v1.3.0
+
 ### [v1.2.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v1.2.0) — Minor release (2026-10-27)
 
 <!-- Release notes generated using configuration in .github/release.yml at v1.2.0 -->
