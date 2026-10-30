@@ -30,11 +30,11 @@ import { ChecklistMetaMirror, checklistStatus } from "./orch/checklist-integrati
 import { agentTools } from "./orch/tools.ts";
 import { editAgentTypes, updateWidget } from "./ui/ui.ts";
 import { canOpenDialog, dialogMenu } from "./ui/dialog.ts";
-import type { SavedThread, ThreadEvent, ThreadView } from "./types.ts";
+import type { ThreadEvent, ThreadView } from "./types.ts";
 import { COST_ENTRY, CostLedger } from "./orch/cost-ledger.ts";
+import { readRegistry, RegistryWriter } from "./orch/registry.ts";
 import { CostFooterController } from "./ui/cost-footer.ts";
 
-const REGISTRY_ENTRY = "pi-subagent:registry:v1";
 const ROOT_MAILBOX_ENTRY = "pi-subagent:root-mailbox:v1";
 const ROOT_SUMMARY_MESSAGE = "pi-subagent:final-recap";
 const ROOT_WAKE_MESSAGE = "pi-subagent:wake";
@@ -237,7 +237,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
     };
     ctx.ui.setEditorComponent(navigationEditorFactory);
   };
-  let persistenceSignature = "";
+  const registryWriter = new RegistryWriter((customType, data) => pi.appendEntry(customType, data));
   let migrationRequested = false;
   let importInProgress = false;
   const importAgents = async (ctx: ExtensionContext, firstRun: boolean) => {
@@ -282,16 +282,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
   };
   const persist = () => {
     if (!manager) return;
-    const threads = manager.saved();
-    const signature = JSON.stringify(threads);
-    if (signature !== persistenceSignature) {
-      pi.appendEntry(REGISTRY_ENTRY, {
-        version: 1,
-        rootSessionId: requireContext().sessionManager.getSessionId(),
-        threads,
-      });
-      persistenceSignature = signature;
-    }
+    registryWriter.write(requireContext().sessionManager.getSessionId(), manager.saved());
   };
   const warnDelivery = (error: unknown) => {
     if (limits.subagentMode === "off") return;
@@ -647,7 +638,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
       agentDir: getAgentDir(),
       includeProject: ctx.isProjectTrusted(),
     });
-    persistenceSignature = "";
+    registryWriter.reset();
     const settingsDiagnostics = loadLimits(ctx);
     syncTools();
     driverFactory = makeDriverFactory();
@@ -682,27 +673,15 @@ export default function piSubagent(pi: ExtensionAPI): void {
     });
     manager = instance;
     if (installEditor) installNavigationEditor(ctx, seedHistory);
-    const entries = ctx.sessionManager.getBranch();
-    const entry = [...entries]
-      .reverse()
-      .find((item) => item.type === "custom" && item.customType === REGISTRY_ENTRY);
-    if (entry?.type === "custom") {
-      try {
-        const data = entry.data as {
-          version: number;
-          rootSessionId: string;
-          threads: SavedThread[];
-        };
-        if (data.version !== 1 || !Array.isArray(data.threads))
-          throw new Error("Invalid registry format");
-        // Forked parents own a new registry; they must not share writable child transcripts.
-        if (data.rootSessionId === ctx.sessionManager.getSessionId())
-          instance.restore(data.threads);
-        else persist();
-      } catch (error) {
-        if (limits.subagentMode !== "off")
-          ctx.ui.notify(`Could not restore subagent registry: ${String(error)}`, "error");
-      }
+    try {
+      const saved = readRegistry(ctx.sessionManager.getBranch());
+      // Forked parents own a new registry; they must not share writable child transcripts.
+      if (saved?.rootSessionId === ctx.sessionManager.getSessionId())
+        instance.restore(saved.threads);
+      else if (saved) persist();
+    } catch (error) {
+      if (limits.subagentMode !== "off")
+        ctx.ui.notify(`Could not restore subagent registry: ${String(error)}`, "error");
     }
     // Recover a persisted settlement whose ledger append was interrupted, including runs paused on reload.
     for (const saved of instance.saved()) rollupCost({ ...saved.view, updatedAt: Date.now() });

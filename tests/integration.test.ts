@@ -4,8 +4,14 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { type AssistantMessage, type JsonObject } from "@earendil-works/pi-ai";
 import { buildSessionContext, SessionManager } from "@earendil-works/pi-coding-agent";
+import type { RegistryDelta } from "../src/orch/registry.ts";
 import type { AgentType, SavedThread, ThreadView } from "../src/types.ts";
-import { REGISTRY_ENTRY, registry, withOfflineHarness } from "./helpers/integrationHarness.ts";
+import {
+  REGISTRY_DELTA_ENTRY,
+  REGISTRY_ENTRY,
+  registry,
+  withOfflineHarness,
+} from "./helpers/integrationHarness.ts";
 
 const ROOT_MAILBOX_ENTRY = "pi-subagent:root-mailbox:v1";
 const answer = (text: string): AssistantMessage => ({
@@ -183,6 +189,79 @@ test(
           childFile,
         );
         assert.equal(childRequests().length, 3);
+        assert.deepEqual(errors, []);
+      },
+    );
+  },
+);
+
+test(
+  "child checkpoints persist only the changed thread and reopen at its latest leaf",
+  { timeout: 30000 },
+  async () => {
+    await withOfflineHarness(
+      {
+        agentFiles: { offline: offlineAgent },
+        onRequest: (request) => answer(`reply ${request.path} ${request.pathCall}`),
+      },
+      async ({ directory, cwd, errors, open, close, tool }) => {
+        const root = SessionManager.create(cwd, path.join(directory, "parents"));
+        root.appendMessage({ role: "user", content: "Root context", timestamp: Date.now() });
+        let session = await open(root);
+        await tool(session, "agent_spawn", { path: "settled", type: "offline", task: "Once" });
+        await new Promise((resolve) => setImmediate(resolve));
+        const settledAt = root.getEntries().length;
+        const busy = await tool<ThreadView>(session, "agent_spawn", {
+          path: "busy",
+          type: "offline",
+          task: "First",
+        });
+        for (const message of ["Second", "Third"]) {
+          await tool(session, "agent_steer", { path: "busy", message });
+          await tool(session, "agent_wait", { path: "busy" });
+        }
+        await close(session);
+
+        const written = root
+          .getEntries()
+          .slice(settledAt)
+          .flatMap((entry) =>
+            entry.type === "custom" &&
+            (entry.customType === REGISTRY_ENTRY || entry.customType === REGISTRY_DELTA_ENTRY)
+              ? [entry]
+              : [],
+          );
+        // Each of the three runs checkpoints at least its input and its reply.
+        assert.ok(written.length >= 3 * 2, `busy checkpoints are durable (${written.length})`);
+        let wholeRecords = 0;
+        for (const entry of written) {
+          assert.equal(entry.customType, REGISTRY_DELTA_ENTRY);
+          const changes = (entry.data as RegistryDelta).changes;
+          const paths = changes.map((change) => {
+            if (!("thread" in change)) return change.path;
+            wholeRecords++;
+            return change.thread.view.path;
+          });
+          assert.deepEqual(paths, ["/root/busy"], "the settled thread is never rewritten");
+        }
+        // Added with its inherited context, then once more when its transcript replaces it.
+        assert.equal(wholeRecords, 2, "checkpoints write only the changed view fields");
+
+        const reopened = SessionManager.open(root.getSessionFile()!);
+        const saved = registry(reopened);
+        assert.deepEqual(
+          saved.threads.map((thread) => thread.view.path),
+          ["/root/settled", "/root/busy"],
+        );
+        assert.equal(
+          sessionLeafId(saved.threads[1]!),
+          SessionManager.open(busy.sessionFile!).getLeafId(),
+        );
+        session = await open(reopened);
+        const restored = await tool<ThreadView>(session, "agent_status", { path: "busy" });
+        assert.equal(restored.state, "completed");
+        assert.equal(restored.output, "reply /root/busy 3");
+        await close(session);
         assert.deepEqual(errors, []);
       },
     );
