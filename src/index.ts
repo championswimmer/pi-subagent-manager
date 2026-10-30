@@ -724,6 +724,8 @@ export default function piSubagent(pi: ExtensionAPI): void {
     closeNavigation(true);
     await manager?.shutdown();
     costFooter.clear();
+    // A clean close leaves an exact checkpoint for releases that cannot read deltas.
+    registryWriter.reset();
     persist();
     if (context?.hasUI) context.ui.setWidget("pi-subagent", undefined);
     manager = undefined;

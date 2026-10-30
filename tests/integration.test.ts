@@ -220,8 +220,6 @@ test(
           await tool(session, "agent_steer", { path: "busy", message });
           await tool(session, "agent_wait", { path: "busy" });
         }
-        await close(session);
-
         const written = root
           .getEntries()
           .slice(settledAt)
@@ -246,6 +244,15 @@ test(
         }
         // Added with its inherited context, then once more when its transcript replaces it.
         assert.equal(wholeRecords, 2, "checkpoints write only the changed view fields");
+        await close(session);
+        const legacy = root
+          .getBranch()
+          .reverse()
+          .find(
+            (entry) => entry.type === "custom" && entry.customType === "pi-subagent:registry:v1",
+          );
+        assert.ok(legacy?.type === "custom");
+        assert.deepEqual(legacy.data, registry(root), "clean shutdown is readable before deltas");
 
         const reopened = SessionManager.open(root.getSessionFile()!);
         const saved = registry(reopened);
