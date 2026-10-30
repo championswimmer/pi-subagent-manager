@@ -583,6 +583,16 @@ export default function piSubagent(pi: ExtensionAPI): void {
     store.reload();
     if (store.diagnostics.length) context?.ui.notify(store.diagnostics.join("\n"), "warning");
   });
+
+  // The footer normally refreshes when subagents report metrics or when a root turn ends.
+  // Without any subagents running there are no metric events, so refresh on main-session
+  // turn boundaries to keep the ongoing total accurate.
+  pi.on("message_end", async (_event, ctx) => {
+    refreshCostFooter(ctx);
+  });
+  pi.on("tool_execution_end", async (_event, ctx) => {
+    refreshCostFooter(ctx);
+  });
   syncTools();
   pi.on("before_agent_start", async (event, ctx) => {
     // Re-verify on every turn: the Labs opt-in AND live checklist eligibility must both hold.
