@@ -154,6 +154,8 @@ export interface AgentDriver {
 }
 export interface DriverOptions {
   path: string;
+  /** Whether the configured depth limit permits another level of children. */
+  canSpawnChildren?: boolean;
   type: AgentType;
   inherited: AgentMessage[];
   tools: ToolDefinition[];

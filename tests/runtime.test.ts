@@ -969,6 +969,25 @@ test("isolated real SDK driver without credentials", async (t) => {
               );
             }
           }
+          for (const canSpawnChildren of [true, false]) {
+            next = answer("depth guidance");
+            const driver = await create(
+              options({
+                path: `/root/depth-${canSpawnChildren}`,
+                tools: custom,
+                canSpawnChildren,
+              }),
+            );
+            await driver.prompt("Check depth guidance");
+            const system = requests.at(-1)!.system;
+            assert.match(
+              system,
+              canSpawnChildren
+                ? /may spawn subagents of your own if useful/
+                : /cannot spawn any more subagents/,
+            );
+            if (!canSpawnChildren) assert.doesNotMatch(system, /Name child paths/);
+          }
           // Broader modes ignore unavailable names in the lists they bypass.
           for (const mode of ["all-except-blocked", "all"] as const) {
             toolFiltering = mode;

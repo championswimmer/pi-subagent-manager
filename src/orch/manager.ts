@@ -719,8 +719,15 @@ export class ThreadManager {
             if (!parentRecord.driver) await this.ensureDriver(parentRecord, readOnly);
           }
           const parentSessionFile = this.lexicalParentSessionFile(record);
+          const segments = record.view.path.slice(1).split("/");
+          const level = segments.length + (segments[0] === "root" ? 0 : 1);
+          const canSpawnChildren =
+            this.options.maxLevels === undefined && this.options.maxDepth !== undefined
+              ? segments.length - 1 < this.options.maxDepth
+              : level < (this.options.maxLevels ?? DEFAULT_MANAGER_SETTINGS.maxLevels);
           const options: DriverOptions = {
             path: record.view.path,
+            canSpawnChildren,
             type: record.definition,
             inherited: record.inherited,
             tools: this.options.toolsFor(record.view.path),

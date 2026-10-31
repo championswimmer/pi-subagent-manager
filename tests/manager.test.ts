@@ -23,6 +23,23 @@ const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const workerType: AgentType = { name: "worker", description: "test", systemPrompt: "child prompt" };
 
+test("driver delegation capability follows depth for nested and independent roots", async () => {
+  for (const rootPath of ["/root/task", "/task"]) {
+    const { manager, drivers } = fixture({ maxLevels: 3 });
+    try {
+      await manager.spawn("/root", { path: rootPath, type: "worker", task: "work", wait: false });
+      await tick();
+      assert.equal(drivers.get(rootPath)!.options.canSpawnChildren, true);
+      const childPath = `${rootPath}/child`;
+      await manager.spawn(rootPath, { path: childPath, type: "worker", task: "work", wait: false });
+      await tick();
+      assert.equal(drivers.get(childPath)!.options.canSpawnChildren, false);
+    } finally {
+      await manager.shutdown();
+    }
+  }
+});
+
 /** A driver whose prompt records the message and blocks until `release()`. */
 function gated(overrides: Partial<AgentDriver> = {}) {
   let release = () => {};

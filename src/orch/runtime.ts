@@ -28,6 +28,7 @@ import {
 } from "./mailbox.ts";
 import { selectTools } from "../prefs/config.ts";
 import { TranscriptChannel } from "./transcript.ts";
+import { delegationGuidance } from "./prompt.ts";
 import { discoverSubagentExtensions, selectSubagentExtensions } from "./extensions.ts";
 import type { InheritedToolSource } from "./inherited-tools.ts";
 import type {
@@ -545,7 +546,10 @@ export function createDriverFactory(
           ? `Your lexical parent is ${options.parentPath}; inherited conversation comes only from that parent.`
           : "You are an independent root thread with no inherited history.",
         "When finished, give your final answer normally so it can be handed back. To retain unfinished work without a final answer, call agent_pause (if available), then stop; resume only when instructed.",
-        ...(allowed.has("agent_spawn") && allowed.has("agent_wait")
+        delegationGuidance(options.canSpawnChildren !== false),
+        ...(options.canSpawnChildren !== false &&
+        allowed.has("agent_spawn") &&
+        allowed.has("agent_wait")
           ? [
               "Name child paths with concise task-based kebab-case slugs (e.g. /root/controller-security-research), independent of type.",
               "For independent parallel work, launch all siblings with agent_spawn wait:false before calling agent_wait. Children share the main conversation's depth and concurrency limits; waiting parents count as active. Do not delegate work beyond your assigned scope.",
