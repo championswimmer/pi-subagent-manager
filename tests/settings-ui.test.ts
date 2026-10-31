@@ -1407,6 +1407,18 @@ test("extension chooser lists auto-discovered files from custom agentDir and onl
     [...userFiles, ...projectFiles].sort(),
   );
   assert.deepEqual(trusted.loaded.settings.subagentExtensions, [userFile, projectFile].sort());
+  // Directory entry points use their folder names; standalone extensions keep their filenames.
+  for (const file of [...userFiles, ...projectFiles]) {
+    const row = trusted.menus[1]!.rows.find((row) => row.id === file)!;
+    const selected = file === userFile;
+    const name = file.includes(join("nested", "index."))
+      ? "nested"
+      : file.endsWith(".js")
+        ? "standalone.js"
+        : "standalone.ts";
+    assert.equal(row.label, `${selected ? "[x]" : "[ ]"} ${name}`);
+    assert.equal(row.help!.split("\n")[0], file);
+  }
 });
 test("Nerd Fonts off filters loader previews, uses ASCII fallback, and saves non-Nerd selections", async (t) => {
   const styles = ["braille", "ascii", "ascii-star", "ascii-pulse"] as const;

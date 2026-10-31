@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
-import { basename } from "node:path";
+import { basename, dirname } from "node:path";
 import { discoverSubagentExtensions } from "../orch/extensions.ts";
 import type { ConfigStore } from "../prefs/config.ts";
 import {
@@ -226,7 +226,7 @@ async function configureSubagentExtensions(
       [
         ...files.map((file) => ({
           id: file,
-          label: `${selected.has(file) ? "[x]" : "[ ]"} ${basename(file)}`,
+          label: `${selected.has(file) ? "[x]" : "[ ]"} ${/^index\.[cm]?[jt]s$/.test(basename(file)) ? basename(dirname(file)) : basename(file)}`,
           value: available.includes(file) ? (selected.has(file) ? "On" : "Off") : "Unavailable",
           help: `${file}\n${available.includes(file) ? "Reload this extension in newly opened subagent sessions." : "Not currently discoverable/trusted; will not load. Toggle Off to remove the saved selection."}\nSpace/Enter toggles. Changes are saved only with outer Save and apply.`,
         })),
