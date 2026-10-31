@@ -14,3 +14,14 @@ for (const subagentMode of ["opportunistic", "orchestration"] as const) {
     assert.ok(prompt!.trim().length > 0);
   });
 }
+
+test("root delegation guidance reflects the depth limit", () => {
+  assert.match(
+    subagentPrompt({ ...DEFAULT_MANAGER_SETTINGS, maxLevels: 3 })!,
+    /may spawn subagents of your own if useful/,
+  );
+  assert.match(
+    subagentPrompt({ ...DEFAULT_MANAGER_SETTINGS, maxLevels: 1 })!,
+    /cannot spawn any more subagents/,
+  );
+});

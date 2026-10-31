@@ -1,6 +1,12 @@
 import type { ManagerSettings } from "../prefs/settings.ts";
 import { checklistGuidance } from "./checklist-integration.ts";
 
+export function delegationGuidance(canSpawnChildren: boolean): string {
+  return canSpawnChildren
+    ? "You may spawn subagents of your own if useful, subject to your tools, assigned scope, and shared concurrency limits."
+    : "You are at the maximum agent depth and cannot spawn any more subagents. Complete your assigned work yourself.";
+}
+
 /** Root-only guidance: child SDK sessions use their own worker prompt. */
 export function subagentPrompt(
   settings: ManagerSettings,
@@ -25,6 +31,7 @@ export function subagentPrompt(
     'Use agent_status to inspect and agent_output for full results. Completion, failure or stop of a wait:false agent is delivered to you as a message event that starts a new turn when you are idle (with Final Recap on, once after all outstanding async agents have finished). Pass timeoutMs to agent_spawn to get a status event if a child runs long; the child is not killed. Valid range 30000–300000 ms; omit for no timeout. To extend a running background agent\'s reporting timer, before or after a timeout event, call agent_steer({path: "/root/task", timeoutMs: 120000}) with message omitted entirely. This resets the timer from now (replacing any pending timer), without sending input, interrupting or resuming the agent; it requires the agent to still be running. After re-arming, end your turn to remain available while it works. For other timeout responses, follow the waiting policy above, send steering input or stop the agent.',
     "Use agent_steer to send input or resume retained sessions. Paused agents have no final answer; completed agents hand back results. Both retain their session.",
     `Maximum depth: ${settings.maxLevels} levels including L1. Shared concurrency: ${settings.maxConcurrent} active threads; waiting parents count.`,
+    delegationGuidance(settings.maxLevels > 1),
     ...(settings.checklistIntegration && checklistEligible
       ? [checklistGuidance(settings.subagentMode)]
       : []),
