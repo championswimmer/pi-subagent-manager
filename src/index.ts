@@ -14,6 +14,7 @@ import {
   offerAgentImport,
 } from "./prefs/agent-import.ts";
 import { ThreadManager } from "./orch/manager.ts";
+import { inheritedContextEntries } from "./orch/context-entries.ts";
 import { loadManagerSettings } from "./prefs/settings.ts";
 import { configureAgents } from "./ui/settings-ui.ts";
 import { AgentNavigationController } from "./ui/status-ui.ts";
@@ -656,6 +657,8 @@ export default function piSubagent(pi: ExtensionAPI): void {
       ...limits,
       createDriver: driverFactory,
       rootSnapshot: () => buildSessionContext(requireContext().sessionManager.getBranch()).messages,
+      rootContextEntries: () =>
+        inheritedContextEntries(requireContext().sessionManager.getBranch()),
       getType: (name) => store.get(name),
       toolsFor,
       onEventError: (error, event) => {

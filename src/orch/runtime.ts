@@ -31,6 +31,7 @@ import { TranscriptChannel } from "./transcript.ts";
 import { delegationGuidance } from "./prompt.ts";
 import { discoverSubagentExtensions, selectSubagentExtensions } from "./extensions.ts";
 import type { InheritedToolSource } from "./inherited-tools.ts";
+import { inheritedContextEntries } from "./context-entries.ts";
 import type {
   ModelSelectionMode,
   SubagentExtensionSelection,
@@ -346,6 +347,9 @@ export function createDriverFactory(
         ) {
           sessionManager.appendMessage(message);
         }
+      }
+      for (const entry of options.inheritedContextEntries ?? []) {
+        sessionManager.appendCustomEntry(entry.customType, entry.data);
       }
     }
     const restored = options.sessionFile ? sessionManager.buildSessionContext() : undefined;
@@ -978,6 +982,9 @@ export function createDriverFactory(
       },
       snapshot() {
         return structuredClone(session.messages);
+      },
+      contextEntries() {
+        return inheritedContextEntries(sessionManager.getBranch());
       },
       observeTranscript(listener) {
         assertOpen();

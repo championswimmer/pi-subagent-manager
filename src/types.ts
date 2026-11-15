@@ -140,10 +140,17 @@ export interface TranscriptObservation {
 }
 export type TranscriptListener = (snapshot: TranscriptSnapshot) => void;
 
+/** Opaque session metadata needed to reproduce inherited context transformations. */
+export interface InheritedContextEntry {
+  customType: string;
+  data: unknown;
+}
+
 export interface AgentDriver {
   prompt(message: string): Promise<void>;
   steer(message: string): Promise<void>;
   snapshot(): AgentMessage[];
+  contextEntries?(): InheritedContextEntry[];
   observeTranscript?(listener: TranscriptListener): TranscriptObservation;
   output(): string;
   abort(): Promise<void>;
@@ -158,6 +165,7 @@ export interface DriverOptions {
   canSpawnChildren?: boolean;
   type: AgentType;
   inherited: AgentMessage[];
+  inheritedContextEntries?: InheritedContextEntry[];
   tools: ToolDefinition[];
   onEvent(event: DriverEvent): void;
   shouldPause(): boolean;
@@ -198,6 +206,7 @@ export interface SavedThread {
   definition: AgentType;
   /** Reserved threads may not have a transcript yet; preserve their initial context. */
   inherited?: AgentMessage[];
+  inheritedContextEntries?: InheritedContextEntry[];
 }
 export interface ThreadService {
   list(): ThreadView[];
@@ -245,6 +254,7 @@ export interface ThreadActivity {
 export interface ManagerOptions {
   createDriver: DriverFactory;
   rootSnapshot(): AgentMessage[];
+  rootContextEntries?(): InheritedContextEntry[];
   getType(name: string): AgentType;
   toolsFor(path: string): ToolDefinition[];
   onEvent?(event: ThreadEvent): void;
