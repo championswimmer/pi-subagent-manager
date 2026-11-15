@@ -4,6 +4,7 @@ import type {
   AgentDriver,
   AgentType,
   DriverOptions,
+  InheritedContextEntry,
   ManagerOptions,
   SavedThread,
   SavedThreadView,
@@ -22,6 +23,7 @@ interface Record {
   view: ThreadView;
   definition: AgentType;
   inherited: AgentMessage[];
+  inheritedContextEntries: InheritedContextEntry[];
   contextReady?: Promise<void>;
   contextPending?: boolean;
   startup: AbortController;
@@ -232,7 +234,10 @@ export class ThreadManager {
         view,
         definition: structuredClone(record.definition),
         ...(!view.sessionFile && !record.contextPending
-          ? { inherited: structuredClone(record.inherited) }
+          ? {
+              inherited: structuredClone(record.inherited),
+              inheritedContextEntries: structuredClone(record.inheritedContextEntries),
+            }
           : {}),
       };
     });
@@ -274,6 +279,7 @@ export class ThreadManager {
         view,
         definition: structuredClone(item.definition),
         inherited: structuredClone(item.inherited ?? []),
+        inheritedContextEntries: structuredClone(item.inheritedContextEntries ?? []),
         // A reservation saved before its lexical parent opened has no snapshot yet.
         contextPending: !view.sessionFile && item.inherited === undefined && view.parent !== null,
         startup: new AbortController(),
@@ -337,6 +343,11 @@ export class ThreadManager {
         : parentRecord?.driver
           ? inheritContext(parentRecord.driver.snapshot())
           : [];
+    const inheritedContextEntries = structuredClone(
+      parent === "/root"
+        ? (this.options.rootContextEntries?.() ?? [])
+        : (parentRecord?.driver?.contextEntries?.() ?? []),
+    );
     const now = Date.now();
     const record: Record = {
       view: {
@@ -358,6 +369,7 @@ export class ThreadManager {
       },
       definition: type,
       inherited,
+      inheritedContextEntries,
       contextPending: !!(parentRecord && !parentRecord.driver),
       startup: new AbortController(),
       pauseRequested: false,
@@ -730,6 +742,7 @@ export class ThreadManager {
             canSpawnChildren,
             type: record.definition,
             inherited: record.inherited,
+            inheritedContextEntries: record.inheritedContextEntries,
             tools: this.options.toolsFor(record.view.path),
             parentPath: record.view.parent,
             sessionFile: record.view.sessionFile,
@@ -983,6 +996,7 @@ export class ThreadManager {
     if (record.contextReady) return record.contextReady;
     if (!record.view.parent || record.view.parent === "/root") {
       record.inherited = inheritContext(this.options.rootSnapshot());
+      record.inheritedContextEntries = structuredClone(this.options.rootContextEntries?.() ?? []);
       record.contextPending = false;
       return undefined;
     }
@@ -991,6 +1005,7 @@ export class ThreadManager {
     ready = this.ensureDriver(parentRecord, readOnly)
       .then((driver) => {
         record.inherited = inheritContext(driver.snapshot());
+        record.inheritedContextEntries = structuredClone(driver.contextEntries?.() ?? []);
         record.contextPending = false;
         if (record.contextReady === ready) record.contextReady = undefined;
         this.touch(record);

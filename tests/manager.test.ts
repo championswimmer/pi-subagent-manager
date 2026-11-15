@@ -23,6 +23,52 @@ const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const workerType: AgentType = { name: "worker", description: "test", systemPrompt: "child prompt" };
 
+test("pruner metadata follows the lexical snapshot and is isolated across descendants", async () => {
+  const rootEntries = [
+    { customType: "context-prune-index", data: { toolCalls: [{ id: "root" }] } },
+  ];
+  const { manager, drivers } = fixture({ rootContextEntries: () => rootEntries });
+  try {
+    await manager.spawn("/root", {
+      path: "/root/parent",
+      type: "worker",
+      task: "work",
+      wait: false,
+    });
+    await tick();
+    const parent = drivers.get("/root/parent")!;
+    assert.deepEqual(parent.options.inheritedContextEntries, rootEntries);
+    const childEntries = structuredClone(rootEntries);
+    childEntries.push({
+      customType: "context-prune-index",
+      data: { toolCalls: [{ id: "child" }] },
+    });
+    parent.driver.contextEntries = () => childEntries;
+    await manager.spawn("/root/parent", {
+      path: "/root/parent/child",
+      type: "worker",
+      task: "work",
+      wait: false,
+    });
+    childEntries[0]!.data.toolCalls[0]!.id = "mutated";
+    await tick();
+    const inherited = drivers.get("/root/parent/child")!.options.inheritedContextEntries!;
+    assert.equal((inherited[0]!.data as (typeof rootEntries)[0]["data"]).toolCalls[0]!.id, "root");
+    assert.equal(inherited.length, 2);
+    assert.equal(rootEntries.length, 1);
+    await manager.spawn("/root", {
+      path: "/independent",
+      type: "worker",
+      task: "work",
+      wait: false,
+    });
+    await tick();
+    assert.deepEqual(drivers.get("/independent")!.options.inheritedContextEntries, []);
+  } finally {
+    await manager.shutdown();
+  }
+});
+
 test("driver delegation capability follows depth for nested and independent roots", async () => {
   for (const rootPath of ["/root/task", "/task"]) {
     const { manager, drivers } = fixture({ maxLevels: 3 });
@@ -295,6 +341,10 @@ test("restored nested child opens parent first but keeps its saved inherited sna
   const order: string[] = [];
   const childInherited: AgentMessage[][] = [];
   const savedChildSnapshot = [user("saved child snapshot")];
+  const savedEntries = [
+    { customType: "context-prune-frontier", data: { lastAttemptedToolCallId: "old" } },
+  ];
+  const childEntries: unknown[] = [];
   const child = gated();
   const { manager } = fixture({
     createDriver: async (options) => {
@@ -302,17 +352,23 @@ test("restored nested child opens parent first but keeps its saved inherited sna
       if (options.path === "/root/parent")
         return gated({ prompt: async () => {}, snapshot: () => [user("live parent")] }).driver;
       childInherited.push(structuredClone(options.inherited));
+      childEntries.push(structuredClone(options.inheritedContextEntries));
       return child.driver;
     },
   });
   manager.restore([
     saved("/root/parent", { sessionFile: "/tmp/saved-parent.jsonl" }),
-    saved("/root/parent/child", {}, { inherited: savedChildSnapshot }),
+    saved(
+      "/root/parent/child",
+      {},
+      { inherited: savedChildSnapshot, inheritedContextEntries: savedEntries },
+    ),
   ]);
   await manager.steer("/root", "parent/child", "resume child");
   await tick();
   assert.deepEqual(order, ["/root/parent", "/root/parent/child"]);
   assert.deepEqual(childInherited, [savedChildSnapshot]);
+  assert.deepEqual(childEntries, [savedEntries]);
   child.release();
   assert.equal((await manager.wait("/root", "parent/child")).state, "completed");
   await manager.shutdown();

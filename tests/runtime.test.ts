@@ -276,6 +276,77 @@ test("isolated real SDK driver without credentials", async (t) => {
       setRootModel("runtime-test/model/with/slashes");
     };
 
+    await t.test("prune metadata is present at session_start and remains child-local", async () => {
+      const extensionDir = path.join(directory, "extensions");
+      await mkdir(extensionDir);
+      const extensionFile = path.join(extensionDir, "prune-test.ts");
+      await writeFile(
+        extensionFile,
+        `
+        export default function(pi) {
+          let ids = [];
+          pi.on("session_start", (_event, ctx) => {
+            ids = ctx.sessionManager.getBranch().flatMap(e =>
+              e.type === "custom" && e.customType === "context-prune-index"
+                ? e.data.toolCalls.map(c => c.toolCallId) : []);
+          });
+          pi.on("context", event => ({ messages: event.messages.filter(m =>
+            m.role !== "toolResult" || !ids.includes(m.toolCallId)) }));
+        }
+      `,
+      );
+      const index = {
+        customType: "context-prune-index",
+        data: { toolCalls: [{ toolCallId: "call-1" }] },
+      };
+      const frontier = {
+        customType: "context-prune-frontier",
+        data: { lastAttemptedToolCallId: "call-1" },
+      };
+      const result = {
+        role: "toolResult" as const,
+        toolCallId: "call-1",
+        toolName: "test",
+        content: [{ type: "text" as const, text: "secret raw output" }],
+        isError: false,
+        timestamp: Date.now(),
+      };
+      const inherited = [toolCall("call-1", "test"), result];
+      try {
+        subagentExtensions = [extensionFile];
+        const child = await create(
+          options({ path: "/root/pruned", inherited, inheritedContextEntries: [index, frontier] }),
+        );
+        assert.deepEqual(child.contextEntries?.(), [index, frontier]);
+        await child.prompt("test pruning");
+        assert.equal(
+          requests.at(-1)!.messages.some((m) => messageText(m) === "secret raw output"),
+          false,
+        );
+        const branch = SessionManager.open(child.sessionFile!).getBranch();
+        assert.ok(branch.some((e) => e.type === "message" && e.message.role === "toolResult"));
+        assert.equal(
+          root
+            .getBranch()
+            .some((e) => e.type === "custom" && e.customType === "context-prune-index"),
+          false,
+        );
+        subagentExtensions = false;
+        const plain = await create(
+          options({ path: "/root/plain", inherited, inheritedContextEntries: [index, frontier] }),
+        );
+        await plain.prompt("test without extension");
+        assert.equal(
+          requests.at(-1)!.messages.some((m) => messageText(m) === "secret raw output"),
+          true,
+        );
+        assert.deepEqual(plain.contextEntries?.(), [index, frontier]);
+      } finally {
+        subagentExtensions = false;
+        await rm(extensionDir, { recursive: true, force: true });
+      }
+    });
+
     await t.test(
       "configured hooks are opt-in, child-local, filtered and cleaned up on resume",
       async () => {
