@@ -14,6 +14,7 @@ import {
   offerAgentImport,
 } from "./prefs/agent-import.ts";
 import { ThreadManager } from "./orch/manager.ts";
+import { parentPath } from "./orch/paths.ts";
 import { inheritedContextEntries } from "./orch/context-entries.ts";
 import { loadManagerSettings } from "./prefs/settings.ts";
 import { configureAgents } from "./ui/settings-ui.ts";
@@ -491,8 +492,8 @@ export default function piSubagent(pi: ExtensionAPI): void {
           // another turn. Completions during a summary do need a follow-up summary.
           finalRecap: recap,
           // Recap mode defers the turn until every outstanding async agent has reported.
-          // A waiter pausing for agent_sleep, or a result that woke a waiter, hands over without a
-          // /root turn (docs/sleep-until.md). Failures and wait notices always trigger.
+          // A waiter pausing for agent_sleep, or a result that woke only /root's own waiters, hands
+          // over without a /root turn (docs/sleep-until.md). Failures and wait notices trigger.
           trigger:
             !suspendingSummaries &&
             (event.kind === "timeout" ||
@@ -501,7 +502,11 @@ export default function piSubagent(pi: ExtensionAPI): void {
                 event.async &&
                 !recap &&
                 !event.sleeping &&
-                !event.wokeWaiters?.length)),
+                !(
+                  event.wokeWaiters?.length &&
+                  // Only waiters that are /root's own children report back to /root when done.
+                  event.wokeWaiters.every((waiter) => parentPath(waiter) === "/root")
+                ))),
           details: {
             mailboxId: randomUUID(),
             path: thread.path,

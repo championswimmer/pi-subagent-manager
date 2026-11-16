@@ -453,6 +453,9 @@ export class ThreadManager {
       if (record.stopRequested && active(record.view))
         throw new Error("Thread is stopping; wait for stopped state before resuming");
       if (record.view.state === "running") {
+        // The pause boundary discards queued steering, so it would be lost silently.
+        if (this.waits.get(path)?.settled === false)
+          throw new Error("Thread is going to sleep; steer it again once it is paused");
         await record.driver!.steer(message);
         this.touch(record);
         return rearm();
@@ -463,7 +466,17 @@ export class ThreadManager {
       this.waits.delete(path);
       // Resumes return immediately, regardless of the original spawn mode or restored metadata.
       record.async = true;
-      this.start(record, waiting?.kind === "spawn" ? `${waiting.task}\n\n${message}` : message);
+      // A held waiter (every producer complete) also gets the answers it could not read itself.
+      this.start(
+        record,
+        [
+          waiting?.kind === "spawn" ? waiting.task : undefined,
+          message,
+          waiting && !waiting.pending.size ? wakeMessage(waiting) : undefined,
+        ]
+          .filter((part) => part !== undefined)
+          .join("\n\n"),
+      );
       return rearm();
     }
   }
@@ -566,7 +579,16 @@ export class ThreadManager {
     for (const path of all) {
       if (path === waiter) throw new Error("An agent cannot wait for itself");
       if (isDescendant(waiter, path)) throw new Error(`${path} is an ancestor of ${waiter}`);
-      const view = this.record(path).view;
+      // Children may name only threads of their own top-level tree. Unknown and forbidden paths
+      // read the same, so this is not an existence oracle for other trees.
+      const record = this.records.get(path);
+      if (!record || (caller !== "/root" && path.split("/")[1] !== caller.split("/")[1]))
+        throw new Error(
+          caller === "/root"
+            ? `Unknown thread ${path}`
+            : `Unknown thread ${path} (or outside your agent tree)`,
+        );
+      const view = record.view;
       if (view.state === "failed" || view.state === "stopped")
         throw new Error(`${path} is ${view.state}; resume it before waiting for it`);
       if (view.state === "completed") answers.set(path, view.output ?? "");
@@ -598,10 +620,14 @@ export class ThreadManager {
     }
     return { sleeping, woke };
   }
-  /** A failed or stopped producer leaves its waiters asleep; /root decides what to do. */
-  private noticeStalled(producer: Record): void {
+  /**
+   * A failed, stopped or paused producer leaves its waiters asleep; /root decides what to do.
+   * A producer that is itself asleep is not stalled: its own producers will wake it.
+   */
+  private noticeStalled(producer: Record, suffix = ""): void {
     const { path, state } = producer.view;
-    if (state !== "failed" && state !== "stopped") return;
+    if (state !== "failed" && state !== "stopped" && state !== "paused") return;
+    if (this.waits.has(path)) return;
     for (const waiter of this.waits.pendingOn(path)) {
       const record = this.records.get(waiter);
       if (!record) continue;
@@ -609,7 +635,7 @@ export class ThreadManager {
         kind: "waitNotice",
         thread: this.view(record),
         recipient: "/root",
-        text: `${waiter} sleeps on ${path}; ${path} ${state}: ${producer.view.error ?? producer.view.status}`,
+        text: `${waiter} ${this.waits.get(waiter)!.kind === "sleep" ? "sleeps on" : "waits on"} ${path}; ${path} ${state}${suffix}: ${producer.view.error ?? producer.view.status}`,
       });
     }
   }
@@ -692,6 +718,11 @@ export class ThreadManager {
       }
       this.waits.set(record.view.path, entry);
     }
+    // Nothing restarts after a reload, so a waiter whose producers are idle would sleep forever.
+    const producers = new Set(
+      this.waits.paths().flatMap((path) => [...this.waits.get(path)!.pending]),
+    );
+    for (const producer of producers) this.noticeStalled(restored.get(producer)!, " after reload");
     for (const record of held)
       this.emit({
         kind: "waitNotice",
@@ -707,6 +738,9 @@ export class ThreadManager {
     const targets = [...this.records.values()].filter(
       (item) => item === record || (isDescendant(item.view.path, path) && active(item.view)),
     );
+    // Stopping a subtree also cancels the waits of its idle descendants.
+    for (const [waiter] of [...this.waits])
+      if (isDescendant(waiter, path)) this.waits.delete(waiter);
     const idle = targets.filter((item) => !active(item.view));
     for (const item of targets) {
       item.stopRequested = true;

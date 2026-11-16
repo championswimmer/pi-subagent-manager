@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import type { JsonObject } from "@earendil-works/pi-ai";
+import type { AssistantMessage, JsonObject } from "@earendil-works/pi-ai";
 import { withOfflineHarness } from "./helpers/integrationHarness.ts";
 import { ThreadManager } from "../src/orch/manager.ts";
 import { agentTools } from "../src/orch/tools.ts";
@@ -414,7 +414,12 @@ test("11a. the wait list survives save, registry write/read and restore, and sta
     second.manager.restore(restoredThreads);
     assert.equal(second.manager.get(W).state, "paused");
     assert.equal(second.manager.get("/root/l").state, "paused");
-    assert.deepEqual(second.notices(), []);
+    // The producer was interrupted by the reload and nothing restarts it: /root is told.
+    const text = (event: ThreadEvent) => (event.kind === "waitNotice" ? event.text : "");
+    assert.deepEqual(second.notices().map(text), [
+      "/root/w sleeps on /root/p; /root/p paused after reload: Interrupted by reload; send input to resume",
+      "/root/l waits on /root/p; /root/p paused after reload: Interrupted by reload; send input to resume",
+    ]);
     // The producer was interrupted by the reload; resuming it and completing wakes both.
     await second.manager.steer("/root", P, "continue");
     await tick();
@@ -631,6 +636,357 @@ test(
           assert.deepEqual(errors, []);
         } finally {
           release(text("cleanup"));
+          await close(session);
+        }
+      },
+    );
+  },
+);
+
+const text = (event: ThreadEvent) => (event.kind === "waitNotice" ? event.text : "");
+
+test("access: a child may name only threads of its own top-level tree, with one error text", async () => {
+  const { manager, spawn, complete } = fixture();
+  try {
+    await spawn("a");
+    await spawn("b");
+    await spawn("/fork");
+    await spawn("/other");
+    await complete("/fork");
+    const child = manager.scope("/root/a");
+    // A completed thread of another tree must not leak its answer; unknown and forbidden read alike.
+    const forbidden = assert.throws(() => child.sleep(["/fork"]), /outside your agent tree/);
+    const unknownOther = assert.throws(() => child.sleep(["/nothing"]), /outside your agent tree/);
+    const unknownOwn = assert.throws(
+      () => child.sleep(["/root/nothing"]),
+      /outside your agent tree/,
+    );
+    void [forbidden, unknownOther, unknownOwn];
+    const message = (path: string) => {
+      try {
+        child.sleep([path]);
+      } catch (error) {
+        return (error as Error).message.replace(path, "<path>");
+      }
+      return "no error";
+    };
+    assert.equal(message("/fork"), message("/root/nothing"));
+    assert.equal(message("/nothing"), message("/root/nothing"));
+    // `after` follows the same rule when a child spawns.
+    await assert.rejects(
+      manager.spawn("/root/a", {
+        path: "x",
+        type: "worker",
+        task: "t",
+        wait: false,
+        after: ["/fork"],
+      }),
+      /outside your agent tree/,
+    );
+    // Inside a tree, siblings are fine; /root is unrestricted.
+    assert.equal(child.sleep(["/root/b"]).sleeping, true);
+    await manager.spawn("/root", {
+      path: "y",
+      type: "worker",
+      task: "t",
+      wait: false,
+      after: ["/fork"],
+    });
+    await tick();
+    assert.equal(manager.get("/root/y").state, "running");
+    // An independent root sees only its own tree.
+    assert.throws(() => manager.scope("/other").sleep(["/root/b"]), /outside your agent tree/);
+  } finally {
+    await manager.shutdown();
+  }
+});
+
+test("restore: waiters whose producers are stopped, failed or paused notify /root", async () => {
+  const { manager, drivers, notices } = fixture();
+  try {
+    manager.restore([
+      savedThread("/root/s", { state: "stopped", status: "Stopped; session retained" }),
+      savedThread("/root/f", { state: "failed", status: "boom", error: "boom" }),
+      savedThread("/root/q", { state: "paused", status: "Which branch?" }),
+      savedThread("/root/c", { state: "completed", output: "done", status: "Completed" }),
+      savedThread("/root/w1", { sleepUntil: ["/root/s", "/root/c"], sleepKind: "sleep" }),
+      savedThread("/root/w2", { sleepUntil: ["/root/f"], sleepKind: "sleep" }),
+      savedThread("/root/w3", { sleepUntil: ["/root/q"], sleepKind: "spawn", sleepTask: "t" }),
+      // A producer that is itself asleep is not stalled.
+      savedThread("/root/w4", { sleepUntil: ["/root/w1"], sleepKind: "sleep" }),
+    ]);
+    await settle();
+    assert.deepEqual(notices().map(text), [
+      "/root/w1 sleeps on /root/s; /root/s stopped after reload: Stopped; session retained",
+      "/root/w2 sleeps on /root/f; /root/f failed after reload: boom",
+      "/root/w3 waits on /root/q; /root/q paused after reload: Which branch?",
+    ]);
+    assert.equal(drivers.size, 0);
+  } finally {
+    await manager.shutdown();
+  }
+});
+
+test("a producer that pauses (agent_pause) notifies /root; a sleeping producer does not", async () => {
+  const { manager, drivers, spawn, notices } = fixture();
+  try {
+    await spawn("p");
+    await spawn("q");
+    await spawn("w");
+    await spawn("x");
+    manager.scope("/root/w").sleep(["/root/p"]);
+    drivers.get("/root/w")!.finish();
+    manager.scope("/root/x").sleep(["/root/w"]); // x waits on a sleeper
+    drivers.get("/root/x")!.finish();
+    await settle();
+    assert.deepEqual(notices(), [], "sleepers are not stalled producers");
+    manager.scope("/root/p").pause("Which branch?");
+    drivers.get("/root/p")!.finish();
+    await settle();
+    assert.deepEqual(notices().map(text), [
+      "/root/w sleeps on /root/p; /root/p paused: Which branch?",
+    ]);
+    assert.equal(manager.get("/root/w").state, "paused");
+  } finally {
+    await manager.shutdown();
+  }
+});
+
+test("steer on a held waiter includes the producers' answers", async () => {
+  const { manager, drivers } = fixture();
+  try {
+    manager.restore([
+      savedThread(P, { state: "completed", output: "P done", status: "Completed" }),
+      savedThread(W, { sleepUntil: [P], sleepKind: "sleep" }),
+      savedThread("/root/l", { sleepUntil: [P], sleepKind: "spawn", sleepTask: "assemble" }),
+    ]);
+    await manager.steer("/root", W, "go on");
+    await manager.steer("/root", "/root/l", "start now");
+    await settle();
+    assert.match(drivers.get(W)!.runs[0]!, /^go on\n\n[\s\S]*## \/root\/p\nP done/);
+    assert.match(
+      drivers.get("/root/l")!.runs[0]!,
+      /^assemble\n\nstart now\n\n[\s\S]*## \/root\/p\nP done/,
+    );
+  } finally {
+    await manager.shutdown();
+  }
+});
+
+test("steer during the sleep window is refused, not queued and lost", async () => {
+  const { manager, drivers, spawn, complete } = fixture();
+  try {
+    await spawn("p");
+    await spawn("w");
+    manager.scope(W).sleep([P]); // The waiter's turn has not ended yet.
+    await assert.rejects(manager.steer("/root", W, "stop waiting"), /going to sleep/);
+    assert.deepEqual(drivers.get(W)!.steering, []);
+    await complete(W);
+    assert.equal(manager.get(W).state, "paused");
+    await manager.steer("/root", W, "stop waiting"); // Once paused, a manual resume wins.
+    await settle();
+    assert.equal(drivers.get(W)!.runs[1], "stop waiting");
+  } finally {
+    await manager.shutdown();
+  }
+});
+
+test("stopping an ancestor cancels the waits of its idle descendants", async () => {
+  const { manager, drivers, events, spawn, complete, notices } = fixture();
+  try {
+    await spawn("p");
+    await spawn("parent");
+    await manager.spawn("/root/parent", { path: "w", type: "worker", task: "w", wait: false });
+    await tick();
+    await manager.spawn("/root/parent", {
+      path: "l",
+      type: "worker",
+      task: "l",
+      wait: false,
+      after: [P],
+    });
+    manager.scope("/root/parent/w").sleep([P]);
+    drivers.get("/root/parent/w")!.finish();
+    await settle();
+    await manager.stop("/root", "/root/parent");
+    const saved = manager.saved();
+    for (const path of ["/root/parent/w", "/root/parent/l"])
+      assert.equal(saved.find((t) => t.view.path === path)!.view.sleepUntil, undefined, path);
+    await complete("/root/p");
+    assert.deepEqual(notices(), []);
+    assert.equal(drivers.has("/root/parent/l"), false);
+    assert.equal(drivers.get("/root/parent/w")!.runs.length, 1);
+    void events;
+  } finally {
+    await manager.shutdown();
+  }
+});
+
+type Reply = AssistantMessage;
+const reply = (value: string): Reply => ({
+  role: "assistant",
+  content: [{ type: "text", text: value }],
+  provider: "integration-test",
+  model: "offline",
+  api: "openai-completions",
+  stopReason: "stop",
+  timestamp: Date.now(),
+  usage: {
+    input: 1,
+    output: 1,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 2,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  },
+});
+const calls = (items: { name: string; arguments: JsonObject }[]): Reply => ({
+  ...reply(""),
+  stopReason: "toolUse",
+  content: items.map((item, i) => ({ type: "toolCall", id: `call-${i}`, ...item })),
+});
+const waitUntil = async (done: () => boolean, what: string) => {
+  const deadline = Date.now() + 5000;
+  while (!done()) {
+    assert.ok(Date.now() < deadline, `Timed out: ${what}`);
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  }
+};
+const mailboxOf = (session: { sessionManager: SessionManager }) =>
+  session.sessionManager
+    .getBranch()
+    .flatMap((entry) =>
+      entry.type === "custom" && entry.customType === "pi-subagent:root-mailbox:v1"
+        ? [entry.data as { trigger: boolean; details: { path: string; state: string } }]
+        : [],
+    )
+    .map(({ trigger, details }) => `${details.path} ${details.state} ${trigger}`);
+
+test(
+  "root mailbox: a result that woke only a non-root waiter still triggers /root",
+  { timeout: 15000 },
+  async () => {
+    let release!: (message: Reply) => void;
+    const producerAnswer = new Promise<Reply>((resolve) => (release = resolve));
+    let rootCalls = 0;
+    await withOfflineHarness(
+      {
+        agentFiles: {
+          worker:
+            "---\nname: worker\ndescription: Execute work\ntools:\n  allow: [agent_spawn]\n---\nExecute your assigned task.\n",
+        },
+        onRequest(request) {
+          if (request.path === "/root/producer") return producerAnswer;
+          if (request.path === "/root/a") {
+            // A reserves a grandchild that starts after the producer, then finishes itself.
+            return request.pathCall === 1
+              ? calls([
+                  {
+                    name: "agent_spawn",
+                    arguments: {
+                      path: "l",
+                      type: "worker",
+                      task: "Assemble",
+                      wait: false,
+                      after: ["/root/producer"],
+                    },
+                  },
+                ])
+              : reply("A is done");
+          }
+          if (request.path === "/root/a/l") return reply("L assembled");
+          rootCalls++;
+          if (rootCalls === 1)
+            return calls(
+              ["producer", "a"].map((path) => ({
+                name: "agent_spawn",
+                arguments: { path, type: "worker", task: `Task ${path}`, wait: false },
+              })),
+            );
+          return reply(`Root turn ${rootCalls}`);
+        },
+      },
+      async ({ cwd, open, close, requests, errors }) => {
+        const session = await open(SessionManager.create(cwd));
+        try {
+          await session.prompt("Delegate");
+          await waitUntil(() => mailboxOf(session).includes("/root/a completed true"), "A done");
+          await waitUntil(() => session.isIdle, "root idle");
+          const before = requests.filter((r) => !r.path).length;
+          release(reply("Producer answer"));
+          // /root's grandchild-waiter reports to A, not to /root, so /root must be woken for P.
+          await waitUntil(
+            () => mailboxOf(session).includes("/root/producer completed true"),
+            "producer notice triggers",
+          );
+          await waitUntil(
+            () => requests.filter((r) => !r.path).length > before && session.isIdle,
+            "root turn for the producer",
+          );
+          await waitUntil(
+            () => requests.some((r) => r.path === "/root/a/l"),
+            "the reserved thread ran",
+          );
+          assert.deepEqual(errors, []);
+        } finally {
+          release(reply("cleanup"));
+          await close(session);
+        }
+      },
+    );
+  },
+);
+
+test(
+  "Final Recap with sleep: one recap after the chain, no premature recap while a waiter sleeps",
+  { timeout: 15000 },
+  async () => {
+    let release!: (message: Reply) => void;
+    const producerAnswer = new Promise<Reply>((resolve) => (release = resolve));
+    let rootCalls = 0;
+    await withOfflineHarness(
+      {
+        agentFiles: {
+          worker:
+            "---\nname: worker\ndescription: Execute work\ntools:\n  allow: [agent_sleep]\n---\nExecute your assigned task.\n",
+        },
+        managerSettings: { finalRecap: true },
+        onRequest(request) {
+          if (request.path === "/root/producer") return producerAnswer;
+          if (request.path === "/root/waiter")
+            return request.pathCall === 1
+              ? calls([{ name: "agent_sleep", arguments: { until: ["/root/producer"] } }])
+              : reply("Waiter used it");
+          rootCalls++;
+          if (rootCalls === 1)
+            return calls(
+              ["producer", "waiter"].map((path) => ({
+                name: "agent_spawn",
+                arguments: { path, type: "worker", task: `Task ${path}`, wait: false },
+              })),
+            );
+          if (rootCalls === 2) return reply("Initial root answer");
+          assert.match(request.messagesText, /Waiter used it/);
+          return reply("Recap of the chain");
+        },
+      },
+      async ({ cwd, open, close, requests, errors }) => {
+        const session = await open(SessionManager.create(cwd));
+        try {
+          await session.prompt("Delegate");
+          await waitUntil(() => mailboxOf(session).length === 1, "waiter asleep");
+          await new Promise<void>((resolve) => setTimeout(resolve, 50));
+          assert.equal(requests.filter((r) => !r.path).length, 2, "no recap while P runs");
+          release(reply("Producer answer"));
+          await waitUntil(
+            () => requests.filter((r) => !r.path).length === 3 && session.isIdle,
+            "single recap",
+          );
+          await new Promise<void>((resolve) => setTimeout(resolve, 50));
+          assert.equal(requests.filter((r) => !r.path).length, 3, "exactly one recap");
+          assert.deepEqual(errors, []);
+        } finally {
+          release(reply("cleanup"));
           await close(session);
         }
       },

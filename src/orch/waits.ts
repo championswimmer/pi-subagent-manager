@@ -38,6 +38,9 @@ export class WaitTable {
   delete(waiter: string): boolean {
     return this.entries.delete(waiter);
   }
+  paths(): string[] {
+    return [...this.entries.keys()];
+  }
   [Symbol.iterator](): IterableIterator<[string, WaitEntry]> {
     return this.entries.entries();
   }
