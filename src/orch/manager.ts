@@ -8,6 +8,7 @@ import type {
   ManagerOptions,
   SavedThread,
   SavedThreadView,
+  SleepResult,
   ThreadService,
   ThreadEvent,
   ThreadView,
@@ -18,6 +19,7 @@ import type {
 import { immutableTranscriptValue } from "./transcript.ts";
 import { canonicalPath, inheritContext, isDescendant, parentPath } from "./paths.ts";
 import { DEFAULT_MANAGER_SETTINGS, type ManagerSettings } from "../prefs/settings.ts";
+import { MAX_WAIT_PRODUCERS, WaitTable, wakeMessage, type WaitEntry } from "./waits.ts";
 
 interface Record {
   view: ThreadView;
@@ -97,6 +99,8 @@ export class ThreadManager {
   private records = new Map<string, Record>();
   private disposed = false;
   private epoch = 0;
+  /** agent_sleep and agent_spawn `after`: waiters keyed by path (docs/sleep-until.md). */
+  private waits = new WaitTable();
   constructor(private options: ManagerOptions) {}
 
   /** New limits affect future launches/resumes, never cancel existing work. */
@@ -174,6 +178,7 @@ export class ThreadManager {
       wait: (path, timeoutMs, signal) => this.wait(caller, path, timeoutMs, signal),
       update: (message) => this.update(caller, message),
       pause: (reason) => this.pause(caller, reason),
+      sleep: (until, note) => this.sleep(caller, until, note),
       stop: (path) => this.stop(caller, path),
     };
   }
@@ -226,6 +231,7 @@ export class ThreadManager {
         outputTokens: record.view.outputTokens ?? 0,
         costUsd: record.view.costUsd,
         costId: record.view.costId,
+        ...this.savedWait(current.path),
       };
       const sessionLeafId = this.sessionLeafId(record);
       if (sessionLeafId !== undefined) view.sessionLeafId = sessionLeafId;
@@ -256,7 +262,8 @@ export class ThreadManager {
         )
       )
         throw new Error("Invalid saved thread registry");
-      const { sessionLeafId, ...storedView } = savedView;
+      const { sessionLeafId, sleepUntil, sleepKind, sleepNote, sleepTask, ...storedView } =
+        savedView;
       const view: ThreadView = {
         ...storedView,
         costId:
@@ -295,11 +302,19 @@ export class ThreadManager {
         throw new Error(`Missing saved parent ${record.view.parent}`);
     }
     this.records = restored;
+    this.restoreWaits(saved, restored);
   }
 
   async spawn(
     caller: string,
-    args: { path: string; type: string; task: string; wait?: boolean; timeoutMs?: number },
+    args: {
+      path: string;
+      type: string;
+      task: string;
+      wait?: boolean;
+      timeoutMs?: number;
+      after?: string[];
+    },
     signal?: AbortSignal,
   ): Promise<ThreadView> {
     this.assertLive();
@@ -332,7 +347,9 @@ export class ThreadManager {
       throw new Error("Agent depth limit reached");
     if (this.records.size >= (this.options.maxThreads ?? DEFAULT_MANAGER_SETTINGS.maxThreads))
       throw new Error("Total thread limit reached");
-    this.assertCapacity();
+    const waiting = args.after ? this.collectProducers(path, args.after, caller) : undefined;
+    const deferred = !!waiting?.pending.size;
+    if (!deferred) this.assertCapacity();
     const type = structuredClone(this.options.getType(args.type));
     const parentRecord = parent && parent !== "/root" ? this.record(parent) : undefined;
     this.assertStartableAncestors(path);
@@ -377,8 +394,23 @@ export class ThreadManager {
     };
     this.records.set(path, record);
     if (record.contextPending) this.prepareInheritedContext(record);
+    if (waiting && deferred) {
+      // Reserved, not started: the thread begins when every producer has completed.
+      record.view.state = "paused";
+      record.view.status = `Waiting for ${waiting.all.join(", ")}`;
+      record.async = true;
+      this.waits.set(path, {
+        ...waiting,
+        kind: "spawn",
+        task: args.task,
+        timeoutMs: args.timeoutMs,
+        settled: true,
+      });
+      this.touch(record);
+      return this.view(record);
+    }
     record.async = args.wait === false;
-    this.start(record, args.task);
+    this.start(record, waiting ? `${args.task}\n\n${wakeMessage(waiting)}` : args.task);
     if (args.timeoutMs !== undefined) this.armTimeout(record, args.timeoutMs);
     return args.wait === false ? this.view(record) : this.wait(caller, path, undefined, signal);
   }
@@ -426,9 +458,12 @@ export class ThreadManager {
         return rearm();
       }
       this.assertCapacity();
+      // A manual resume wins over a pending wake. A reserved `after` thread still needs its task.
+      const waiting = this.waits.get(path);
+      this.waits.delete(path);
       // Resumes return immediately, regardless of the original spawn mode or restored metadata.
       record.async = true;
-      this.start(record, message);
+      this.start(record, waiting?.kind === "spawn" ? `${waiting.task}\n\n${message}` : message);
       return rearm();
     }
   }
@@ -492,6 +527,179 @@ export class ThreadManager {
     // Remains running until the SDK settles. No interim final answer leaks through wait().
     return this.view(record);
   }
+  /** Pause at the turn boundary until every producer completes; the manager resumes the caller. */
+  sleep(caller: string, until: string[], note?: string): SleepResult {
+    this.assertLive();
+    caller = canonicalPath(caller);
+    const record = caller === "/root" ? undefined : this.record(caller);
+    if (!record || !active(record.view) || record.stopRequested)
+      throw new Error("Only a working child may sleep");
+    if (this.waits.has(caller)) throw new Error("Already sleeping; call agent_sleep once, alone");
+    const waiting = this.collectProducers(caller, until, caller);
+    if (!waiting.pending.size)
+      return {
+        sleeping: false,
+        until: waiting.all,
+        status: "All producers already completed",
+        answers: waiting.all.map((path) => ({ path, output: waiting.answers.get(path) ?? "" })),
+      };
+    this.waits.set(caller, {
+      ...waiting,
+      kind: "sleep",
+      ...(note?.trim() ? { note: note.trim() } : {}),
+      settled: false,
+    });
+    const status = this.pause(caller, `Sleeping until ${waiting.all.join(", ")}`).status;
+    return { sleeping: true, until: waiting.all, status };
+  }
+  /** Validate producers for `waiter` and split them into completed answers and pending paths. */
+  private collectProducers(
+    waiter: string,
+    until: string[],
+    caller: string,
+  ): Pick<WaitEntry, "all" | "pending" | "answers"> {
+    if (!Array.isArray(until) || until.length < 1 || until.length > MAX_WAIT_PRODUCERS)
+      throw new Error(`Provide 1–${MAX_WAIT_PRODUCERS} agent paths to wait for`);
+    const all = [...new Set(until.map((path) => canonicalPath(path, caller)))];
+    const pending = new Set<string>();
+    const answers = new Map<string, string>();
+    for (const path of all) {
+      if (path === waiter) throw new Error("An agent cannot wait for itself");
+      if (isDescendant(waiter, path)) throw new Error(`${path} is an ancestor of ${waiter}`);
+      const view = this.record(path).view;
+      if (view.state === "failed" || view.state === "stopped")
+        throw new Error(`${path} is ${view.state}; resume it before waiting for it`);
+      if (view.state === "completed") answers.set(path, view.output ?? "");
+      else pending.add(path);
+    }
+    if (this.waits.wouldCycle(waiter, all))
+      throw new Error(`Waiting for ${all.join(", ")} would create a wait cycle`);
+    return { all, pending, answers };
+  }
+  /** Settlement bookkeeping for the waiter and producer roles of one thread. */
+  private settleWaits(record: Record): { sleeping: boolean; woke: string[] } {
+    const path = record.view.path;
+    const state = record.view.state;
+    let sleeping = false;
+    const own = this.waits.get(path);
+    if (own) {
+      if (own.kind === "sleep" && state === "paused") {
+        own.settled = true;
+        sleeping = true;
+      } else this.waits.delete(path); // It ran on instead of sleeping: nothing to wake.
+    }
+    if (state !== "completed") return { sleeping, woke: [] };
+    const woke = this.waits.complete(path, record.view.output ?? "");
+    for (const [waiter, entry] of this.waits) {
+      const waiterRecord = this.records.get(waiter);
+      if (!entry.pending.size || !entry.all.includes(path) || !waiterRecord) continue;
+      waiterRecord.view.status = `${entry.kind === "sleep" ? "Sleeping until" : "Waiting for"} ${[...entry.pending].join(", ")}`;
+      this.touch(waiterRecord);
+    }
+    return { sleeping, woke };
+  }
+  /** A failed or stopped producer leaves its waiters asleep; /root decides what to do. */
+  private noticeStalled(producer: Record): void {
+    const { path, state } = producer.view;
+    if (state !== "failed" && state !== "stopped") return;
+    for (const waiter of this.waits.pendingOn(path)) {
+      const record = this.records.get(waiter);
+      if (!record) continue;
+      this.emit({
+        kind: "waitNotice",
+        thread: this.view(record),
+        recipient: "/root",
+        text: `${waiter} sleeps on ${path}; ${path} ${state}: ${producer.view.error ?? producer.view.status}`,
+      });
+    }
+  }
+  /** Resume every waiter whose producers have all completed. Retried on each settle when full. */
+  private wakeReady(): void {
+    if (this.disposed) return;
+    for (const waiter of this.waits.ready()) {
+      const entry = this.waits.get(waiter)!;
+      const record = this.records.get(waiter);
+      if (!record) {
+        this.waits.delete(waiter);
+        continue;
+      }
+      if (active(record.view)) continue;
+      if (this.atCapacity()) return;
+      this.waits.delete(waiter);
+      const failed = (error: unknown) => {
+        // Hold it for /root instead of retrying on every settle.
+        if (this.disposed || this.waits.has(waiter)) return;
+        this.waits.set(waiter, { ...entry, held: true });
+        this.emit({
+          kind: "waitNotice",
+          thread: this.view(record),
+          recipient: "/root",
+          text: `${waiter} could not be woken: ${errorText(error)}`,
+        });
+      };
+      const message = wakeMessage(entry);
+      try {
+        if (entry.kind === "sleep") {
+          // The existing resume path, as /root: no model turn runs for the hand-over.
+          this.steer("/root", waiter, message).catch(failed);
+        } else {
+          this.assertStartableAncestors(waiter);
+          record.async = true;
+          this.start(record, `${entry.task}\n\n${message}`);
+          if (entry.timeoutMs !== undefined) this.armTimeout(record, entry.timeoutMs);
+        }
+      } catch (error) {
+        failed(error);
+      }
+    }
+  }
+  private savedWait(path: string): Partial<SavedThreadView> {
+    const wait = this.waits.get(path);
+    if (!wait) return {};
+    return {
+      sleepUntil: [...wait.all],
+      sleepKind: wait.kind,
+      ...(wait.note ? { sleepNote: wait.note } : {}),
+      ...(wait.task !== undefined ? { sleepTask: wait.task } : {}),
+    };
+  }
+  /** Waiters stay asleep across reload. One whose producers all completed is held for /root. */
+  private restoreWaits(saved: SavedThread[], restored: Map<string, Record>): void {
+    const held: Record[] = [];
+    for (const item of saved) {
+      const { sleepUntil, sleepKind, sleepNote, sleepTask } = item.view;
+      const record = restored.get(canonicalPath(item.view.path))!;
+      if (!sleepUntil?.length || !sleepKind || record.view.state !== "paused") continue;
+      const entry: WaitEntry = {
+        kind: sleepKind,
+        all: [...sleepUntil],
+        pending: new Set(),
+        answers: new Map(),
+        ...(sleepNote ? { note: sleepNote } : {}),
+        ...(sleepTask !== undefined ? { task: sleepTask } : {}),
+        settled: true,
+      };
+      for (const path of entry.all) {
+        const producer = restored.get(path);
+        if (!producer || producer.view.state === "completed")
+          entry.answers.set(path, producer?.view.output ?? "");
+        else entry.pending.add(path);
+      }
+      // Never auto-start after a reload; /root is told and decides.
+      if (!entry.pending.size) {
+        entry.held = true;
+        held.push(record);
+      }
+      this.waits.set(record.view.path, entry);
+    }
+    for (const record of held)
+      this.emit({
+        kind: "waitNotice",
+        thread: this.view(record),
+        recipient: "/root",
+        text: `${record.view.path} can ${this.waits.get(record.view.path)!.kind === "sleep" ? "wake" : "start"}: all producers completed`,
+      });
+  }
   async stop(caller: string, path: string): Promise<ThreadView> {
     path = canonicalPath(path, caller);
     this.assertAccess(caller, path);
@@ -499,10 +707,12 @@ export class ThreadManager {
     const targets = [...this.records.values()].filter(
       (item) => item === record || (isDescendant(item.view.path, path) && active(item.view)),
     );
+    const idle = targets.filter((item) => !active(item.view));
     for (const item of targets) {
       item.stopRequested = true;
       item.startup.abort();
       this.clearTimeout(item);
+      this.waits.delete(item.view.path);
     }
     await Promise.all(
       targets.map(async (item) => {
@@ -512,6 +722,8 @@ export class ThreadManager {
         item.view.status = "Stopped; session retained";
         delete item.view.output;
         this.touch(item);
+        // An idle thread has no run to settle, so tell its waiters here.
+        if (idle.includes(item)) this.noticeStalled(item);
       }),
     );
     return this.view(record);
@@ -703,13 +915,19 @@ export class ThreadManager {
         record.liveCostUsd = undefined;
         markStarted(); // Failed/cancelled initialization must also release callers waiting to steer.
         this.touch(record);
-        if (!this.disposed && epoch === this.epoch)
+        if (!this.disposed && epoch === this.epoch) {
+          const { sleeping, woke } = this.settleWaits(record);
           this.emit({
             kind: "settled",
             thread: this.view(record),
             recipient: record.view.parent ?? record.view.owner,
             async: record.async === true,
+            ...(sleeping ? { sleeping } : {}),
+            ...(woke.length ? { wokeWaiters: woke } : {}),
           });
+          this.noticeStalled(record);
+          this.wakeReady();
+        }
       }
     });
     this.touch(record);
@@ -1065,11 +1283,14 @@ export class ThreadManager {
       }
     }
   }
-  private assertCapacity(): void {
-    if (
+  private atCapacity(): boolean {
+    return (
       [...this.records.values()].filter((record) => active(record.view)).length >=
       (this.options.maxConcurrent ?? DEFAULT_MANAGER_SETTINGS.maxConcurrent)
-    )
+    );
+  }
+  private assertCapacity(): void {
+    if (this.atCapacity())
       throw new Error("Concurrent thread limit reached; wait for a thread to settle");
   }
   private assertAccess(caller: string, path: string, self = false): void {

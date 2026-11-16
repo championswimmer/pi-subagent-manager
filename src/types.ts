@@ -200,6 +200,12 @@ export interface SavedThreadView {
   outputTokens?: number;
   costUsd?: number;
   costId?: string;
+  /** Wait list of a sleeping thread, or of a reserved `after` thread (docs/sleep-until.md). */
+  sleepUntil?: string[];
+  sleepKind?: "sleep" | "spawn";
+  sleepNote?: string;
+  /** Pending task of a reserved `after` thread. */
+  sleepTask?: string;
 }
 export interface SavedThread {
   view: SavedThreadView;
@@ -216,7 +222,15 @@ export interface ThreadService {
   /** Optional for portable adapters; the runtime manager always implements this. */
   observeTranscript?(path: string, listener: TranscriptListener): Promise<TranscriptObservation>;
   spawn(
-    args: { path: string; type: string; task: string; wait?: boolean; timeoutMs?: number },
+    args: {
+      path: string;
+      type: string;
+      task: string;
+      wait?: boolean;
+      timeoutMs?: number;
+      /** Reserve the thread and start it when every listed thread has completed. */
+      after?: string[];
+    },
     signal?: AbortSignal,
   ): Promise<ThreadView>;
   /** message and/or timeoutMs (30s–5min). timeoutMs alone only re-arms a running child's report-only timeout. */
@@ -224,7 +238,16 @@ export interface ThreadService {
   wait(path: string, timeoutMs?: number, signal?: AbortSignal): Promise<ThreadView>;
   update(message: string): ThreadView;
   pause(reason: string): ThreadView;
+  /** Child only: sleep until every listed thread completes, or return their answers if they have. */
+  sleep(until: string[], note?: string): SleepResult;
   stop(path: string): Promise<ThreadView>;
+}
+export interface SleepResult {
+  sleeping: boolean;
+  until: string[];
+  status: string;
+  /** Present when nothing needs waiting for: every producer had already completed. */
+  answers?: { path: string; output: string }[];
 }
 export type DriverFactory = (options: DriverOptions) => Promise<AgentDriver>;
 export type ThreadEvent =
@@ -232,7 +255,18 @@ export type ThreadEvent =
   | { kind: "change"; thread: ThreadView }
   | { kind: "metrics"; thread: ThreadView }
   | { kind: "update"; thread: ThreadView; message: string; recipient: string }
-  | { kind: "settled"; thread: ThreadView; recipient: string; async: boolean }
+  | {
+      kind: "settled";
+      thread: ThreadView;
+      recipient: string;
+      async: boolean;
+      /** The thread paused because of agent_sleep. */
+      sleeping?: boolean;
+      /** Waiters whose last pending producer was this completed thread. */
+      wokeWaiters?: string[];
+    }
+  /** A sleeping waiter needs /root: a producer failed or stopped, or a wake could not run. */
+  | { kind: "waitNotice"; thread: ThreadView; recipient: string; text: string }
   /** A spawn timeout elapsed while the child is still running. The child is NOT stopped. */
   | {
       kind: "timeout";
