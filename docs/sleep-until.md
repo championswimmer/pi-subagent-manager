@@ -9,7 +9,14 @@ Implementation notes (where the build differs from or adds to the text below):
 - `/root` notices (producer failed, wake could not run, restored waiter can wake) are a `waitNotice` event and always trigger a turn. A failed wake is held for `/root` rather than retried.
 - A reserved `after` thread is saved as `paused` with `sleepUntil`/`sleepKind`/`sleepTask` view fields, as are sleepers (`sleepUntil`, `sleepKind`, `sleepNote`). `timeoutMs` on a reserved thread arms when it starts and is not persisted.
 - A manual `agent_steer` on a reserved `after` thread starts it with its task followed by the steering message.
-- Child tools filtered by an allow list must list `agent_sleep` to see it.
+- Child tools filtered by an allow list must list `agent_sleep` to see it. The six bundled agents and `IMPORT_CHILD_TOOLS` include it.
+- Access: `/root` may name any thread. A child may name only threads of its own top-level tree (same first path segment, so siblings and cousins under `/root` are fine; other independent roots are not). Unknown and out-of-tree paths give the same error to a child, so it cannot probe other trees. Inside a tree, any agent with `agent_sleep` can read sibling and cousin answers.
+- A producer that is `failed`, `stopped` or `paused` (and not itself asleep) notifies `/root`. After a reload nothing restarts, so `/root` is told about every waiter whose pending producers are idle (`... paused after reload`).
+- The `/root` trigger is suppressed for a producer's result only when every waiter it woke is a direct child of `/root`; a waiter deeper in a tree reports to its own parent, so `/root` still gets its turn.
+- `agent_steer` on a waiter that is still winding down (called `agent_sleep`, not yet paused) is refused. Once paused, a manual steer wins. On a held waiter (all producers complete) it also carries the producers' answers.
+- `agent_stop` on an ancestor also removes the wait entries of its descendants.
+- `after` ignores `wait`: a deferred spawn returns at once as `paused`, and the parent is woken when it settles.
+- Known limits: held "can wake" notices repeat on each session attach until `/root` acts; answers are not persisted, so a producer reaped or resumed while closed shows "(no text)" or counts as pending again.
 
 ## Problem
 
