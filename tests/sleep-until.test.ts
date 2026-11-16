@@ -1,5 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { JsonObject } from "@earendil-works/pi-ai";
+import { withOfflineHarness } from "./helpers/integrationHarness.ts";
 import { ThreadManager } from "../src/orch/manager.ts";
 import { agentTools } from "../src/orch/tools.ts";
 import {
@@ -524,3 +527,113 @@ test("a long answer is truncated to 16000 characters in the wake message", async
     await manager.shutdown();
   }
 });
+
+test(
+  "root mailbox: a sleeping settle and a result that woke a waiter do not trigger /root; the waiter's own result does",
+  { timeout: 15000 },
+  async () => {
+    const text = (value: string) => ({
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: value }],
+      provider: "integration-test",
+      model: "offline",
+      api: "openai-completions" as const,
+      stopReason: "stop" as const,
+      timestamp: Date.now(),
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    });
+    const toolCalls = (calls: { name: string; arguments: JsonObject }[]) => ({
+      ...text(""),
+      stopReason: "toolUse" as const,
+      content: calls.map((call, i) => ({ type: "toolCall" as const, id: `call-${i}`, ...call })),
+    });
+    let release!: (message: ReturnType<typeof text>) => void;
+    const producerAnswer = new Promise<ReturnType<typeof text>>((resolve) => (release = resolve));
+    let rootCalls = 0;
+    await withOfflineHarness(
+      {
+        agentFiles: {
+          worker:
+            "---\nname: worker\ndescription: Execute work\ntools:\n  allow: [agent_sleep]\n---\nExecute your assigned task.\n",
+        },
+        onRequest(request) {
+          if (request.path === "/root/producer") return producerAnswer;
+          if (request.path === "/root/waiter") {
+            if (request.pathCall === 1)
+              return toolCalls([
+                { name: "agent_sleep", arguments: { until: ["/root/producer"], note: "need it" } },
+              ]);
+            assert.match(request.messagesText, /Producer answer text/);
+            return text("Waiter used the producer answer");
+          }
+          rootCalls++;
+          if (rootCalls === 1)
+            return toolCalls(
+              ["producer", "waiter"].map((path) => ({
+                name: "agent_spawn",
+                arguments: { path, type: "worker", task: `Task ${path}`, wait: false },
+              })),
+            );
+          return text(rootCalls === 2 ? "Initial root answer" : "Root saw the waiter");
+        },
+      },
+      async ({ cwd, open, close, requests, errors }) => {
+        const session = await open(SessionManager.create(cwd));
+        try {
+          await session.prompt("Delegate");
+          const deadline = Date.now() + 5000;
+          const waitFor = async (done: () => boolean, what: string) => {
+            while (!done()) {
+              assert.ok(Date.now() < deadline, `Timed out: ${what}`);
+              await new Promise<void>((resolve) => setTimeout(resolve, 5));
+            }
+          };
+          const mailbox = () =>
+            session.sessionManager
+              .getBranch()
+              .flatMap((entry) =>
+                entry.type === "custom" && entry.customType === "pi-subagent:root-mailbox:v1"
+                  ? [
+                      entry.data as {
+                        trigger: boolean;
+                        details: { path: string; state: string };
+                      },
+                    ]
+                  : [],
+              )
+              .map(({ trigger, details }) => `${details.path} ${details.state} ${trigger}`);
+          await waitFor(
+            () => requests.some((r) => r.path === "/root/producer"),
+            "producer is working",
+          );
+          await waitFor(() => mailbox().length === 1, "waiter went to sleep");
+          assert.deepEqual(mailbox(), ["/root/waiter paused false"]);
+          assert.equal(requests.filter((r) => !r.path).length, 2, "sleeping does not wake root");
+
+          release(text("Producer answer text"));
+          await waitFor(
+            () => requests.filter((r) => !r.path).length === 3 && session.isIdle,
+            "root woke once",
+          );
+          assert.deepEqual(mailbox(), [
+            "/root/waiter paused false",
+            "/root/producer completed false",
+            "/root/waiter completed true",
+          ]);
+          assert.equal(requests.filter((r) => !r.path).length, 3);
+          assert.deepEqual(errors, []);
+        } finally {
+          release(text("cleanup"));
+          await close(session);
+        }
+      },
+    );
+  },
+);
