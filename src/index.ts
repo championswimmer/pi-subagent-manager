@@ -471,9 +471,11 @@ export default function piSubagent(pi: ExtensionAPI): void {
               `tokens: ${thread.inputTokens ?? 0} in / ${thread.outputTokens ?? 0} out.\n` +
               `Recent output:\n${event.recentOutput || "(none yet)"}\n` +
               "Decide: agent_steer with timeoutMs only (no message) to be notified again later without disturbing it, agent_wait for it, agent_steer to redirect, agent_stop to cancel, or let it continue."
-            : thread.state === "completed"
-              ? `Agent ${thread.path} completed. Final answer:\n${thread.output?.slice(0, 16000) ?? "(no text)"}${(thread.output?.length ?? 0) > 16000 ? "\n[Output truncated; use agent_output for more.]" : ""}`
-              : `Agent ${thread.path} is ${thread.state}: ${thread.status}. ${thread.state === "paused" ? "No answer handback; send input to resume the same session." : "Session retained for further input."}`;
+            : event.kind === "waitNotice"
+              ? event.text
+              : thread.state === "completed"
+                ? `Agent ${thread.path} completed. Final answer:\n${thread.output?.slice(0, 16000) ?? "(no text)"}${(thread.output?.length ?? 0) > 16000 ? "\n[Output truncated; use agent_output for more.]" : ""}`
+                : `Agent ${thread.path} is ${thread.state}: ${thread.status}. ${thread.state === "paused" ? "No answer handback; send input to resume the same session." : "Session retained for further input."}`;
     try {
       if (event.recipient === "/root") {
         const recap =
@@ -489,9 +491,17 @@ export default function piSubagent(pi: ExtensionAPI): void {
           // another turn. Completions during a summary do need a follow-up summary.
           finalRecap: recap,
           // Recap mode defers the turn until every outstanding async agent has reported.
+          // A waiter pausing for agent_sleep, or a result that woke a waiter, hands over without a
+          // /root turn (docs/sleep-until.md). Failures and wait notices always trigger.
           trigger:
             !suspendingSummaries &&
-            (event.kind === "timeout" || (event.kind === "settled" && event.async && !recap)),
+            (event.kind === "timeout" ||
+              event.kind === "waitNotice" ||
+              (event.kind === "settled" &&
+                event.async &&
+                !recap &&
+                !event.sleeping &&
+                !event.wokeWaiters?.length)),
           details: {
             mailboxId: randomUUID(),
             path: thread.path,

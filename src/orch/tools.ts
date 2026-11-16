@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ThreadManager } from "./manager.ts";
 import { ModelPreferenceError } from "../prefs/models.ts";
+import { truncateAnswer } from "./waits.ts";
 import type { AgentType, ResolvedAgentSettings, ThreadView } from "../types.ts";
 
 const path = Type.String({ description: "Absolute agent path, or name relative to the caller" });
@@ -81,7 +82,7 @@ export function agentTools(
     ),
     make(
       "agent_spawn",
-      "Spawn a named child. The lexical parent, NOT the caller, supplies a context snapshot. /root is the main thread; independent roots have no inherited context. Foreground waits by default; wait:false runs detached: when it completes, fails or is stopped, you receive a message event that wakes you, so do not poll. Optional timeoutMs (30000–300000; none if unset): if the child is still running after that many ms you receive an event with its status, elapsed time, tokens and recent output (the child is NOT stopped; you decide whether to wait, steer, stop it or re-arm with agent_steer timeoutMs). For parallel work, spawn every independent sibling with wait:false before calling agent_wait; child agents with delegation tools should do the same. Existing paths are retained and can be resumed with agent_steer. Use agent_types to discover current types.",
+      "Spawn a named child. The lexical parent, NOT the caller, supplies a context snapshot. /root is the main thread; independent roots have no inherited context. Foreground waits by default; wait:false runs detached: when it completes, fails or is stopped, you receive a message event that wakes you, so do not poll. Optional timeoutMs (30000–300000; none if unset): if the child is still running after that many ms you receive an event with its status, elapsed time, tokens and recent output (the child is NOT stopped; you decide whether to wait, steer, stop it or re-arm with agent_steer timeoutMs). For parallel work, spawn every independent sibling with wait:false before calling agent_wait; child agents with delegation tools should do the same. Existing paths are retained and can be resumed with agent_steer. Optional after (1–16 agent paths): reserve the thread now but start it only when all listed agents have completed, with its task plus their final answers; it starts at once if they already have. Use agent_types to discover current types.",
       Type.Object({
         path: Type.String({
           description:
@@ -96,6 +97,14 @@ export function agentTools(
             maximum: 300000,
             description:
               "Optional report-only timeout, 30000–300000 ms (30s–5min). If the child is still running after this many ms, a status event is sent to you; the child keeps running.",
+          }),
+        ),
+        after: Type.Optional(
+          Type.Array(path, {
+            minItems: 1,
+            maxItems: 16,
+            description:
+              "Start only when all these agents have completed (reserved, not started, until then).",
           }),
         ),
       }),
@@ -159,6 +168,35 @@ export function agentTools(
         }),
         terminate: true,
       }),
+    ),
+    make(
+      "agent_sleep",
+      "Child-only: when you need the result of other agents, call this instead of polling. You pause with 0 tokens; when all listed agents complete, you are resumed in the same session with their final answers. Never loop on agent_status or agent_wait.",
+      Type.Object({
+        until: Type.Array(path, {
+          minItems: 1,
+          maxItems: 16,
+          description: "Agents to wait for (any known agents, not yourself or your ancestors)",
+        }),
+        note: Type.Optional(Type.String({ description: "Reminder of why you are waiting" })),
+      }),
+      (params) => {
+        const slept = threads().sleep(params.until, params.note);
+        if (!slept.sleeping)
+          return result({
+            path: caller,
+            sleeping: false,
+            answers: slept.answers!.map(({ path, output }) => ({
+              path,
+              output: truncateAnswer(output),
+            })),
+          });
+        // Like agent_pause: end the turn so the manager can resume this session.
+        return {
+          ...result({ path: caller, sleeping: true, until: slept.until, status: slept.status }),
+          terminate: true,
+        };
+      },
     ),
     make(
       "agent_stop",
