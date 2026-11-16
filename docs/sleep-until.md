@@ -1,6 +1,15 @@
 # Sleep until another agent settles
 
-Status: design for the `wake-on-settle` branch (fork of v1.9.0). Not upstream.
+Status: implemented on the `wake-on-settle` branch (fork of v1.9.0). Not upstream.
+
+Implementation notes (where the build differs from or adds to the text below):
+
+- Wait-table logic lives in `src/orch/waits.ts`; `manager.ts` has thin hooks.
+- A `failed` or `stopped` producer is refused at `agent_sleep` / `after` time (it could never complete unless resumed). Resume it first.
+- `/root` notices (producer failed, wake could not run, restored waiter can wake) are a `waitNotice` event and always trigger a turn. A failed wake is held for `/root` rather than retried.
+- A reserved `after` thread is saved as `paused` with `sleepUntil`/`sleepKind`/`sleepTask` view fields, as are sleepers (`sleepUntil`, `sleepKind`, `sleepNote`). `timeoutMs` on a reserved thread arms when it starts and is not persisted.
+- A manual `agent_steer` on a reserved `after` thread starts it with its task followed by the steering message.
+- Child tools filtered by an allow list must list `agent_sleep` to see it.
 
 ## Problem
 
