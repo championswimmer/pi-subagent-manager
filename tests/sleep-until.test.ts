@@ -694,7 +694,9 @@ test("access: a child may name only threads of its own top-level tree, with one 
     });
     await tick();
     assert.equal(manager.get("/root/y").state, "running");
-    // An independent root sees only its own tree.
+    // Top-level roots are /root's children and so siblings of each other, not of /root/...
+    assert.equal(manager.scope("/other").sleep(["/fork"]).sleeping, false);
+    // The two trees cannot name each other.
     assert.throws(() => manager.scope("/other").sleep(["/root/b"]), /outside your agent tree/);
   } finally {
     await manager.shutdown();
@@ -993,3 +995,68 @@ test(
     );
   },
 );
+
+for (const mode of ["agent_sleep", "spawn after"] as const) {
+  test(
+    `root mailbox: top-level paths (/a producer, /b waiter via ${mode}) do not trigger /root for the producer`,
+    { timeout: 15000 },
+    async () => {
+      let release!: (message: Reply) => void;
+      const producerAnswer = new Promise<Reply>((resolve) => (release = resolve));
+      const isChild = (system: string, path: string) =>
+        system.includes(`Your thread path is ${path}.`);
+      let rootCalls = 0;
+      await withOfflineHarness(
+        {
+          agentFiles: {
+            worker:
+              "---\nname: worker\ndescription: Execute work\ntools:\n  allow: [agent_sleep]\n---\nExecute your assigned task.\n",
+          },
+          onRequest(request) {
+            if (isChild(request.system, "/a")) return producerAnswer;
+            if (isChild(request.system, "/b"))
+              return request.pathCall === 1 && mode === "agent_sleep"
+                ? calls([{ name: "agent_sleep", arguments: { until: ["/a"] } }])
+                : reply("B used the answer");
+            rootCalls++;
+            if (rootCalls === 1)
+              return calls([
+                {
+                  name: "agent_spawn",
+                  arguments: { path: "/a", type: "worker", task: "A", wait: false },
+                },
+                {
+                  name: "agent_spawn",
+                  arguments: {
+                    path: "/b",
+                    type: "worker",
+                    task: "B",
+                    wait: false,
+                    ...(mode === "spawn after" ? { after: ["/a"] } : {}),
+                  },
+                },
+              ]);
+            return reply(`Root turn ${rootCalls}`);
+          },
+        },
+        async ({ cwd, open, close, errors }) => {
+          const session = await open(SessionManager.create(cwd));
+          try {
+            await session.prompt("Delegate");
+            await waitUntil(() => session.isIdle && rootCalls >= 2, "root idle");
+            if (mode === "agent_sleep")
+              await waitUntil(() => mailboxOf(session).includes("/b paused false"), "B asleep");
+            release(reply("A answer"));
+            await waitUntil(() => mailboxOf(session).includes("/b completed true"), "B completed");
+            // A's completion woke /b, a child of /root: B's own result is the trigger.
+            assert.ok(mailboxOf(session).includes("/a completed false"), mailboxOf(session).join());
+            assert.deepEqual(errors, []);
+          } finally {
+            release(reply("cleanup"));
+            await close(session);
+          }
+        },
+      );
+    },
+  );
+}

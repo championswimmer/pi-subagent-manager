@@ -57,6 +57,11 @@ interface Record {
   recentActivity?: string[];
 }
 const RECENT_ACTIVITY_LIMIT = 12;
+/**
+ * Access group for waiting: /root/... is one tree. Top-level paths (/a, /b/x) have no lexical
+ * parent (parentPath is null) but are /root's children, so they are siblings in one group.
+ */
+const wakeTree = (path: string) => (path.split("/")[1] === "root" ? "root" : "top");
 const active = (view: Pick<ThreadView, "state">) =>
   view.state === "starting" || view.state === "running";
 export const MIN_SPAWN_TIMEOUT_MS = 30_000;
@@ -582,7 +587,7 @@ export class ThreadManager {
       // Children may name only threads of their own top-level tree. Unknown and forbidden paths
       // read the same, so this is not an existence oracle for other trees.
       const record = this.records.get(path);
-      if (!record || (caller !== "/root" && path.split("/")[1] !== caller.split("/")[1]))
+      if (!record || (caller !== "/root" && wakeTree(path) !== wakeTree(caller)))
         throw new Error(
           caller === "/root"
             ? `Unknown thread ${path}`

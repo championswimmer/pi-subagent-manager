@@ -504,8 +504,9 @@ export default function piSubagent(pi: ExtensionAPI): void {
                 !event.sleeping &&
                 !(
                   event.wokeWaiters?.length &&
-                  // Only waiters that are /root's own children report back to /root when done.
-                  event.wokeWaiters.every((waiter) => parentPath(waiter) === "/root")
+                  // Only waiters that are /root's own children report back to /root when done. Top-level
+                  // paths (/b) have no lexical parent: parentPath() is null and they belong to /root.
+                  event.wokeWaiters.every((waiter) => (parentPath(waiter) ?? "/root") === "/root")
                 ))),
           details: {
             mailboxId: randomUUID(),
