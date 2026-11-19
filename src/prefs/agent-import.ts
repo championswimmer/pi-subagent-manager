@@ -27,6 +27,7 @@ export const IMPORT_CHILD_TOOLS = [
   "agent_status",
   "agent_update",
   "agent_pause",
+  "agent_sleep",
   "agent_stop",
   "agent_output",
 ];
