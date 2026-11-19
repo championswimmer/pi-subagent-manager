@@ -1,6 +1,6 @@
 # Sleep until another agent settles
 
-Status: implemented on the `wake-on-settle` branch (fork of v1.9.0). Not upstream.
+Status: implemented.
 
 Implementation notes (where the build differs from or adds to the text below):
 

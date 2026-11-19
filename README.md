@@ -68,7 +68,7 @@ Agents share your working directory and OS permissions: **tool policies are not 
 ## Documentation
 
 - [Commands and navigation](docs/tools-and-ui.md#commands) — watching, steering, stopping, and keyboard shortcuts
-- [Sleep until other agents settle](docs/sleep-until.md) — `agent_sleep` and `agent_spawn` `after` (fork-only)
+- [Sleep until other agents settle](docs/sleep-until.md) — `agent_sleep` and `agent_spawn` `after`
 - [Settings](docs/settings.md) — models, tool access, limits, and experimental features
 - [Custom agents](docs/custom-agents.md) · [Bundled roles](docs/default-agents.md)
 - [Importing agents](docs/importing-agents.md) from other subagent packages
