@@ -130,13 +130,17 @@ test("researcher is non-delegating; tasker stays cheap-first", (t) => {
   ]);
   assert.equal(researcher.thinkingLevel, "medium");
   assert.deepEqual(store.get("architect").modelSuggestions, [
-    "opus-5.5",
-    "gpt-6-astra",
-    "fable-5.1",
-    "kimi-k3",
+    "gemini-4-neon",
+    "claude-opus-5.5",
+    "claude-fable-5.2",
+    "gpt-6.2-astra",
   ]);
-  assert.deepEqual(researcher.modelSuggestions, ["gpt-6.1-terra", "sonnet-5.5", "muse-spark-1.3"]);
-  assert.ok(store.get("writer").modelSuggestions?.includes("gemini-4-argon"));
+  assert.deepEqual(researcher.modelSuggestions, [
+    "claude-sonnet-5.5",
+    "gpt-6.1-terra",
+    "gemini-4-hydrogen",
+  ]);
+  assert.deepEqual(store.get("writer").modelSuggestions, ["gemini-4-carbon", "claude-opus-5.5"]);
   assert.ok(store.get("reviewer").modelSuggestions?.includes("gemini-4-argon"));
   assert.equal(store.get("tasker").thinkingLevel, "low");
   assert.deepEqual(store.get("tasker").modelSuggestions, [
@@ -146,10 +150,9 @@ test("researcher is non-delegating; tasker stays cheap-first", (t) => {
   ]);
   assert.equal(store.get("coder").thinkingLevel, "high");
   assert.deepEqual(store.get("coder").modelSuggestions, [
-    "sonnet-5.5",
-    "gpt-6.1-sol",
-    "kimi-k3.1-pro",
-    "muse-wonder-full-1.0",
+    "gemini-4-hydrogen",
+    "gpt-6.2-sol",
+    "claude-sonnet-5.5",
   ]);
 });
 

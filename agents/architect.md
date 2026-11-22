@@ -5,10 +5,10 @@ description: Design architecture, weigh tradeoffs, and decompose ambiguous work 
 color: mdLink
 thinkingLevel: high
 modelSuggestions:
-  - opus-5.5
-  - gpt-6-astra
-  - fable-5.1
-  - kimi-k3
+  - gemini-4-neon
+  - claude-opus-5.5
+  - claude-fable-5.2
+  - gpt-6.2-astra
 tools:
   allow:
     - read
