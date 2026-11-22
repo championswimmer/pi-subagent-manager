@@ -5,10 +5,9 @@ description: Own complex or long-running implementation, refactoring, debugging,
 thinkingLevel: high
 color: mdCode
 modelSuggestions:
-  - sonnet-5.5
-  - gpt-6.1-sol
-  - kimi-k3.1-pro
-  - muse-wonder-full-1.0
+  - gemini-4-hydrogen
+  - gpt-6.2-sol
+  - claude-sonnet-5.5
 tools:
   allow:
     - read

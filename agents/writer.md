@@ -5,11 +5,8 @@ description: Draft or revise original long-form prose for a stated audience and 
 thinkingLevel: medium
 color: thinkingXhigh
 modelSuggestions:
-  - opus-5.5
-  - gemini-4-argon
-  - gemini-3.8-flash
-  - fable-5.1
-  - muse-spark-1.3
+  - gemini-4-carbon
+  - claude-opus-5.5
 tools:
   allow:
     - read

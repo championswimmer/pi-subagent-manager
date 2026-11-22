@@ -3,9 +3,9 @@ name: researcher
 icon: ""
 description: Evidence-backed local/remote codebase and internet research; source verification, versioned citations, and decision-ready synthesis
 modelSuggestions:
+  - claude-sonnet-5.5
   - gpt-6.1-terra
-  - sonnet-5.5
-  - muse-spark-1.3
+  - gemini-4-hydrogen
 thinkingLevel: medium
 color: syntaxVariable
 tools:

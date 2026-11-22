@@ -2,7 +2,7 @@
 
 Six packaged roles are Markdown definitions in `agents/`. User/project definitions can override any role. Retained threads keep their saved definitions until replaced through the normal configuration flow.
 
-The original model shortlist was audited **October 4, 2026 local time (October 3 UTC)**. The tasker, researcher, and coder suggestions below reflect subsequent user-selected updates checked against the current Pi model list. Read the [source-backed model audit](research-model-audit-2026-10.md) for historical measurements and qualifications, and [researcher workflow research](research-researcher-workflow.md) for retrieval guidance. The older [five-role shortlist](research-default-agent-models.md) is historical.
+The original model shortlist was audited **October 4, 2026 local time (October 3 UTC)**. The suggestions below include subsequent user-selected updates checked against the Pi and OpenRouter model catalogs. Read the [source-backed model audit](research-model-audit-2026-10.md) for historical measurements and qualifications, and [researcher workflow research](research-researcher-workflow.md) for retrieval guidance. The older [five-role shortlist](research-default-agent-models.md) is historical.
 
 ## Role routing
 
@@ -40,23 +40,21 @@ Suggestions are chosen by task capability, quality, cost, and speed. API formats
 
 Every `modelSuggestions` entry is a single plain model-name string suitable for fuzzy search—no parentheticals, tier labels, benchmark scores, or provider paths. Those belong in this guide and the audit. Suggestions are advisory: they **do not select a runtime model**. Defaults inherit the parent/default model until configured. Actual runtime preferences belong in `models` as eligible `provider/model-id` identities and are subject to scoped-model filtering.
 
-| Role       | Suggested names, in order                                                       | Rationale                                                                                                                                                            |
-| ---------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| architect  | `opus-5.5`, `gpt-6-astra`, `fable-5.1`, `kimi-k3`                               | Heavyweight, quality-first reasoning for ambiguous architecture, difficult constraints, and consequential plans; Kimi is the user-selected long-context alternative. |
-| coder      | `sonnet-5.5`, `gpt-6.1-sol`, `kimi-k3.1-pro`, `muse-wonder-full-1.0`            | User-selected implementation shortlist, with high thinking by default.                                                                                               |
-| researcher | `gpt-6.1-terra`, `sonnet-5.5`, `muse-spark-1.3`                                 | User-selected research shortlist, with medium thinking by default; no matched research-citation tournament is claimed.                                               |
-| reviewer   | `gpt-6.1-sol`, `sonnet-5.5`, `opus-5.5`, `glm-5.3`, `gemini-4-argon`            | Reasoning and code evidence, without treating premium Astra as necessary for every review.                                                                           |
-| tasker     | `gpt-6-luna`, `haiku-5.5`, `deepseek-v4.1-flash-1017`                           | User-selected bounded-task shortlist, with low thinking by default.                                                                                                  |
-| writer     | `opus-5.5`, `gemini-4-argon`, `gemini-3.8-flash`, `fable-5.1`, `muse-spark-1.3` | Quality-sensitive editorial work, creative-writing Arena candidates, low-cost drafting, and a user-selected Muse alternative.                                        |
+| Role       | Suggested names, in order                                               | Rationale                                                                                           |
+| ---------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| architect  | `gemini-4-neon`, `claude-opus-5.5`, `claude-fable-5.2`, `gpt-6.2-astra` | User-selected shortlist for ambiguous architecture, difficult constraints, and consequential plans. |
+| coder      | `gemini-4-hydrogen`, `gpt-6.2-sol`, `claude-sonnet-5.5`                 | User-selected implementation shortlist, with high thinking by default.                              |
+| researcher | `claude-sonnet-5.5`, `gpt-6.1-terra`, `gemini-4-hydrogen`               | User-selected research shortlist, with medium thinking by default.                                  |
+| reviewer   | `gpt-6.1-sol`, `sonnet-5.5`, `opus-5.5`, `glm-5.3`, `gemini-4-argon`    | Reasoning and code evidence, without treating premium Astra as necessary for every review.          |
+| tasker     | `gpt-6-luna`, `haiku-5.5`, `deepseek-v4.1-flash-1017`                   | User-selected bounded-task shortlist, with low thinking by default.                                 |
+| writer     | `gemini-4-carbon`, `claude-opus-5.5`                                    | User-selected shortlist for drafting and revision, with medium thinking by default.                 |
 
-These are choices, not an automatic fallback/escalation chain or a universal quality ranking. Model aliases were checked against `pi --list-models`, including `claude-haiku-5-5`, `claude-sonnet-5-5`, and `moonshotai/kimi-k3.1-pro`; fuzzy suggestions omit provider paths and normalize version separators. The historical audit is not a new benchmark evaluation of these updates. Deep-research product results are not automatically results for their underlying base models.
+These are choices, not an automatic fallback/escalation chain or a universal quality ranking. The architect, coder, researcher, and writer names use the model-ID suffixes from [OpenRouter](https://openrouter.ai/api/v1/models), cross-checked against the [Pi catalog](https://pi.dev/models) and local `pi --list-models`. Fuzzy matching can surface the same model across providers and normalize version separators (for example, `claude-fable-5.2` and `claude-fable-5-2`). The picker saves the concrete provider/model ID only when selected and confirmed. The historical audit is not a new benchmark evaluation of these updates. Deep-research product results are not automatically results for their underlying base models.
 
 The November 4, 2026 additions were checked against provider sources and the current catalog:
 
 - Tasker uses `deepseek-v4.1-flash-1017`, the latest V4.1 Flash weight revision. [DeepSeek](https://api-docs.deepseek.com/) serves it through `deepseek-flash`; Pi and OpenRouter also list the explicit `deepseek/deepseek-v4.1-flash-1017` identifier.
-- Coder adds `muse-wonder-full-1.0`, the exact identifier in [Meta’s Wonder model table](https://dev.meta.ai/models/muse-wonder). Full is a distinct, Muse Code subscription-only variant, not ordinary Wonder at max reasoning effort. It is an advisory suggestion and may not match a model available in Pi; it does not imply public Model API access.
-- Researcher adds `muse-spark-1.3`, [Meta’s recommended current Spark version](https://dev.meta.ai/docs/models), not the separate Spark Open model.
-- Reviewer adds `gemini-4-argon` (`google/gemini-4-argon` in the [OpenRouter catalog](https://openrouter.ai/api/v1/models)); writer already includes it. Existing suggestions and thinking defaults are preserved.
+- Reviewer adds `gemini-4-argon` (`google/gemini-4-argon` in the [OpenRouter catalog](https://openrouter.ai/api/v1/models)).
 
 ### Quality, price, and speed are different axes
 
