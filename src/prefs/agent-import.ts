@@ -115,7 +115,9 @@ export function buildImportPrompt(options: {
         destinationRule:
           "Keep user sources user-scoped and project sources project-scoped. Project destination is permitted only when non-null; ask before changing scope.",
         managerSettings: join(options.agentDir, "subagent-manager", "settings.json"),
-        configModule: fileURLToPath(new URL("./config.ts", import.meta.url)),
+        configModule: fileURLToPath(
+          new URL(`./config${import.meta.url.endsWith(".ts") ? ".ts" : ".js"}`, import.meta.url),
+        ),
         existingTypes: options.existingTypes,
         scopedModels: options.scopedModels,
         scopedModelDetails: options.scopedModelDetails ?? [],

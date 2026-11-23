@@ -3,6 +3,15 @@
   "version": "1.10.0",
   "description": "Hierarchical, steerable subagent threads for pi",
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "engines": {
     "node": ">=22.19.0"
   },
@@ -25,23 +34,26 @@
     "access": "public"
   },
   "files": [
-    "src",
+    "dist",
     "agents",
     "docs",
     "README.md"
   ],
   "pi": {
     "extensions": [
-      "./src/index.ts"
+      "./dist/index.js"
     ]
   },
   "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "clean": "rm -rf dist",
     "check": "tsc --noEmit",
     "changelog": "tsx .github/scripts/changelog.ts",
     "test": "tsx --test tests/*.test.ts",
     "test:ttyd": "node .agents/skills/ttyd-testing/scripts/smoke-test.mjs && node .agents/skills/ttyd-testing/scripts/lifecycle-test.mjs",
     "test:coverage": "mkdir -p coverage && tsx --test --experimental-test-coverage --test-coverage-include='src/**' --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/lcov.info tests/*.test.ts",
-    "prepublishOnly": "npm run check && npm test",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run check && npm run build && npm test",
     "format": "prettier --write --print-width 100 src tests agents .github docs/default-agents.md README.md",
     "format:check": "prettier --check --print-width 100 src tests agents .github docs/default-agents.md README.md"
   },

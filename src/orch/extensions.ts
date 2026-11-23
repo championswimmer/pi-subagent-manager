@@ -3,7 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DefaultPackageManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 
-const MANAGER_ENTRY = fileURLToPath(new URL("../index.ts", import.meta.url));
+const ENTRY_EXT = import.meta.url.endsWith(".ts") ? ".ts" : ".js";
+const MANAGER_ENTRY = fileURLToPath(new URL(`../index${ENTRY_EXT}`, import.meta.url));
 
 /** Installed extensions use their npm package name, not a generic entry-point filename. */
 export function extensionDisplayName(file: string): string {

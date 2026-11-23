@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,7 +28,7 @@ test("extension labels prefer npm package names and retain local filename fallba
 });
 
 test("configured extension discovery respects trust, exclusions, packages and manager identity", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "pi-subagent-extensions-"));
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pi-subagent-extensions-")));
   t.after(() => rm(root, { recursive: true, force: true }));
   const agentDir = path.join(root, "user");
   const cwd = path.join(root, "workspace");
@@ -124,7 +124,9 @@ test("selection intersects trusted discovery and preserves legacy all/none", () 
 });
 
 test("auto-discovery includes standalone TS/JS and subdir entry points without configuration", async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "pi-subagent-auto-extensions-"));
+  const root = await realpath(
+    await mkdtemp(path.join(os.tmpdir(), "pi-subagent-auto-extensions-")),
+  );
   t.after(() => rm(root, { recursive: true, force: true }));
   // Use a custom agent directory, not an assumed ~/.pi/agent location.
   const agentDir = path.join(root, "custom-agent-dir");

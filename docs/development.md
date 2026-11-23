@@ -3,6 +3,7 @@
 ```sh
 npm ci
 npm run check          # typecheck
+npm run build          # compile src/ -> dist/ (.js + .d.ts)
 npm test
 npm run format:check
 ```
@@ -67,7 +68,7 @@ git tag -a v<version> -m v<version>
 git push && git push --tags
 ```
 
-The package ships TypeScript sources and `agents/`; check `files` in `package.json` when adding assets.
+The package ships compiled ESM and `.d.ts` declarations from `dist/` (gitignored, built via `npm run build` / `prepack`) plus `agents/`; check `files` in `package.json` when adding assets.
 
 ## Background
 

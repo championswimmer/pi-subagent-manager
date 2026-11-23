@@ -6,9 +6,9 @@ description: Release pi-subagent-manager to npm. Use when asked to make a major,
 # Release
 
 1. Confirm the requested bump (`major`, `minor`, or `patch`; ask if unspecified). Start on clean `main`, synced with `origin/main`; commit intended changes first, without including unrelated work.
-2. Validate (no build step; this package ships TypeScript sources):
+2. Validate:
    ```sh
-   npm ci && npm run check && npm test && npm pack --dry-run
+   npm ci && npm run check && npm run build && npm test && npm pack --dry-run
    ```
 3. Bump, commit, and create the annotated tag in one command; replace `<bump>`:
    ```sh
