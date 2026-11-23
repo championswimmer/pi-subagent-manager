@@ -93,6 +93,8 @@ test("bundled agents load cleanly, resolve their tools, and carry only advisory 
     assert.deepEqual(Object.keys(type.tools ?? {}), ["allow"]);
     assert.deepEqual(selectTools(type.tools, available).sort(), [...allow].sort());
     assert.ok(allow.includes("agent_update") && allow.includes("agent_pause"), type.name);
+    // agent_sleep only pauses the caller, so every role may wait for other agents' answers.
+    assert.ok(selectTools(type.tools, available).includes("agent_sleep"), type.name);
     assert.deepEqual(
       allow.filter((name) => DELEGATION.includes(name)).sort(),
       type.name === "architect" ? [...DELEGATION].sort() : [],
@@ -127,6 +129,7 @@ test("researcher is non-delegating; tasker stays cheap-first", (t) => {
     "ls",
     "agent_update",
     "agent_pause",
+    "agent_sleep",
   ]);
   assert.equal(researcher.thinkingLevel, "medium");
   assert.deepEqual(store.get("architect").modelSuggestions, [

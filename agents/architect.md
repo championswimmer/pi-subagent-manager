@@ -18,6 +18,7 @@ tools:
     - bash
     - agent_update
     - agent_pause
+    - agent_sleep
     - agent_types
     - agent_spawn
     - agent_wait

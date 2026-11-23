@@ -11,12 +11,13 @@ The allow/block tool picker lists session tools flat, except MCP tools named `mc
 | Tool           | Purpose                                              |
 | -------------- | ---------------------------------------------------- |
 | `agent_types`  | Names, descriptions, resolved models and thinking    |
-| `agent_spawn`  | Start `{path, type, task, wait?, timeoutMs?}`. Waits by default. |
+| `agent_spawn`  | Start `{path, type, task, wait?, timeoutMs?, after?}`. Waits by default. `after` reserves the thread and starts it when the listed agents complete. |
 | `agent_wait`   | Wait for settlement; optional `timeoutMs`            |
 | `agent_steer`  | Send `{path, message?, timeoutMs?}`; queues/resumes and/or re-arms timeout|
 | `agent_status` | Inspect one path or list visible threads             |
 | `agent_update` | Child: report progress                               |
 | `agent_pause`  | Child: pause without an answer                       |
+| `agent_sleep`  | Child: sleep until other agents complete, then resume with their answers (see [sleep-until](sleep-until.md)) |
 | `agent_stop`   | Cancel a descendant and its subtree                  |
 | `agent_output` | Page through long final answers by character offset  |
 

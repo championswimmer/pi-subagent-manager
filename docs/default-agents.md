@@ -68,7 +68,7 @@ The November 4, 2026 additions were checked against provider sources and the cur
 
 ## Researcher retrieval contract
 
-With the **Allowed (except blocked)** Tool Filtering mode, the researcher child has `read`, `grep`, `find`, `ls`, `bash`, `agent_update`, and `agent_pause`. A custom allowlist can select exact names of registered non-hidden parent MCP/web tools; broader filtering modes can also make them available. Deferred/codemode tools are discoverable through child-local codemode when permitted. Skills are not automatically loaded. External tools reuse the main session's resources/context, and bridged callable tools remain subject to its tool policy; they are not fresh, isolated extension instances.
+With the **Allowed (except blocked)** Tool Filtering mode, the researcher child has `read`, `grep`, `find`, `ls`, `bash`, `agent_update`, `agent_pause`, and `agent_sleep`. A custom allowlist can select exact names of registered non-hidden parent MCP/web tools; broader filtering modes can also make them available. Deferred/codemode tools are discoverable through child-local codemode when permitted. Skills are not automatically loaded. External tools reuse the main session's resources/context, and bridged callable tools remain subject to its tool policy; they are not fresh, isolated extension instances.
 
 Use only actually available authorized retrieval routes. For shell routes:
 
