@@ -57,8 +57,8 @@ interface Record {
 const RECENT_ACTIVITY_LIMIT = 12;
 const active = (view: Pick<ThreadView, "state">) =>
   view.state === "starting" || view.state === "running";
-export const MIN_SPAWN_TIMEOUT_MS = 30_000;
-export const MAX_SPAWN_TIMEOUT_MS = 300_000;
+const MIN_SPAWN_TIMEOUT_MS = 30_000;
+const MAX_SPAWN_TIMEOUT_MS = 300_000;
 function assertSpawnTimeout(timeoutMs: number): void {
   if (
     !Number.isInteger(timeoutMs) ||

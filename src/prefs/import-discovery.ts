@@ -12,7 +12,7 @@ export interface ImportCandidate {
   settingsPaths: string[];
 }
 
-export interface DiscoverImportOptions {
+interface DiscoverImportOptions {
   cwd: string;
   agentDir: string;
   includeProject: boolean;

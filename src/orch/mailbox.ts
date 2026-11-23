@@ -8,9 +8,9 @@ const MIGRATION_TYPE = "pi-subagent:mailbox:migration:v2";
 export const MAILBOX_FIELD = "piSubagentMailbox";
 export const BOOTSTRAP_MESSAGE = "Subagent session initialized; awaiting parent input.";
 
-export type AcceptedKind = "steer" | "followUp" | "update";
+type AcceptedKind = "steer" | "followUp" | "update";
 
-export interface AcceptedLedgerEntry {
+interface AcceptedLedgerEntry {
   id: string;
   kind: AcceptedKind;
   content: string;

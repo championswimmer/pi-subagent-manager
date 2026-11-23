@@ -8,9 +8,9 @@
 
 Let pi hand work to helper agents in parallel. Watch what they're doing, give them more direction, or pick up a finished agent's conversation.
 
-![Pi running parallel agents, browsing a nested agent tree, steering a writer, and watching passing tests](docs/assets/subagent-manager-demo.gif)
+![Pi running parallel agents, browsing a nested agent tree, steering a writer, and watching passing tests](https://raw.githubusercontent.com/championswimmer/pi-subagent-manager/main/docs/assets/subagent-manager-demo.gif)
 
-A real Pi session with a customized footer and Nerd Font: parallel work, nested delegation, watching, and steering. [Recording details](docs/demo.md) (37 seconds; pauses shortened).
+A real Pi session with a customized footer and Nerd Font: parallel work, nested delegation, watching, and steering. [Recording details](https://github.com/championswimmer/pi-subagent-manager/blob/main/docs/demo.md) (37 seconds; pauses shortened).
 
 ## Check out my other Pi extensions
 
@@ -57,20 +57,20 @@ The **Agents** widget above the input shows what's running. Open `/agents tree`,
 | `tasker`     | Small jobs and quick lookups            |
 | `writer`     | Drafting and editing prose              |
 
-They use your current model until you configure preferences. Open `/agents types` to change a role's model, tools, or instructions, or [add your own agent](docs/custom-agents.md).
+They use your current model until you configure preferences. Open `/agents types` to change a role's model, tools, or instructions, or [add your own agent](https://github.com/championswimmer/pi-subagent-manager/blob/main/docs/custom-agents.md).
 
 ## Settings and safety
 
-Open `/agents` to change delegation mode, limits, and display settings; save with **Ctrl+S**. Experimental options are marked **[labs]** in their help. **[lab] Subagent extensions** opens a per-extension chooser (Space/Enter toggles, Esc returns); **Save and apply** persists the selection for new subagent sessions. It lists auto-discovered `.ts`/`.js` files and subdirectory entry points in Pi’s agent-dir `extensions/` (honoring `PI_CODING_AGENT_DIR`), trusted project `.pi/extensions/`, and configured/package files—not CLI-only/inline/built-in extensions; see [limitations](docs/subagent-extension-limitations.md).
+Open `/agents` to change delegation mode, limits, and display settings; save with **Ctrl+S**. Experimental options are marked **[labs]** in their help. **[lab] Subagent extensions** opens a per-extension chooser (Space/Enter toggles, Esc returns); **Save and apply** persists the selection for new subagent sessions. It lists auto-discovered `.ts`/`.js` files and subdirectory entry points in Pi’s agent-dir `extensions/` (honoring `PI_CODING_AGENT_DIR`), trusted project `.pi/extensions/`, and configured/package files—not CLI-only/inline/built-in extensions; see [limitations](https://github.com/championswimmer/pi-subagent-manager/blob/main/docs/subagent-extension-limitations.md).
 
 Agents share your working directory and OS permissions: **tool policies are not a sandbox**. Don't run multiple subagent extensions together — they clash on `/agents`.
 
 ## Documentation
 
-- [Commands and navigation](docs/tools-and-ui.md#commands) — watching, steering, stopping, and keyboard shortcuts
-- [Settings](docs/settings.md) — models, tool access, limits, and experimental features
-- [Custom agents](docs/custom-agents.md) · [Bundled roles](docs/default-agents.md)
-- [Importing agents](docs/importing-agents.md) from other subagent packages
-- [Development](docs/development.md) · [Changelog](CHANGELOG.md)
+- [Commands and navigation](https://github.com/championswimmer/pi-subagent-manager/blob/main/docs/tools-and-ui.md#commands) — watching, steering, stopping, and keyboard shortcuts
+- [Settings](https://github.com/championswimmer/pi-subagent-manager/blob/main/docs/settings.md) — models, tool access, limits, and experimental features
+- [Custom agents](https://github.com/championswimmer/pi-subagent-manager/blob/main/docs/custom-agents.md) · [Bundled roles](https://github.com/championswimmer/pi-subagent-manager/blob/main/docs/default-agents.md)
+- [Importing agents](https://github.com/championswimmer/pi-subagent-manager/blob/main/docs/importing-agents.md) from other subagent packages
+- [Development](https://github.com/championswimmer/pi-subagent-manager/blob/main/docs/development.md) · [Changelog](CHANGELOG.md)
 
 [MIT license](LICENSE)

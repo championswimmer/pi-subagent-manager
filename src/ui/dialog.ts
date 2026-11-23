@@ -25,7 +25,7 @@ export interface DialogHost {
   requestRender(force?: boolean): void;
   terminal?: { rows: number };
 }
-export interface DialogEditorHost extends DialogHost {
+interface DialogEditorHost extends DialogHost {
   terminal: { rows: number };
 }
 export interface DialogRow {

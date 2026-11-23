@@ -20,7 +20,7 @@ import type { LoaderStyle } from "../prefs/settings.ts";
 import { renderTranscriptTool } from "./transcript-tool.ts";
 
 /** Transcript detail level cycled by Ctrl+O: full → preview → compact. */
-export type TranscriptDetail = "full" | "preview" | "compact";
+type TranscriptDetail = "full" | "preview" | "compact";
 const DETAIL_CYCLE: TranscriptDetail[] = ["full", "preview", "compact"];
 
 export interface AgentViewportState {

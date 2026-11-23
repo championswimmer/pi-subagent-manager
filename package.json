@@ -34,9 +34,9 @@
     "access": "public"
   },
   "files": [
-    "dist",
+    "dist/**/*.js",
+    "dist/index.d.ts",
     "agents",
-    "docs",
     "README.md"
   ],
   "pi": {

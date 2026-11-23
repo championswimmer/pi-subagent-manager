@@ -252,15 +252,15 @@ export function serializeAgentType(type: AgentType): string {
   return content;
 }
 
-export type AgentSettingsScope = "user" | "project";
-export type AgentCustomizationKind = "fork" | "override";
+type AgentSettingsScope = "user" | "project";
+type AgentCustomizationKind = "fork" | "override";
 
 /**
  * Sparse settings parsed from a `<name>.yml` override file. Plain YAML mapping,
  * no frontmatter, no Markdown body. Omitted fields follow the base definition;
  * explicit `null` clears an optional field (rather than inheriting it).
  */
-export interface AgentSettingsOverride {
+interface AgentSettingsOverride {
   name?: string;
   description?: string;
   models?: string[] | null;
@@ -273,7 +273,7 @@ export interface AgentSettingsOverride {
   tools?: { allow?: string[] | null; block?: string[] | null } | null;
 }
 
-export const AGENT_OVERRIDE_EXTENSIONS = [".yml", ".yaml"] as const;
+const AGENT_OVERRIDE_EXTENSIONS = [".yml", ".yaml"] as const;
 
 function overrideBaseName(file: string): string | undefined {
   for (const extension of AGENT_OVERRIDE_EXTENSIONS)
@@ -281,7 +281,7 @@ function overrideBaseName(file: string): string | undefined {
   return undefined;
 }
 
-export function isAgentOverrideFile(file: string): boolean {
+function isAgentOverrideFile(file: string): boolean {
   return overrideBaseName(file) !== undefined;
 }
 
@@ -534,7 +534,7 @@ export function selectTools(
   return [...names].filter((name) => allow.has(name) && !block.has(name));
 }
 
-export interface ConfigStoreOptions {
+interface ConfigStoreOptions {
   cwd: string;
   agentDir: string;
   includeProject: boolean;

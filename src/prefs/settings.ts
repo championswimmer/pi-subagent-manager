@@ -20,10 +20,10 @@ export type SubagentMode = (typeof SUBAGENT_MODES)[number];
 export const WIDGET_MODES = ["full", "minimal"] as const;
 export type WidgetMode = (typeof WIDGET_MODES)[number];
 
-export const COST_DISPLAY_MODES = ["pi-footer-event", "pi-footer-status", "pi-status"] as const;
+const COST_DISPLAY_MODES = ["pi-footer-event", "pi-footer-status", "pi-status"] as const;
 export type CostDisplayMode = (typeof COST_DISPLAY_MODES)[number];
 
-export const COST_VALUES = ["subagents", "total"] as const;
+const COST_VALUES = ["subagents", "total"] as const;
 export type CostValue = (typeof COST_VALUES)[number];
 
 export const COST_ICONS = ["money", "coins", "wallet"] as const;
@@ -100,7 +100,7 @@ export const DEFAULT_MANAGER_SETTINGS: ManagerSettings = {
 
 /** Same `provider/model-id` shape as agent model preferences. */
 const HOUSEKEEPING_MODEL = /^[^\s/]+\/[^\s]+$/;
-export const isHousekeepingModel = (value: unknown): value is string =>
+const isHousekeepingModel = (value: unknown): value is string =>
   typeof value === "string" && (value === "" || HOUSEKEEPING_MODEL.test(value));
 
 const KEYS = [
@@ -316,19 +316,19 @@ function settingsFileExists(entry: SettingsLayer): boolean {
   return true;
 }
 
-export type ManagerSaveScope = "user" | "project";
+type ManagerSaveScope = "user" | "project";
 
 function detail(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export interface ManagerSettingsOptions {
+interface ManagerSettingsOptions {
   cwd: string;
   agentDir: string;
   includeProject: boolean;
 }
 
-export interface ManagerSettingsLayers {
+interface ManagerSettingsLayers {
   settings: ManagerSettings;
   diagnostics: string[];
   global: Partial<ManagerSettings>;

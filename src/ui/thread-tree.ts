@@ -55,7 +55,7 @@ export function lastStarted(thread: ThreadView | undefined): number {
 }
 
 /** Newest branch first: a branch ranks by its most recently started agent. Cycles are guarded. */
-export function recencyComparator(threads: ThreadView[]): (a: string, b: string) => number {
+function recencyComparator(threads: ThreadView[]): (a: string, b: string) => number {
   const byPath = new Map<string, ThreadView>();
   for (const thread of threads) {
     if (thread?.path && !byPath.has(thread.path)) byPath.set(thread.path, thread);

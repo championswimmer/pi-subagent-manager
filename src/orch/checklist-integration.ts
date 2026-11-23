@@ -13,8 +13,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
  *    persistence it writes (see {@link ChecklistMetaMirror}).
  */
 
-export const CHECKLIST_PACKAGE = "pi-checklist";
-export const CHECKLIST_MIN_MAJOR = 3;
+const CHECKLIST_PACKAGE = "pi-checklist";
+const CHECKLIST_MIN_MAJOR = 3;
 export const CHECKLIST_TOOL_NAMES = [
   "checklist_create",
   "checklist_read",

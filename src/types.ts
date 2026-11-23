@@ -41,7 +41,7 @@ export interface AgentType {
   /** File path of the base definition under the customization, if any. */
   baseFilePath?: string;
 }
-export type ThreadState = "starting" | "running" | "paused" | "completed" | "failed" | "stopped";
+type ThreadState = "starting" | "running" | "paused" | "completed" | "failed" | "stopped";
 export interface ChildDiagnostic {
   level: "info" | "warning" | "error";
   message: string;

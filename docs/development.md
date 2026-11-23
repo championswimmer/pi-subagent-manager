@@ -68,7 +68,7 @@ git tag -a v<version> -m v<version>
 git push && git push --tags
 ```
 
-The package ships compiled ESM and `.d.ts` declarations from `dist/` (gitignored, built via `npm run build` / `prepack`) plus `agents/`; check `files` in `package.json` when adding assets.
+The package ships compiled ESM (`dist/**/*.js`) and the entry declaration (`dist/index.d.ts`) from `dist/` (gitignored, built via `npm run build` / `prepack`, without source or declaration maps) plus `agents/` (and excludes `docs/`); check `files` in `package.json` when adding assets.
 
 ## Background
 

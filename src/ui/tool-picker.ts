@@ -52,7 +52,7 @@ interface ToolItem extends SelectItem {
   group: string;
 }
 const MCP_TOOL = /^mcp__(.+?)__(.+)$/;
-export function mcpServerOf(name: string): string | undefined {
+function mcpServerOf(name: string): string | undefined {
   return MCP_TOOL.exec(name)?.[1];
 }
 

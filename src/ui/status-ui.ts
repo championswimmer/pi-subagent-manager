@@ -82,7 +82,7 @@ function label(row: StatusRow): string {
     .join("  ");
 }
 
-export interface AgentTreeState {
+interface AgentTreeState {
   selectedPath: string;
   collapsed: Set<string>;
 }

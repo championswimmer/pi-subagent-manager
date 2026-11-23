@@ -17,7 +17,7 @@ export interface SavedRegistry {
 }
 
 /** A change to one thread since the previous registry entry on the branch. */
-export type ThreadChange =
+type ThreadChange =
   /** An added thread, or one whose definition or inherited context changed. */
   | { thread: SavedThread }
   /** Only these view fields changed or were cleared. */
