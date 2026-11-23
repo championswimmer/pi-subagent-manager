@@ -13,6 +13,14 @@ Generated from version tags and merged GitHub pull requests. Do not edit this fi
 
 **Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v0.30.0...v1.0.0
 
+### [v1.11.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v1.11.0) — Minor release (2026-11-23)
+
+<!-- Release notes generated using configuration in .github/release.yml at v1.11.0 -->
+
+
+
+**Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v1.10.0...v1.11.0
+
 ### [v1.10.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v1.10.0) — Minor release (2026-11-22)
 
 <!-- Release notes generated using configuration in .github/release.yml at v1.10.0 -->
