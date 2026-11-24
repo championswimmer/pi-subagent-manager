@@ -13,6 +13,17 @@ Generated from version tags and merged GitHub pull requests. Do not edit this fi
 
 **Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v0.30.0...v1.0.0
 
+### [v1.13.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v1.13.0) — Minor release (2026-11-24)
+
+<!-- Release notes generated using configuration in .github/release.yml at v1.13.0 -->
+
+#### What's Changed
+##### Merged pull requests
+* feat: make subagent extension allowlists portable by @championswimmer in https://github.com/championswimmer/pi-subagent-manager/pull/98
+
+
+**Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v1.12.0...v1.13.0
+
 ### [v1.12.0](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v1.12.0) — Minor release (2026-11-23)
 
 <!-- Release notes generated using configuration in .github/release.yml at v1.12.0 -->
