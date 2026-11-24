@@ -74,7 +74,7 @@ test("configured extension discovery respects trust, exclusions, packages and ma
     }),
   );
   const discover = (projectTrusted: boolean) =>
-    discoverSubagentExtensions({ cwd, agentDir, projectTrusted });
+    discoverSubagentExtensions({ cwd, agentDir, projectTrusted }).then((files) => files.map(({ path }) => path));
   const expected = [user, configured, path.join(localPackage, "entry.ts")].sort();
   assert.deepEqual((await discover(false)).sort(), expected);
   assert.deepEqual((await discover(true)).sort(), expected, "project exclusion honored");
@@ -116,11 +116,53 @@ test("configured discovery skips missing packages rather than installing them", 
 });
 
 test("selection intersects trusted discovery and preserves legacy all/none", () => {
-  const available = ["/a.ts", "/b.ts"];
-  assert.deepEqual(selectSubagentExtensions(available, true), available);
+  const available = [{ id: "/a.ts", path: "/a.ts" }, { id: ".pi/b.ts", path: "/b.ts" }];
+  assert.deepEqual(selectSubagentExtensions(available, true), ["/a.ts", "/b.ts"]);
   assert.deepEqual(selectSubagentExtensions(available, false), []);
   assert.deepEqual(selectSubagentExtensions(available, []), []);
   assert.deepEqual(selectSubagentExtensions(available, ["/b.ts", "/missing.ts"]), ["/b.ts"]);
+  assert.deepEqual(selectSubagentExtensions(available, [".pi/b.ts", "/b.ts"]), ["/b.ts"]);
+});
+
+test("a global selection is portable between agent directories", async (t) => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pi-subagent-agent-dirs-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const cwd = path.join(root, "project");
+  await mkdir(cwd);
+  const dirs = ["alice", "bob"].map((name) => path.join(root, name));
+  for (const agentDir of dirs) {
+    await mkdir(path.join(agentDir, "extensions"), { recursive: true });
+    await writeFile(path.join(agentDir, "extensions", "portable.ts"), "export default function() {}");
+  }
+  const discover = (agentDir: string) => discoverSubagentExtensions({ cwd, agentDir, projectTrusted: false });
+  const saved = (await discover(dirs[0]!)).map(({ id }) => id);
+  assert.deepEqual(saved, ["$PI_CODING_AGENT_DIR/extensions/portable.ts"]);
+  assert.deepEqual(selectSubagentExtensions(await discover(dirs[1]!), saved), [
+    path.join(dirs[1]!, "extensions", "portable.ts"),
+  ]);
+});
+
+test("the same project selection loads the local copy from either worktree", async (t) => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pi-subagent-worktrees-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const agentDir = path.join(root, "agent");
+  await mkdir(agentDir);
+  const id = path.join(".pi", "extensions", "example.ts");
+  const worktrees = ["main", "other"].map((name) => path.join(root, name));
+  for (const cwd of worktrees) {
+    const file = path.join(cwd, id);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, "export default function() {}");
+  }
+  const first = await discoverSubagentExtensions({ cwd: worktrees[0]!, agentDir, projectTrusted: true });
+  const saved = first.map((file) => file.id);
+  assert.deepEqual(saved, [id]);
+
+  const cwd = worktrees[1]!;
+  const second = await discoverSubagentExtensions({ cwd, agentDir, projectTrusted: true });
+  assert.deepEqual(selectSubagentExtensions(second, saved), [path.join(cwd, id)]);
+  const untrusted = await discoverSubagentExtensions({ cwd, agentDir, projectTrusted: false });
+  assert.deepEqual(selectSubagentExtensions(untrusted, saved), []);
 });
 
 test("auto-discovery includes standalone TS/JS and subdir entry points without configuration", async (t) => {
@@ -160,7 +202,7 @@ test("auto-discovery includes standalone TS/JS and subdir entry points without c
       path.join(base, file),
     );
   const discover = (projectTrusted: boolean) =>
-    discoverSubagentExtensions({ cwd, agentDir, projectTrusted });
+    discoverSubagentExtensions({ cwd, agentDir, projectTrusted }).then((files) => files.map(({ path }) => path));
   assert.deepEqual((await discover(false)).sort(), entries(userDir).sort());
   assert.deepEqual(
     (await discover(true)).sort(),

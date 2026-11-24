@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import test, { type TestContext } from "node:test";
 import type { ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import { ConfigStore } from "../src/prefs/config.ts";
@@ -1318,10 +1318,10 @@ test("Footer submenu and pickers fit narrow terminals and save to project scope"
 });
 
 test("[lab] Subagent extensions chooses files, saves, cancels and handles empty/narrow views", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "pi-extension-picker-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-extension-picker-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const file = join(root, "extensions", "one.ts");
-  const second = join(root, "extensions", "two.ts");
+  const file = "$PI_CODING_AGENT_DIR/extensions/one.ts";
+  const second = "$PI_CODING_AGENT_DIR/extensions/two.ts";
   const enabled = await run(t, ["subagentExtensions", file, "back", "save"], {
     root,
     extensions: ["one.ts", "two.ts"],
@@ -1341,6 +1341,15 @@ test("[lab] Subagent extensions chooses files, saves, cancels and handles empty/
     settings: { ...DEFAULT_MANAGER_SETTINGS, subagentExtensions: true },
   });
   assert.deepEqual(legacyAll.loaded.settings.subagentExtensions, [file, second]);
+  const migrated = await run(t, ["subagentExtensions", "back", "save"], {
+    root,
+    settings: {
+      ...DEFAULT_MANAGER_SETTINGS,
+      subagentExtensions: [join(root, "extensions", "one.ts")],
+    },
+  });
+  assert.equal(migrated.menus[1]!.rows.find((row) => row.id === file)!.value, "On");
+  assert.deepEqual(migrated.loaded.settings.subagentExtensions, [file]);
   const legacy = await run(t, ["subagentExtensions", file, undefined, "save"], {
     root,
     settings: { ...DEFAULT_MANAGER_SETTINGS, subagentExtensions: true },
@@ -1363,7 +1372,7 @@ test("[lab] Subagent extensions chooses files, saves, cancels and handles empty/
   }
 });
 test("extension chooser lists auto-discovered files from custom agentDir and only trusted project files", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "pi-auto-extension-picker-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-auto-extension-picker-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const agentDir = join(root, "custom-agent-dir");
   const userFiles = ["standalone.ts", "standalone.js", "nested/index.ts"].map((file) =>
@@ -1377,7 +1386,10 @@ test("extension chooser lists auto-discovered files from custom agentDir and onl
     writeFileSync(file, "export default function() {}");
   }
   // No settings.json or package manifest is needed for these extensions.
-  const userFile = userFiles[0]!;
+  const userIds = ["standalone.ts", "standalone.js", "nested/index.ts"].map(
+    (file) => `$PI_CODING_AGENT_DIR/extensions/${file}`,
+  );
+  const userFile = userIds[0]!;
   const untrusted = await run(t, ["subagentExtensions", userFile, "back", "save"], {
     root,
     agentDir,
@@ -1386,10 +1398,11 @@ test("extension chooser lists auto-discovered files from custom agentDir and onl
     untrusted.menus[1]!.rows.filter((row) => row.id !== "back")
       .map((row) => row.id)
       .sort(),
-    [...userFiles].sort(),
+    [...userIds].sort(),
   );
   assert.deepEqual(untrusted.loaded.settings.subagentExtensions, [userFile]);
-  const projectFile = projectFiles[0]!;
+  const projectIds = projectFiles.map((file) => relative(root, file));
+  const projectFile = projectIds[0]!;
   const trusted = await run(t, ["subagentExtensions", projectFile, "back", "save"], {
     root,
     agentDir,
@@ -1399,14 +1412,14 @@ test("extension chooser lists auto-discovered files from custom agentDir and onl
     trusted.menus[1]!.rows.filter((row) => row.id !== "back")
       .map((row) => row.id)
       .sort(),
-    [...userFiles, ...projectFiles].sort(),
+    [...userIds, ...projectIds].sort(),
   );
   assert.deepEqual(trusted.loaded.settings.subagentExtensions, [userFile, projectFile].sort());
   // Directory entry points use their folder names; standalone extensions keep their filenames.
-  for (const file of [...userFiles, ...projectFiles]) {
+  for (const file of [...userIds, ...projectIds]) {
     const row = trusted.menus[1]!.rows.find((row) => row.id === file)!;
     const selected = file === userFile;
-    const name = file.includes(join("nested", "index."))
+    const name = file.includes("nested/index.") || file.includes(join("nested", "index."))
       ? "nested"
       : file.endsWith(".js")
         ? "standalone.js"
