@@ -207,13 +207,17 @@ async function configureSubagentExtensions(
   draft: ManagerSettings,
   agentDir: string,
 ): Promise<void> {
-  const available = await discoverSubagentExtensions({
+  const discovered = await discoverSubagentExtensions({
     cwd: ctx.cwd,
     agentDir,
     projectTrusted: ctx.isProjectTrusted(),
   });
+  const available = new Set(discovered.map(({ id }) => id));
+  const idsByPath = new Map(discovered.map(({ path, id }) => [path, id]));
   const selected = new Set(
-    draft.subagentExtensions === true ? available : draft.subagentExtensions || [],
+    draft.subagentExtensions === true
+      ? available
+      : (draft.subagentExtensions || []).map((file) => idsByPath.get(file) ?? file),
   );
   // Keep stale selections visible and removable; runtime still intersects with discovery.
   const files = [...new Set([...available, ...selected])].sort();
@@ -226,8 +230,8 @@ async function configureSubagentExtensions(
         ...files.map((file) => ({
           id: file,
           label: `${selected.has(file) ? "[x]" : "[ ]"} ${extensionDisplayName(file)}`,
-          value: available.includes(file) ? (selected.has(file) ? "On" : "Off") : "Unavailable",
-          help: `${file}\n${available.includes(file) ? "Reload this extension in newly opened subagent sessions." : "Not currently discoverable/trusted; will not load. Toggle Off to remove the saved selection."}\nSpace/Enter toggles. Changes are saved only with outer Save and apply.`,
+          value: available.has(file) ? (selected.has(file) ? "On" : "Off") : "Unavailable",
+          help: `${file}\n${available.has(file) ? "Reload this extension in newly opened subagent sessions." : "Not currently discoverable/trusted; will not load. Toggle Off to remove the saved selection."}\nSpace/Enter toggles. Changes are saved only with outer Save and apply.`,
         })),
         {
           id: "back",

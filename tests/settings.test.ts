@@ -1263,7 +1263,11 @@ test("extension selections round-trip, override layers and compare structurally"
     settings: { ...snapshot.settings, subagentExtensions: [] },
   });
   assert.deepEqual(load(f).settings.subagentExtensions, []);
-  for (const invalid of [["relative.ts"], [1], [null], {}]) {
+  for (const invalid of [
+    ["../outside.ts"], ["dir/../file.ts"], ["."],
+    ["$PI_CODING_AGENT_DIR"], ["$PI_CODING_AGENT_DIR/"], ["$PI_CODING_AGENT_DIR/../outside.ts"],
+    [1], [null], {},
+  ]) {
     rejects(
       () => save(f, "user", { ...DEFAULTS, subagentExtensions: invalid }),
       /subagentExtensions must be/,

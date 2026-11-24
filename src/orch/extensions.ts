@@ -2,6 +2,7 @@ import { realpath, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DefaultPackageManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { AGENT_DIR_EXTENSION_PREFIX } from "../prefs/settings.ts";
 
 const ENTRY_EXT = import.meta.url.endsWith(".ts") ? ".ts" : ".js";
 const MANAGER_ENTRY = fileURLToPath(new URL(`../index${ENTRY_EXT}`, import.meta.url));
@@ -40,6 +41,19 @@ async function isManagerExtension(file: string, packageRoot?: string): Promise<b
   }
 }
 
+function relativeWithin(base: string, file: string): string | undefined {
+  const relative = path.relative(base, file);
+  return relative && !path.isAbsolute(relative) && relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) ? relative : undefined;
+}
+
+interface DiscoveredSubagentExtension {
+  /** Saved selection: relative to the project or agent directory when possible. */
+  id: string;
+  /** Canonical path passed to the resource loader. */
+  path: string;
+}
+
 /**
  * The public ExtensionAPI cannot inspect the main session's resource loader. This is
  * deliberately filesystem/configuration discovery, not exact main-set inheritance: CLI-only,
@@ -49,7 +63,7 @@ export async function discoverSubagentExtensions(options: {
   cwd: string;
   agentDir: string;
   projectTrusted: boolean;
-}): Promise<string[]> {
+}): Promise<DiscoveredSubagentExtension[]> {
   const settingsManager = SettingsManager.create(options.cwd, options.agentDir, {
     projectTrusted: options.projectTrusted,
   });
@@ -59,7 +73,7 @@ export async function discoverSubagentExtensions(options: {
   // Reuse it so index/manifest precedence, ignore rules and disabled-resource
   // patterns stay identical to Pi instead of bypassing them with a second scan.
   const resources = await packages.resolve(async () => "skip");
-  const paths: string[] = [];
+  const extensions: DiscoveredSubagentExtension[] = [];
   const seen = new Set<string>();
   for (const resource of resources.extensions) {
     if (!resource.enabled || resource.path.startsWith("builtin:")) continue;
@@ -67,18 +81,28 @@ export async function discoverSubagentExtensions(options: {
     const resolved = await canonical(resource.path);
     if (seen.has(resolved)) continue;
     seen.add(resolved);
-    paths.push(resolved);
+    const projectFile = resource.metadata.scope === "project"
+      ? relativeWithin(options.cwd, resource.path)
+      : undefined;
+    const agentFile = resource.metadata.scope === "user"
+      ? relativeWithin(options.agentDir, resource.path)
+      : undefined;
+    const id = agentFile
+      ? AGENT_DIR_EXTENSION_PREFIX + agentFile.split(path.sep).join("/")
+      : projectFile ?? resolved;
+    extensions.push({ id, path: resolved });
   }
-  return paths;
+  return extensions;
 }
 
 /** Intersect saved selections with current trusted discovery; never load arbitrary saved paths. */
 export function selectSubagentExtensions(
-  available: string[],
+  available: DiscoveredSubagentExtension[],
   selection: boolean | readonly string[],
 ): string[] {
-  if (selection === true) return [...available];
   if (selection === false) return [];
-  const selected = new Set(selection);
-  return available.filter((file) => selected.has(file));
+  const selected = new Set(selection === true ? [] : selection);
+  return available
+    .filter(({ id, path }) => selection === true || selected.has(id) || selected.has(path))
+    .map(({ path }) => path);
 }

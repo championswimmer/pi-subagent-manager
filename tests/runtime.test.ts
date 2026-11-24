@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -77,7 +77,7 @@ const countTextMessages = (messages: unknown[], text: string): number =>
   messages.filter((message) => messageText(message) === text).length;
 
 test("isolated real SDK driver without credentials", async (t) => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "pi-subagent-runtime-"));
+  const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "pi-subagent-runtime-")));
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = directory;
   const drivers: AgentDriver[] = [];
@@ -752,7 +752,10 @@ test("isolated real SDK driver without credentials", async (t) => {
           );
           await writeFile(projectFile, hook("AUTO PROJECT EXTENSION"));
           // Select every supported entry-point form, without an extensions setting.
-          subagentExtensions = [...files.map((file) => path.join(extensionDir, file)), projectFile];
+          subagentExtensions = [
+            ...files.map((file) => `$PI_CODING_AGENT_DIR/extensions/${file}`),
+            path.relative(cwd, projectFile),
+          ];
           const untrusted = await create(options({ path: "/root/auto-untrusted" }));
           await untrusted.prompt("load auto-discovered selections");
           for (const index of files.keys())
@@ -760,7 +763,7 @@ test("isolated real SDK driver without credentials", async (t) => {
           assert.doesNotMatch(requests.at(-1)!.system, /AUTO PROJECT EXTENSION/);
           await untrusted.dispose();
           ctx.isProjectTrusted = () => true;
-          subagentExtensions = [projectFile];
+          subagentExtensions = [path.relative(cwd, projectFile)];
           const trusted = await create(options({ path: "/root/auto-trusted" }));
           await trusted.prompt("load only the selected project file");
           assert.match(requests.at(-1)!.system, /AUTO PROJECT EXTENSION/);

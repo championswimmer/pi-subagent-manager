@@ -12,7 +12,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 
 export const SUBAGENT_MODES = ["off", "opportunistic", "orchestration"] as const;
 export type SubagentMode = (typeof SUBAGENT_MODES)[number];
@@ -50,6 +50,8 @@ export const MODEL_SELECTION_MODES = [
 export type ModelSelectionMode = (typeof MODEL_SELECTION_MODES)[number];
 
 /** Legacy booleans mean all/none; arrays pin the selected canonical file paths. */
+/** Literal settings prefix, anchored to Pi's resolved agent directory. */
+export const AGENT_DIR_EXTENSION_PREFIX = "$PI_CODING_AGENT_DIR/";
 export type SubagentExtensionSelection = boolean | string[];
 
 export function settingsValueEqual(a: unknown, b: unknown): boolean {
@@ -153,9 +155,22 @@ function positiveSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
+function isExtensionSelectionPath(entry: unknown): entry is string {
+  if (typeof entry !== "string" || !entry || entry.includes("\0")) return false;
+  if (entry.startsWith(AGENT_DIR_EXTENSION_PREFIX)) {
+    const suffix = entry.slice(AGENT_DIR_EXTENSION_PREFIX.length);
+    return !suffix.includes("\\") &&
+      suffix.split("/").every((part) => part && part !== "." && part !== "..");
+  }
+  if (entry === AGENT_DIR_EXTENSION_PREFIX.slice(0, -1)) return false;
+  if (isAbsolute(entry)) return resolve(entry) === entry;
+  return normalize(entry) === entry &&
+    entry !== "." && entry !== ".." && !entry.startsWith(`..${sep}`) && !entry.endsWith(sep);
+}
+
 function requirement(key: (typeof KEYS)[number]): string {
   if (key === "subagentExtensions")
-    return "subagentExtensions must be a boolean or an array of absolute file paths";
+    return "subagentExtensions must be a boolean or an array of absolute, project-relative, or $PI_CODING_AGENT_DIR paths";
   if (
     key === "nerdFontIcons" ||
     key === "finalRecap" ||
@@ -216,19 +231,7 @@ function parseSettings(content: string): Partial<ManagerSettings> {
       continue;
     }
     if (key === "subagentExtensions") {
-      if (
-        typeof value !== "boolean" &&
-        !(
-          Array.isArray(value) &&
-          value.every(
-            (entry) =>
-              typeof entry === "string" &&
-              entry.length > 0 &&
-              resolve(entry) === entry &&
-              !entry.includes("\0"),
-          )
-        )
-      )
+      if (typeof value !== "boolean" && !(Array.isArray(value) && value.every(isExtensionSelectionPath)))
         throw new Error(requirement(key));
       layer.subagentExtensions =
         typeof value === "boolean" ? value : [...new Set(value as string[])].sort();
