@@ -1,4 +1,4 @@
-# pi-subagent-manager
+# <img src="https://raw.githubusercontent.com/championswimmer/pi-subagent-manager/main/assets/icon.png" width="44" height="44" align="absmiddle" alt=""> pi-subagent-manager
 
 [![npm version](https://img.shields.io/npm/v/pi-subagent-manager.svg)](https://www.npmjs.com/package/pi-subagent-manager)
 [![npm downloads](https://img.shields.io/npm/dm/pi-subagent-manager.svg)](https://www.npmjs.com/package/pi-subagent-manager)
