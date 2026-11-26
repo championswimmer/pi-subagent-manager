@@ -42,7 +42,8 @@
   "pi": {
     "extensions": [
       "./dist/index.js"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/championswimmer/pi-subagent-manager/main/assets/banner.png"
   },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
