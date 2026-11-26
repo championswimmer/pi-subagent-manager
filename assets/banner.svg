@@ -1,12 +1,32 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
-<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0B1020"/><stop offset="1" stop-color="#111C3D"/></linearGradient>
-<linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3B82F6"/><stop offset="1" stop-color="#1E3A8A"/></linearGradient></defs>
-<rect width="1200" height="630" fill="url(#bg)"/>
-<g transform="translate(100 115) scale(0.78)"><rect width="512" height="512" rx="112" fill="url(#g)"/>
-<g fill="none" stroke="#FFFFFF" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"><path d="M256 190 V260 M256 260 H120 V320 M256 260 V320 M256 260 H392 V320"/></g>
-<circle cx="256" cy="140" r="58" fill="#FFFFFF"/><circle cx="256" cy="140" r="22" fill="#2563EB"/>
-<circle cx="120" cy="366" r="46" fill="#67E8F9"/><circle cx="256" cy="366" r="46" fill="#67E8F9"/><circle cx="392" cy="366" r="46" fill="#67E8F9"/></g>
-<text x="560" y="305" font-family="Inter, Helvetica, Arial, sans-serif" font-weight="700" font-size="52" fill="#FFFFFF">pi-subagent-manager</text>
-<rect x="562" y="335" width="80" height="6" rx="3" fill="#67E8F9"/>
-<text x="560" y="395" font-family="Inter, Helvetica, Arial, sans-serif" font-size="32" fill="#B6C4E8">Parallel, steerable subagent threads</text>
+<defs><radialGradient id="v" cx=".5" cy=".5" r=".75"><stop offset=".5" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".45"/></radialGradient></defs>
+<rect width="1200" height="630" fill="#0d1116"/>
+<g stroke="#fff" stroke-opacity=".04"><path d="M0 0V630M0 0H1200"/><path d="M40 0V630M0 40H1200"/><path d="M80 0V630M0 80H1200"/><path d="M120 0V630M0 120H1200"/><path d="M160 0V630M0 160H1200"/><path d="M200 0V630M0 200H1200"/><path d="M240 0V630M0 240H1200"/><path d="M280 0V630M0 280H1200"/><path d="M320 0V630M0 320H1200"/><path d="M360 0V630M0 360H1200"/><path d="M400 0V630M0 400H1200"/><path d="M440 0V630M0 440H1200"/><path d="M480 0V630M0 480H1200"/><path d="M520 0V630M0 520H1200"/><path d="M560 0V630M0 560H1200"/><path d="M600 0V630M0 600H1200"/><path d="M640 0V630M0 640H1200"/><path d="M680 0V630M0 680H1200"/><path d="M720 0V630M0 720H1200"/><path d="M760 0V630M0 760H1200"/><path d="M800 0V630M0 800H1200"/><path d="M840 0V630M0 840H1200"/><path d="M880 0V630M0 880H1200"/><path d="M920 0V630M0 920H1200"/><path d="M960 0V630M0 960H1200"/><path d="M1000 0V630M0 1000H1200"/><path d="M1040 0V630M0 1040H1200"/><path d="M1080 0V630M0 1080H1200"/><path d="M1120 0V630M0 1120H1200"/><path d="M1160 0V630M0 1160H1200"/><path d="M1200 0V630M0 1200H1200"/></g>
+<rect width="1200" height="630" fill="url(#v)"/>
+<g transform="translate(96 175) scale(.546875)"><clipPath id="c2"><rect width="512" height="512" rx="88"/></clipPath>
+<rect width="512" height="512" rx="88" fill="#161d27"/>
+<g clip-path="url(#c2)" stroke="#fff" stroke-opacity=".04" stroke-width="1"><path d="M32 0V512M0 32H512"/><path d="M64 0V512M0 64H512"/><path d="M96 0V512M0 96H512"/><path d="M128 0V512M0 128H512"/><path d="M160 0V512M0 160H512"/><path d="M192 0V512M0 192H512"/><path d="M224 0V512M0 224H512"/><path d="M256 0V512M0 256H512"/><path d="M288 0V512M0 288H512"/><path d="M320 0V512M0 320H512"/><path d="M352 0V512M0 352H512"/><path d="M384 0V512M0 384H512"/><path d="M416 0V512M0 416H512"/><path d="M448 0V512M0 448H512"/><path d="M480 0V512M0 480H512"/></g>
+<rect x="6" y="6" width="500" height="500" rx="82" fill="none" stroke="#495059" stroke-width="2"/>
+<g stroke="#757d89" stroke-width="2" fill="none"><path d="M28 48V28H48M464 28H484V48M28 464V484H48M484 464V484H464"/></g>
+<g shape-rendering="crispEdges" transform="translate(-32 -32) scale(1.125)">
+<rect x="248" y="200" width="16" height="48" fill="#4D9ABF"/>
+<rect x="144" y="248" width="224" height="16" fill="#4D9ABF"/>
+<rect x="136" y="264" width="16" height="48" fill="#4D9ABF"/>
+<rect x="248" y="264" width="16" height="48" fill="#4D9ABF"/>
+<rect x="360" y="264" width="16" height="48" fill="#4D9ABF"/>
+<rect x="224" y="136" width="64" height="64" fill="#4D9ABF"/>
+<rect x="240" y="152" width="16" height="16" fill="#161d27"/>
+<rect x="112" y="312" width="64" height="64" fill="#F1BE58"/>
+<rect x="224" y="312" width="64" height="64" fill="#a3a473"/>
+<rect x="336" y="312" width="64" height="64" fill="#495059"/>
+<rect x="128" y="328" width="16" height="16" fill="#161d27"/>
+<rect x="240" y="328" width="16" height="16" fill="#161d27" opacity=".55"/>
+<rect x="352" y="328" width="16" height="16" fill="#757d89"/>
+</g></g>
+<text x="430" y="300" font-family="CaskaydiaCove Nerd Font Mono, DejaVu Sans Mono, monospace" font-weight="700" font-size="52" fill="#ebe7e4">pi-subagent-manager</text>
+<rect x="1038" y="258" width="26" height="52" fill="#4D9ABF"/>
+<rect x="430" y="340" width="72" height="4" fill="#4D9ABF"/>
+<text x="430" y="395" font-family="CaskaydiaCove Nerd Font Mono, DejaVu Sans Mono, monospace" font-size="28" fill="#9fa4ab">Parallel, steerable subagent threads</text>
+<text x="96" y="570" font-family="CaskaydiaCove Nerd Font Mono, DejaVu Sans Mono, monospace" font-size="18" fill="#757d89">pi extension</text>
+<path d="M1104 64H1136V96M1104 64" stroke="#757d89" stroke-width="2" fill="none"/>
 </svg>
