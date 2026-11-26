@@ -1,4 +1,4 @@
-# <img src="https://raw.githubusercontent.com/championswimmer/pi-subagent-manager/main/assets/icon.png" width="44" height="44" align="absmiddle" alt=""> pi-subagent-manager
+![pi-subagent-manager](https://raw.githubusercontent.com/championswimmer/pi-subagent-manager/main/assets/banner.png)
 
 [![npm version](https://img.shields.io/npm/v/pi-subagent-manager.svg)](https://www.npmjs.com/package/pi-subagent-manager)
 [![npm downloads](https://img.shields.io/npm/dm/pi-subagent-manager.svg)](https://www.npmjs.com/package/pi-subagent-manager)
@@ -8,29 +8,29 @@
 
 Let pi hand work to helper agents in parallel. Watch what they're doing, give them more direction, or pick up a finished agent's conversation.
 
+## Install
+
+```bash
+pi install npm:pi-subagent-manager
+```
+
+Requires pi **0.99.2+**.
+
+## Why use it
+
+- Hand independent jobs to helper agents that run in parallel.
+- Watch any agent live in a nested agent tree.
+- Steer a running agent with more direction, or resume it after it finishes.
+- Choose `fork:` to share your conversation or `fresh:` to start clean.
+- Six bundled roles, with per-role model, tools, and instructions you can change, plus custom agents.
+
+## How to use
+
 ![Pi running parallel agents, browsing a nested agent tree, steering a writer, and watching passing tests](https://raw.githubusercontent.com/championswimmer/pi-subagent-manager/main/docs/assets/subagent-manager-demo.gif)
 
 A real Pi session with a customized footer and Nerd Font: parallel work, nested delegation, watching, and steering. [Recording details](https://github.com/championswimmer/pi-subagent-manager/blob/main/docs/demo.md) (37 seconds; pauses shortened).
 
-## Check out my other Pi extensions
-
-- [![pi-cache-graph](https://img.shields.io/badge/📊_pi--cache--graph-orange?style=flat-square)](https://github.com/championswimmer/pi-cache-graph) — Real-time prompt cache hit rates and token metrics.
-- [![pi-checklist](https://img.shields.io/badge/✅_pi--checklist-teal?style=flat-square)](https://github.com/championswimmer/pi-checklist) — Session task checklist with dependencies and a TUI renderer.
-- [![pi-context-decisions](https://img.shields.io/badge/🧠_pi--context--decisions-indigo?style=flat-square)](https://github.com/championswimmer/pi-context-decisions) — Selects relevant skills and optionally filters tools for each task.
-- [![pi-context-prune](https://img.shields.io/badge/✂️_pi--context--prune-green?style=flat-square)](https://github.com/championswimmer/pi-context-prune) — Prunes verbose tool outputs from context while preserving history.
-- [![pi-context-usage](https://img.shields.io/badge/🪟_pi--context--usage-purple?style=flat-square)](https://github.com/championswimmer/pi-context-usage) — Dot-grid visualization of context window token usage.
-- [![pi-gauge](https://img.shields.io/badge/⚡_pi--gauge-yellow?style=flat-square)](https://github.com/championswimmer/pi-gauge) — Live tokens/sec and TTFT in the status bar.
-- [![pi-subagent-manager](https://img.shields.io/badge/🤖_pi--subagent--manager-blue?style=flat-square)](https://github.com/championswimmer/pi-subagent-manager) — Delegate work to parallel subagents and monitor their progress.
-
-## Install
-
-Requires pi **0.99.2+**.
-
-```sh
-pi install npm:pi-subagent-manager
-```
-
-## Start using it
+### Start using it
 
 Ask pi to delegate in plain language:
 
@@ -46,7 +46,7 @@ Or start an agent yourself:
 
 The **Agents** widget above the input shows what's running. Open `/agents tree`, select an agent, and press **Enter** to watch it. Type in the **Steer** input to give it more direction or resume it after it finishes. Results also return to the main agent.
 
-## Bundled agents
+### Bundled agents
 
 | Agent        | Use it for                              |
 | ------------ | --------------------------------------- |
@@ -74,3 +74,13 @@ Agents share your working directory and OS permissions: **tool policies are not 
 - [Development](https://github.com/championswimmer/pi-subagent-manager/blob/main/docs/development.md) · [Changelog](CHANGELOG.md)
 
 [MIT license](LICENSE)
+
+## Check out my other Pi extensions
+
+- [![pi-cache-graph](https://img.shields.io/badge/📊_pi--cache--graph-orange?style=flat-square)](https://github.com/championswimmer/pi-cache-graph) — Real-time prompt cache hit rates and token metrics.
+- [![pi-checklist](https://img.shields.io/badge/✅_pi--checklist-teal?style=flat-square)](https://github.com/championswimmer/pi-checklist) — Session task checklist with dependencies and a TUI renderer.
+- [![pi-context-decisions](https://img.shields.io/badge/🧠_pi--context--decisions-indigo?style=flat-square)](https://github.com/championswimmer/pi-context-decisions) — Selects relevant skills and optionally filters tools for each task.
+- [![pi-context-prune](https://img.shields.io/badge/✂️_pi--context--prune-green?style=flat-square)](https://github.com/championswimmer/pi-context-prune) — Prunes verbose tool outputs from context while preserving history.
+- [![pi-context-usage](https://img.shields.io/badge/🪟_pi--context--usage-purple?style=flat-square)](https://github.com/championswimmer/pi-context-usage) — Dot-grid visualization of context window token usage.
+- [![pi-gauge](https://img.shields.io/badge/⚡_pi--gauge-yellow?style=flat-square)](https://github.com/championswimmer/pi-gauge) — Live tokens/sec and TTFT in the status bar.
+- [![pi-subagent-manager](https://img.shields.io/badge/🤖_pi--subagent--manager-blue?style=flat-square)](https://github.com/championswimmer/pi-subagent-manager) — Delegate work to parallel subagents and monitor their progress.
