@@ -680,7 +680,10 @@ export default function piSubagent(pi: ExtensionAPI): void {
         refreshWidget(requireContext());
         if (event.kind !== "metrics") persist();
         if (event.kind === "settled") rollupCost(event.thread);
-        else refreshCostFooter(requireContext());
+        else {
+          costLedger.track(event.thread);
+          refreshCostFooter(requireContext());
+        }
         delivery(event);
       },
     });

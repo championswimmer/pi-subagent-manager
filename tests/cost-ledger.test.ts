@@ -111,3 +111,44 @@ test("invalid costs are ignored and failed persistence can be retried", () => {
     0.5,
   );
 });
+
+test("a running agent's live cost counts before it settles, then is replaced not added", () => {
+  const ledger = new CostLedger();
+  const records: CostRecord[] = [];
+  const append = (record: CostRecord) => records.push(record);
+  ledger.track(thread(0.4, "running"));
+  assert.equal(ledger.totalUsd, 0.4);
+  ledger.track(thread(0.6, "running"));
+  assert.equal(ledger.totalUsd, 0.6, "live cost follows the latest report");
+  ledger.settle(thread(0.6), append);
+  assert.equal(ledger.totalUsd, 0.6, "settling the same cost must not double count");
+  assert.deepEqual(
+    records.map((r) => r.totalUsd),
+    [0.6],
+  );
+  assert.equal(records.length, 1, "exactly one record is appended");
+  ledger.track(thread(0.9, "running"));
+  assert.equal(ledger.totalUsd, 0.9);
+  ledger.settle(thread(0.9), append);
+  assert.equal(ledger.totalUsd, 0.9, "a higher settle replaces the recorded total, not adds");
+  assert.deepEqual(
+    records.map((r) => r.totalUsd),
+    [0.6, 0.9],
+  );
+});
+
+test("live tracking ignores root and missing ids, and restore clears live cost", () => {
+  const ledger = new CostLedger();
+  ledger.track({ ...thread(5, "running", "root"), path: "/root" });
+  ledger.track(thread(5, "running", ""));
+  assert.equal(ledger.totalUsd, 0);
+  ledger.track(thread(0.3, "running"));
+  assert.equal(ledger.totalUsd, 0.3);
+  ledger.track(thread(NaN, "running"));
+  assert.equal(ledger.totalUsd, 0, "a non-finite live cost clears the estimate");
+  ledger.track(thread(0.3, "running"));
+  ledger.track(thread(0.2, "paused"));
+  assert.equal(ledger.totalUsd, 0, "inactive states leave it to settle()");
+  ledger.restore([entry({ threadId: "agent-1", totalUsd: 0.5 })]);
+  assert.equal(ledger.totalUsd, 0.5, "restore drops live estimates");
+});
