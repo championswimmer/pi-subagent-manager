@@ -24,6 +24,31 @@ Generated from version tags and merged GitHub pull requests. Do not edit this fi
 
 **Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v1.12.0...v1.13.0
 
+#### [v1.13.2](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v1.13.2) — Patch release (2026-11-27)
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+##### What's Changed
+###### Merged pull requests
+* fix: pass session id to housekeeping completions (opencode-go MissingSessionID) by @ssk090 in https://github.com/championswimmer/pi-subagent-manager/pull/99
+
+##### New Contributors
+* @ssk090 made their first contribution in https://github.com/championswimmer/pi-subagent-manager/pull/99
+
+**Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v1.13.1...v1.13.2
+
+
+<!-- Release notes generated using configuration in .github/release.yml at v1.13.2 -->
+
+##### What's Changed
+###### Merged pull requests
+* fix: pass session id to housekeeping completions (opencode-go MissingSessionID) by @ssk090 in https://github.com/championswimmer/pi-subagent-manager/pull/99
+
+##### New Contributors
+* @ssk090 made their first contribution in https://github.com/championswimmer/pi-subagent-manager/pull/99
+
+**Full Changelog**: https://github.com/championswimmer/pi-subagent-manager/compare/v1.13.1...v1.13.2
+
 #### [v1.13.1](https://github.com/championswimmer/pi-subagent-manager/releases/tag/v1.13.1) — Patch release (2026-11-26)
 
 <!-- Release notes generated using configuration in .github/release.yml at v1.13.1 -->
