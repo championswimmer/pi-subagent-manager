@@ -328,7 +328,8 @@ export function createHousekeepingCompleter(
             },
           ],
         },
-        { signal, maxTokens: 96, cacheRetention: "none" },
+        // sessionId drives provider routing headers (opencode-go rejects calls without x-opencode-session).
+        { signal, maxTokens: 96, cacheRetention: "none", sessionId: session?.sessionId },
       )
       .result();
     // Account reported usage before checking whether this answer is usable or still current.

@@ -441,7 +441,7 @@ const assistant = (patch: Record<string, unknown>) => ({
 
 test("completer issues one tool-less streamSimple call with the abort signal and returns text", async () => {
   const mini = model("openai", "gpt-5-mini");
-  const { ctx, calls } = fakeContext({
+  const { ctx, calls, sessionManager } = fakeContext({
     available: [mini],
     stream: () => ({
       result: async () =>
@@ -469,6 +469,11 @@ test("completer issues one tool-less streamSimple call with the abort signal and
   assert.deepEqual(context.messages[0].content, [{ type: "text", text: "USER" }]);
   assert.equal(options.signal, controller.signal);
   assert.ok(options.maxTokens > 0 && options.maxTokens <= 200);
+  assert.equal(
+    options.sessionId,
+    sessionManager.getSessionId(),
+    "providers need it for routing headers",
+  );
 });
 
 test("completer rejects without a session, unavailable model, or provider error/abort", async () => {
