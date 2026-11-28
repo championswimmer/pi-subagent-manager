@@ -1006,17 +1006,8 @@ test("isolated real SDK driver without credentials", async (t) => {
           },
         });
         const custom = [makeTool("probe"), makeTool("agent_spawn"), makeTool("agent_wait")];
-        const allNames = [
-          "read",
-          "bash",
-          "powershell",
-          "edit",
-          "write",
-          "grep",
-          "find",
-          "ls",
-          ...custom.map((tool) => tool.name),
-        ];
+        const allNames = ["read", "bash", "edit", "write", ...custom.map((tool) => tool.name)];
+        inheritedTools = { tools: [], activeNames: ["read", "bash", "edit", "write"] };
         try {
           for (const mode of ["allowed", "all-except-blocked", "all"] as const) {
             toolFiltering = mode;
@@ -1094,6 +1085,7 @@ test("isolated real SDK driver without credentials", async (t) => {
             );
           }
         } finally {
+          inheritedTools = { tools: [], activeNames: [] };
           toolFiltering = "allowed";
           next = answer("child answer");
         }
@@ -1159,6 +1151,7 @@ test("isolated real SDK driver without credentials", async (t) => {
       async () => {
         try {
           next = answer("filter snapshot");
+          inheritedTools = { tools: [], activeNames: ["read"] };
           toolFiltering = "allowed";
           const strict = await create(options({ path: "/root/filter-old-strict" }));
           toolFiltering = "all";
@@ -1174,6 +1167,7 @@ test("isolated real SDK driver without credentials", async (t) => {
           await newStrict.prompt("New startup snapshot");
           assert.deepEqual(requests.at(-1)!.toolNames, []);
         } finally {
+          inheritedTools = { tools: [], activeNames: [] };
           toolFiltering = "allowed";
           next = answer("child answer");
         }

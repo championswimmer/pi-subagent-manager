@@ -77,6 +77,7 @@ test("context snapshots strip unfinished/orphaned tool exchanges and clone messa
         : message.role,
   );
   assert.deepEqual(summary, [
+    "system",
     "user",
     "custom",
     "bashExecution",
@@ -86,8 +87,11 @@ test("context snapshots strip unfinished/orphaned tool exchanges and clone messa
     "second result",
     ["stop", "Still waiting"],
   ]);
-  inherited[1].content = "child mutation";
-  inherited[3].content[0].text = "changed";
+  assert.deepEqual(inherited[0], messages[0]);
+  (inherited[0] as any).content = "child prompt";
+  assert.equal((messages[0] as any).content, "parent prompt");
+  inherited[2].content = "child mutation";
+  inherited[4].content[0].text = "changed";
   assert.equal((messages[2] as any).content, "keep custom");
   assert.equal((messages[4] as any).content[0].text, "Checking");
 });

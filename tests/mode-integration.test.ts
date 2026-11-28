@@ -599,8 +599,11 @@ test(
         assert.ok(rootRequest);
         assert.ok(childRequest);
         assert.ok(JSON.parse(rootRequest.system).endsWith(`\n\n${guidance}`));
-        assert.ok(!JSON.parse(childRequest.system).includes(guidance));
-        assert.ok(JSON.parse(childRequest.system).includes(workerSystemPrompt));
+        const childMessages = JSON.parse(childRequest.messagesText);
+        assert.equal(childMessages[0].content, JSON.parse(rootRequest.system));
+        assert.ok(childRequest.instructions.startsWith("You are now running as a subagent."));
+        assert.ok(!childRequest.instructions.includes(guidance));
+        assert.ok(childRequest.instructions.includes(workerSystemPrompt));
         assert.deepEqual(errors, []);
       },
     );

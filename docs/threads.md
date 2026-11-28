@@ -23,8 +23,9 @@
 
 A child starts from a snapshot of its **lexical parent** (the path one level up).
 
-- **Included:** conversation messages, custom messages, shell output.
-- **Excluded:** the parent's system prompt, unmatched tool calls/results.
+- **Included:** the parent's prompt, conversation messages, custom messages, and shell output. The child's role and thread instructions go in a new system message before its first task, not in the inherited leading prompt.
+- **Excluded:** unmatched tool calls/results.
+- **Prompt caching:** a fork reuses the parent's prefix when the tool declarations and the leading prompt match byte-for-byte. Models that accept mid-conversation system messages get the child instructions as a later `system` message (`compat.supportsMidConvoSystemMessages: true`). Models that fold later system messages into the leading prompt get them as a `user` message instead, so the parent's prompt stays untouched. The child must also run the same Pi SDK version as the host, or built-in tool descriptions drift and the tool list changes.
 - **Frozen:** later parent turns don't change the child's context.
 - **Model/thinking:** inherited from the parent unless the type sets them.
 - **Independent roots** (`/k`) use the main session's model defaults but **none of its history**.

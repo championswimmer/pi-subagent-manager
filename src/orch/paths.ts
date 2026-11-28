@@ -22,7 +22,7 @@ export function isDescendant(path: string, ancestor: string): boolean {
   return path.startsWith(`${ancestor}/`);
 }
 
-/** Snapshot conversation, not the parent's prompt/loadout; retain only matched tool exchanges. */
+/** Snapshot the model prefix; retain only matched tool exchanges. */
 export function inheritContext(messages: readonly AgentMessage[]): AgentMessage[] {
   const copy = structuredClone(messages);
   const matchedCalls = new Set<string>();
@@ -51,8 +51,6 @@ export function inheritContext(messages: readonly AgentMessage[]): AgentMessage[
   }
 
   return copy.flatMap((message, messageIndex): AgentMessage[] => {
-    // Only the system prompt/loadout is replaced; custom and shell messages are real conversation context.
-    if (message.role === "system") return [];
     if (message.role === "assistant") {
       if (message.stopReason === "error" || message.stopReason === "aborted") return [];
       message.content = message.content.filter(

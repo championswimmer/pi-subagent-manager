@@ -4,6 +4,11 @@ import {
   diagnosticAgentText,
 } from "./orch/diagnostics.ts";
 import { randomUUID } from "node:crypto";
+import {
+  getCurrentSystemMessage,
+  getSystemMessageText,
+  toToolDeclaration,
+} from "@earendil-works/pi-ai";
 import { buildSessionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { fuzzyFilter } from "@earendil-works/pi-tui";
@@ -54,6 +59,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
     if (capabilityActive && limits.subagentMode !== "off") respondDiagnosticCapability(payload);
   });
   let context: ExtensionContext | undefined;
+  let lastRootPrompt: string | undefined;
   const inheritedTools = createInheritedToolSource(pi);
   let store = new ConfigStore({
     cwd: process.cwd(),
@@ -603,7 +609,10 @@ export default function piSubagent(pi: ExtensionAPI): void {
         limits.subagentMode !== "off" &&
         currentChecklistStatus(ctx).eligible,
     );
-    if (!prompt) return;
+    if (!prompt) {
+      lastRootPrompt = undefined;
+      return;
+    }
     if (
       limits.subagentMode === "opportunistic" &&
       "prompt" in event &&
@@ -615,9 +624,8 @@ export default function piSubagent(pi: ExtensionAPI): void {
         ctx.ui.notify(`Could not save import onboarding state: ${String(error)}`, "warning");
       }
     }
-    return {
-      systemPrompt: `${event.systemPrompt}\n\n${prompt}`,
-    };
+    lastRootPrompt = `${event.systemPrompt}\n\n${prompt}`;
+    return { systemPrompt: lastRootPrompt };
   });
 
   const attachSession = async (
@@ -633,6 +641,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
     // session_start already belongs to the replacement session: never append the old registry here.
     if (manager) await manager.shutdown();
     inheritedTools.reset();
+    lastRootPrompt = undefined;
     // pi-checklist reseeds its own state on these same lifecycle events.
     checklistMirror.reset(ctx);
     context = ctx;
@@ -656,7 +665,30 @@ export default function piSubagent(pi: ExtensionAPI): void {
     const instance = new ThreadManager({
       ...limits,
       createDriver: driverFactory,
-      rootSnapshot: () => buildSessionContext(requireContext().sessionManager.getBranch()).messages,
+      rootSnapshot: () => {
+        const root = requireContext();
+        const { messages } = buildSessionContext(root.sessionManager.getBranch());
+        // Pi projects before_agent_start overrides onto the wire, not the JSONL.
+        // Prefer the live prompt in a tool call, and the last rendered override
+        // between turns (e.g. when spawning from the /agents command).
+        const head = getCurrentSystemMessage(messages);
+        const effective = root.isIdle()
+          ? (lastRootPrompt ?? (!head ? root.getSystemPrompt() : undefined))
+          : root.getSystemPrompt();
+        if (!effective || (head && effective === getSystemMessageText(head))) return messages;
+        const { tools, activeNames } = inheritedTools.snapshot();
+        const toolsByName = new Map(tools.map((tool) => [tool.name, tool]));
+        const toolsAdded =
+          head?.toolsAdded ??
+          activeNames.flatMap((name) => {
+            const tool = toolsByName.get(name);
+            return tool ? [toToolDeclaration(tool)] : [];
+          });
+        return [
+          { role: "system", content: effective, timestamp: head?.timestamp ?? 0, toolsAdded },
+          ...messages.filter((message) => message.role !== "system"),
+        ];
+      },
       rootContextEntries: () =>
         inheritedContextEntries(requireContext().sessionManager.getBranch()),
       getType: (name) => store.get(name),

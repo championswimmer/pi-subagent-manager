@@ -150,6 +150,8 @@ export interface AgentDriver {
   prompt(message: string): Promise<void>;
   steer(message: string): Promise<void>;
   snapshot(): AgentMessage[];
+  /** Model-visible prompt projection for a lexical child. */
+  forkSnapshot?(): AgentMessage[];
   contextEntries?(): InheritedContextEntry[];
   observeTranscript?(listener: TranscriptListener): TranscriptObservation;
   output(): string;

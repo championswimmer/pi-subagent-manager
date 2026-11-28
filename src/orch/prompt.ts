@@ -7,7 +7,7 @@ export function delegationGuidance(canSpawnChildren: boolean): string {
     : "You are at the maximum agent depth and cannot spawn any more subagents. Complete your assigned work yourself.";
 }
 
-/** Root-only guidance: child SDK sessions use their own worker prompt. */
+/** Root-only guidance addressed to /root; a fork overrides its role in a later message. */
 export function subagentPrompt(
   settings: ManagerSettings,
   /** Caller-verified pi-checklist eligibility; ignored unless the Labs opt-in is also on. */
