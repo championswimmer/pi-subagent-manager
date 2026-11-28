@@ -582,6 +582,9 @@ export default function piSubagent(pi: ExtensionAPI): void {
     if (manager) refreshWidget(ctx);
   });
   pi.on("agent_end", async (_event, ctx) => {
+    // Preserve the effective run prompt for idle forks before Pi clears it.
+    // At this point every before_agent_start handler has run.
+    lastRootPrompt = ctx.getSystemPrompt();
     rootTurnEnded = true;
     if (manager) refreshWidget(ctx);
     refreshCostFooter(ctx);
@@ -609,10 +612,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
         limits.subagentMode !== "off" &&
         currentChecklistStatus(ctx).eligible,
     );
-    if (!prompt) {
-      lastRootPrompt = undefined;
-      return;
-    }
+    if (!prompt) return;
     if (
       limits.subagentMode === "opportunistic" &&
       "prompt" in event &&
@@ -624,8 +624,7 @@ export default function piSubagent(pi: ExtensionAPI): void {
         ctx.ui.notify(`Could not save import onboarding state: ${String(error)}`, "warning");
       }
     }
-    lastRootPrompt = `${event.systemPrompt}\n\n${prompt}`;
-    return { systemPrompt: lastRootPrompt };
+    return { systemPrompt: `${event.systemPrompt}\n\n${prompt}` };
   });
 
   const attachSession = async (
@@ -669,13 +668,14 @@ export default function piSubagent(pi: ExtensionAPI): void {
         const root = requireContext();
         const { messages } = buildSessionContext(root.sessionManager.getBranch());
         // Pi projects before_agent_start overrides onto the wire, not the JSONL.
-        // Prefer the live prompt in a tool call, and the last rendered override
+        // Prefer the live prompt in a tool call, and the last run's effective prompt
         // between turns (e.g. when spawning from the /agents command).
         const head = getCurrentSystemMessage(messages);
         const effective = root.isIdle()
           ? (lastRootPrompt ?? (!head ? root.getSystemPrompt() : undefined))
           : root.getSystemPrompt();
-        if (!effective || (head && effective === getSystemMessageText(head))) return messages;
+        if (effective === undefined || (head && effective === getSystemMessageText(head)))
+          return messages;
         const { tools, activeNames } = inheritedTools.snapshot();
         const toolsByName = new Map(tools.map((tool) => [tool.name, tool]));
         const toolsAdded =

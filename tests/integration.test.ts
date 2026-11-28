@@ -164,6 +164,37 @@ test("a folding model keeps the parent's leading prompt and appends instructions
   );
 });
 
+test("an idle fork inherits the final prompt override from the parent request", async () => {
+  const override = "FINAL PROMPT FROM LATER EXTENSION";
+  await withOfflineHarness(
+    {
+      agentFiles: { offline: offlineAgent },
+      builtinTools: true,
+      extensionFactories: [
+        (pi) => {
+          pi.on("before_agent_start", () => ({ systemPrompt: override }));
+        },
+      ],
+      onRequest: () => answer("Done"),
+    },
+    async ({ cwd, open, tool, requests }) => {
+      const session = await open(SessionManager.create(cwd));
+      await session.prompt("Parent history");
+      assert.ok(session.isIdle);
+      const fork = await tool<ThreadView>(session, "agent_spawn", {
+        path: "worker",
+        type: "offline",
+        task: "Child task",
+      });
+      assert.equal(fork.state, "completed");
+      const rootMessages = JSON.parse(requests[0]!.messagesText);
+      const child = requests.find((request) => request.path === "/root/worker")!;
+      assert.equal(rootMessages[0].content, override);
+      assert.deepEqual(JSON.parse(child.messagesText).slice(0, rootMessages.length), rootMessages);
+    },
+  );
+});
+
 // One lifecycle scenario using real SDK sessions, JSONL storage, and extension binding; no driver mocks.
 test(
   "offline extension retains paused/completed child across parent reopen and isolates a fork",

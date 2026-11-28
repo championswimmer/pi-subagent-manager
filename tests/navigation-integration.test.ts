@@ -139,6 +139,7 @@ async function fixture(
     hasUI: options.hasUI ?? true,
     mode: options.mode ?? "tui",
     isProjectTrusted: () => false,
+    getSystemPrompt: () => "",
     ui: {
       theme,
       setStatus() {},
