@@ -34,6 +34,8 @@ export type LoggedRequest = {
   path: string | null;
   lexicalParent: string | null;
   system: string;
+  /** Fork instructions, delivered as a system or user message depending on the model. */
+  instructions: string;
   messagesText: string;
   toolNames: string[];
 };
@@ -60,6 +62,8 @@ export async function withOfflineHarness(
     scopedModels?: string[];
     managerSettings?: Partial<ManagerSettings>;
     builtinTools?: boolean;
+    /** Provider compat flags for the offline models (e.g. mid-conversation system messages). */
+    modelCompat?: Record<string, unknown>;
     extensionFactories?: ExtensionFactory[];
   },
   body: (harness: OfflineHarness) => Promise<void>,
@@ -108,6 +112,7 @@ export async function withOfflineHarness(
           id: "offline",
           name: "Offline",
           reasoning: false,
+          ...(options.modelCompat ? { compat: options.modelCompat } : {}),
           input: ["text"],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow: 100000,
@@ -117,6 +122,7 @@ export async function withOfflineHarness(
           id: "offline-alt",
           name: "Offline Alt",
           reasoning: true,
+          ...(options.modelCompat ? { compat: options.modelCompat } : {}),
           input: ["text"],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow: 100000,
@@ -125,8 +131,11 @@ export async function withOfflineHarness(
       ],
       streamSimple(model, context) {
         const system = JSON.stringify(getCurrentSystemPrompt(context.messages));
+        // Fork instructions travel as a system or user message depending on the model.
+        const all = JSON.stringify(context.messages);
         const pathKey =
-          system.match(/Your thread path is (\/root(?:\/[A-Za-z0-9_-]+)*)\./)?.[1] ?? system;
+          [...all.matchAll(/Your thread path is (\/root(?:\/[A-Za-z0-9_-]+)*)\./g)].at(-1)?.[1] ??
+          system;
         const request: LoggedRequest = {
           call: requests.length + 1,
           pathCall: (byPath.get(pathKey) ?? 0) + 1,
@@ -134,8 +143,19 @@ export async function withOfflineHarness(
           modelId: model.id,
           path: typeof pathKey === "string" && pathKey.startsWith("/root") ? pathKey : null,
           lexicalParent:
-            system.match(/Your lexical parent is (\/root(?:\/[A-Za-z0-9_-]+)*);/)?.[1] ?? null,
+            [...all.matchAll(/Your lexical parent is (\/root(?:\/[A-Za-z0-9_-]+)*);/g)].at(
+              -1,
+            )?.[1] ?? null,
           system,
+          instructions: context.messages
+            .filter(
+              (message) =>
+                (message.role === "system" || message.role === "user") &&
+                typeof message.content === "string" &&
+                message.content.startsWith("You are now running as a subagent."),
+            )
+            .map((message) => String(message.content))
+            .join("\n\n"),
           messagesText: JSON.stringify(context.messages),
           toolNames: getCurrentTools(context.messages).map((tool) => tool.name),
         };

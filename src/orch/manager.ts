@@ -341,7 +341,7 @@ export class ThreadManager {
       parent === "/root"
         ? inheritContext(this.options.rootSnapshot())
         : parentRecord?.driver
-          ? inheritContext(parentRecord.driver.snapshot())
+          ? inheritContext(parentRecord.driver.forkSnapshot?.() ?? parentRecord.driver.snapshot())
           : [];
     const inheritedContextEntries = structuredClone(
       parent === "/root"
@@ -1004,7 +1004,7 @@ export class ThreadManager {
     let ready!: Promise<void>;
     ready = this.ensureDriver(parentRecord, readOnly)
       .then((driver) => {
-        record.inherited = inheritContext(driver.snapshot());
+        record.inherited = inheritContext(driver.forkSnapshot?.() ?? driver.snapshot());
         record.inheritedContextEntries = structuredClone(driver.contextEntries?.() ?? []);
         record.contextPending = false;
         if (record.contextReady === ready) record.contextReady = undefined;

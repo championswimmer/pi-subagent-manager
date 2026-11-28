@@ -544,7 +544,7 @@ test("root prompt: opportunistic gets optional wording; reseeding follows global
   assert.match((await h.prompt())!, GUIDANCE);
 });
 
-test("worker prompts never receive the root checklist requirement", async () => {
+test("worker instructions do not add the root checklist requirement", async () => {
   const { readFileSync } = await import("node:fs");
   const runtime = readFileSync(new URL("../src/orch/runtime.ts", import.meta.url), "utf8");
   assert.doesNotMatch(runtime, /checklistGuidance|checklistIntegration|subagentPrompt\(/);

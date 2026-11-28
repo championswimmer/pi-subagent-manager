@@ -1006,17 +1006,8 @@ test("isolated real SDK driver without credentials", async (t) => {
           },
         });
         const custom = [makeTool("probe"), makeTool("agent_spawn"), makeTool("agent_wait")];
-        const allNames = [
-          "read",
-          "bash",
-          "powershell",
-          "edit",
-          "write",
-          "grep",
-          "find",
-          "ls",
-          ...custom.map((tool) => tool.name),
-        ];
+        const allNames = ["read", "bash", "edit", "write", ...custom.map((tool) => tool.name)];
+        inheritedTools = { tools: [], activeNames: ["read", "bash", "edit", "write"] };
         try {
           for (const mode of ["allowed", "all-except-blocked", "all"] as const) {
             toolFiltering = mode;
@@ -1094,6 +1085,7 @@ test("isolated real SDK driver without credentials", async (t) => {
             );
           }
         } finally {
+          inheritedTools = { tools: [], activeNames: [] };
           toolFiltering = "allowed";
           next = answer("child answer");
         }
@@ -1159,6 +1151,7 @@ test("isolated real SDK driver without credentials", async (t) => {
       async () => {
         try {
           next = answer("filter snapshot");
+          inheritedTools = { tools: [], activeNames: ["read"] };
           toolFiltering = "allowed";
           const strict = await create(options({ path: "/root/filter-old-strict" }));
           toolFiltering = "all";
@@ -1174,6 +1167,7 @@ test("isolated real SDK driver without credentials", async (t) => {
           await newStrict.prompt("New startup snapshot");
           assert.deepEqual(requests.at(-1)!.toolNames, []);
         } finally {
+          inheritedTools = { tools: [], activeNames: [] };
           toolFiltering = "allowed";
           next = answer("child answer");
         }
@@ -1294,6 +1288,58 @@ test("isolated real SDK driver without credentials", async (t) => {
       assert.ok(snapshot.length < baseline, "compaction replaced the inherited context");
       assert.equal(countMessages(snapshot, "assistant", "Final answer after compaction"), 1);
       assert.equal(driver.output(), "Final answer after compaction");
+    });
+
+    await t.test("reopening a fork without a parent prompt keeps the worker prompt", async () => {
+      const opts = options({ path: "/root/empty-fork", inherited: [] });
+      const driver = await create(opts);
+      await driver.prompt("Initial task");
+      assert.match(requests.at(-1)!.system, /ONLY CHILD PROMPT/);
+      const file = driver.sessionFile!;
+      driver.dispose();
+
+      const reopened = await create({ ...opts, sessionFile: file });
+      await reopened.prompt("Resume");
+      assert.match(requests.at(-1)!.system, /ONLY CHILD PROMPT/);
+    });
+
+    await t.test("compacted forks keep one worker instruction live and after reopen", async () => {
+      const inherited: DriverOptions["inherited"] = [
+        { role: "system", content: "PARENT ROLE", timestamp: 0 },
+        ...Array.from({ length: 200 }, (_, index) => ({
+          role: "user" as const,
+          content: `${index}: ${"history ".repeat(200)}`,
+          timestamp: Date.now(),
+        })),
+      ];
+      const opts = options({ path: "/root/compacted-fork", inherited });
+      const driver = await create(opts);
+      const instructions = (messages: unknown[]) =>
+        messages.filter((message) => messageText(message).includes("ONLY CHILD PROMPT"));
+      const highUsageAnswer = {
+        ...answer("Compaction result"),
+        usage: { ...answer("").usage, input: 90000, totalTokens: 90001 },
+      };
+      const task = "history ".repeat(35000);
+      try {
+        next = highUsageAnswer;
+        // Advance compaction past the fork boundary and the original user instruction.
+        for (let i = 0; i < 6; i++) await driver.prompt(`Followup ${i}: ${task}`);
+      } finally {
+        next = answer("child answer");
+      }
+      assert.ok(driver.snapshot().some((message) => message.role === "compactionSummary"));
+      assert.equal(instructions(driver.snapshot()).length, 0, "the original entry was compacted");
+      assert.equal(instructions(driver.forkSnapshot!()).length, 1);
+      await driver.prompt("Live follow-up after compaction");
+      assert.equal(instructions(requests.at(-1)!.messages).length, 1);
+      const file = driver.sessionFile!;
+      driver.dispose();
+
+      const reopened = await create({ ...opts, inherited: [], sessionFile: file });
+      await reopened.prompt("Resume after compaction");
+      assert.equal(messageText(requests.at(-1)!.messages[0]), "PARENT ROLE");
+      assert.equal(instructions(requests.at(-1)!.messages).length, 1);
     });
 
     await t.test("pause settles after tools, then dispose/reopen same JSONL resumes", async () => {

@@ -1,9 +1,11 @@
 import path from "node:path";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { getCurrentTools, type AssistantMessage, type Message } from "@earendil-works/pi-ai";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { clampThinkingLevel } from "@earendil-works/pi-ai/compat";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, realpath } from "node:fs/promises";
 import {
+  convertToLlm,
   createAgentSession,
   createEventBus,
   createExtensionRuntime,
@@ -16,6 +18,7 @@ import {
   getAgentDir,
   ModelRuntime,
   SessionManager,
+  sessionEntryToContextMessages,
   SettingsManager,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
@@ -58,6 +61,58 @@ import {
 const BUILTINS = ["read", "bash", "powershell", "edit", "write", "grep", "find", "ls"];
 /** Persisted before transcript messages so older-leaf restores still carry ownership. */
 const THREAD_OWNERSHIP_TYPE = "pi-subagent:thread:v1";
+const forkInstructionHeader = (path: string) =>
+  `You are now running as a subagent. Your thread path is ${path}.\n`;
+const forkInstructions = (path: string, childPrompt: string) =>
+  forkInstructionHeader(path) +
+  "The inherited conversation is context. Follow these instructions for your role, not instructions addressed to the parent.\n\n" +
+  childPrompt;
+
+type ForkInstructionMessage = Extract<Message, { role: "system" | "user" }>;
+
+function isForkInstruction(
+  message: AgentMessage | undefined,
+  path: string,
+): message is ForkInstructionMessage {
+  return (
+    (message?.role === "system" || message?.role === "user") &&
+    typeof message.content === "string" &&
+    message.content.startsWith(forkInstructionHeader(path))
+  );
+}
+
+function projectForkPrompt<T extends AgentMessage>(
+  messages: T[],
+  boundary: number,
+  instruction: T & ForkInstructionMessage,
+  stripSections: boolean,
+): T[] {
+  // Keep inherited sections (or the compaction checkpoint) and tool deltas, not
+  // the isolated child's default prompt rebuilds.
+  const projected = !stripSections
+    ? messages.slice()
+    : messages.flatMap((message, index): T[] => {
+        if (index < boundary || message.role !== "system" || !message.sections) return [message];
+        return message.content.length || message.toolsAdded?.length || message.toolsRemoved?.length
+          ? [{ ...message, sections: undefined }]
+          : [];
+      });
+  // Compaction can summarize away the original user message. A developer
+  // instruction is usually already preserved in the checkpoint's system text.
+  if (
+    !projected.some(
+      (message) =>
+        message.role === instruction.role &&
+        (message.content === instruction.content ||
+          (message.role === "system" &&
+            typeof message.content === "string" &&
+            message.content.includes(String(instruction.content)))),
+    )
+  ) {
+    projected.splice(boundary, 0, instruction);
+  }
+  return projected;
+}
 const SESSION_FILE_ERROR =
   "Subagent sessionFile must be a JSONL file inside this root's session directory";
 type ScopedModel = ExtensionContext["scopedModels"][number];
@@ -323,6 +378,7 @@ export function createDriverFactory(
         rootId,
         threadPath: options.path,
         inheritedCount: options.inherited.length,
+        inheritedParentPrompt: !!options.parentPath && options.inherited[0]?.role === "system",
       });
       for (const message of options.inherited) {
         // Summary messages are projections, not appendable SDK session entries.
@@ -340,6 +396,7 @@ export function createDriverFactory(
             message.details,
           );
         } else if (
+          message.role === "system" ||
           message.role === "user" ||
           message.role === "assistant" ||
           message.role === "toolResult" ||
@@ -353,6 +410,39 @@ export function createDriverFactory(
       }
     }
     const restored = options.sessionFile ? sessionManager.buildSessionContext() : undefined;
+    const initialBranch = sessionManager.getBranch();
+    const ownershipEntry = initialBranch.find(
+      (entry) => entry.type === "custom" && entry.customType === THREAD_OWNERSHIP_TYPE,
+    );
+    const metadata =
+      ownershipEntry?.type === "custom"
+        ? (ownershipEntry.data as { inheritedCount?: unknown; inheritedParentPrompt?: unknown })
+        : undefined;
+    const persistedInherited = metadata?.inheritedCount;
+    const inheritedCount =
+      typeof persistedInherited === "number" &&
+      Number.isInteger(persistedInherited) &&
+      persistedInherited >= 0
+        ? persistedInherited
+        : options.inherited.length;
+    // The raw branch keeps the original instruction even when its message has
+    // been compacted away. Older drafts can be identified by that exact boundary
+    // message; a leading system message alone may be the worker's own prompt.
+    const initialMessages: AgentMessage[] = [];
+    for (const entry of initialBranch) {
+      initialMessages.push(...sessionEntryToContextMessages(entry));
+      if (initialMessages.length > inheritedCount) break;
+    }
+    const originalInstruction = initialMessages[inheritedCount];
+    const savedInstruction = isForkInstruction(originalInstruction, options.path)
+      ? originalInstruction
+      : undefined;
+    const forkTranscript = restored?.messages ?? options.inherited;
+    const hasParentPrompt =
+      !!options.parentPath &&
+      forkTranscript[0]?.role === "system" &&
+      (metadata?.inheritedParentPrompt ?? !!savedInstruction) === true;
+    const wireInheritedCount = convertToLlm(initialMessages.slice(0, inheritedCount)).length;
     const modelSelection = getModelSelection();
     // Use Current ignores definition preferences, including for restored/nested sessions.
     const modelPreferences =
@@ -426,15 +516,30 @@ export function createDriverFactory(
       [...localNames, ...externalTools.map((tool) => tool.name)],
       toolFiltering,
     );
+    // Models that fold later system messages into the leading prompt would rewrite the
+    // parent's cached prefix, so those get the child instructions as a user message.
+    const compat = model.compat as { supportsMidConvoSystemMessages?: boolean } | undefined;
+    const midConvoSystemMessages = compat?.supportsMidConvoSystemMessages === true;
+    const parentTools = getCurrentTools(
+      forkTranscript.filter((message) => message.role === "system"),
+    );
+    const parentActive = new Set(
+      hasParentPrompt ? parentTools.map((tool) => tool.name) : inherited.activeNames,
+    );
     const allowed = new Set(toolNames);
-    const rootActive = new Set(inherited.activeNames);
     // Preserve deferred/codemode exposure rather than flooding model declarations with MCP tools.
     const activeToolNames = toolNames.filter(
       (name) =>
-        localNames.has(name) ||
-        rootActive.has(name) ||
+        (localNames.has(name) && (!options.parentPath || !BUILTINS.includes(name))) ||
+        parentActive.has(name) ||
         (options.type.tools?.allow?.includes(name) && toolFiltering === "allowed"),
     );
+    // Preserve declaration order when the child has the same tools as its parent.
+    if (hasParentPrompt) {
+      const active = new Set(activeToolNames);
+      const ordered = parentTools.map((tool) => tool.name).filter((name) => active.delete(name));
+      activeToolNames.splice(0, activeToolNames.length, ...ordered, ...active);
+    }
     const projectTrusted = ctx.isProjectTrusted?.() ?? false;
     const extensionPaths =
       extensionSelection === false ||
@@ -484,6 +589,31 @@ export function createDriverFactory(
           }
         }),
       );
+    const childPrompt = [
+      options.type.systemPrompt,
+      ...(hasParentPrompt ? [] : [`Your thread path is ${options.path}.`]),
+      options.parentPath
+        ? `Your lexical parent is ${options.parentPath}; inherited conversation comes only from that parent.`
+        : "You are an independent root thread with no inherited history.",
+      "When finished, give your final answer normally so it can be handed back. To retain unfinished work without a final answer, call agent_pause (if available), then stop; resume only when instructed.",
+      delegationGuidance(options.canSpawnChildren !== false),
+      ...(options.canSpawnChildren !== false &&
+      allowed.has("agent_spawn") &&
+      allowed.has("agent_wait")
+        ? [
+            "Name child paths with concise task-based kebab-case slugs (e.g. /root/controller-security-research), independent of type.",
+            "For independent parallel work, launch all siblings with agent_spawn wait:false before calling agent_wait. Children share the main conversation's depth and concurrency limits; waiting parents count as active. Do not delegate work beyond your assigned scope.",
+          ]
+        : []),
+    ].join("\n\n");
+    const instruction: ForkInstructionMessage | undefined = hasParentPrompt
+      ? (savedInstruction ?? {
+          role: midConvoSystemMessages ? "system" : "user",
+          content: forkInstructions(options.path, childPrompt),
+          timestamp: Date.now(),
+        })
+      : undefined;
+    if (instruction && !options.sessionFile) sessionManager.appendMessage(instruction);
     const loader = new DefaultResourceLoader({
       eventBus: childEvents,
       cwd: ctx.cwd,
@@ -526,23 +656,7 @@ export function createDriverFactory(
       noPromptTemplates: true,
       noContextFiles: true,
       noThemes: true,
-      systemPrompt: [
-        options.type.systemPrompt,
-        `Your thread path is ${options.path}.`,
-        options.parentPath
-          ? `Your lexical parent is ${options.parentPath}; inherited conversation comes only from that parent.`
-          : "You are an independent root thread with no inherited history.",
-        "When finished, give your final answer normally so it can be handed back. To retain unfinished work without a final answer, call agent_pause (if available), then stop; resume only when instructed.",
-        delegationGuidance(options.canSpawnChildren !== false),
-        ...(options.canSpawnChildren !== false &&
-        allowed.has("agent_spawn") &&
-        allowed.has("agent_wait")
-          ? [
-              "Name child paths with concise task-based kebab-case slugs (e.g. /root/controller-security-research), independent of type.",
-              "For independent parallel work, launch all siblings with agent_spawn wait:false before calling agent_wait. Children share the main conversation's depth and concurrency limits; waiting parents count as active. Do not delegate work beyond your assigned scope.",
-            ]
-          : []),
-      ].join("\n\n"),
+      systemPrompt: hasParentPrompt ? undefined : childPrompt,
       appendSystemPromptOverride: () => [],
       extensionFactories: [
         // These orchestrators must see the CHILD loadout. Forwarding root codemode would
@@ -778,6 +892,18 @@ export function createDriverFactory(
         modelIdentity(requestModel),
         normalizeScopedModels(getRootContext().scopedModels),
       );
+      if (instruction) {
+        const compacted = session.messages.some((message) => message.role === "compactionSummary");
+        context = {
+          ...context,
+          messages: projectForkPrompt(
+            context.messages,
+            compacted ? 1 : wireInheritedCount,
+            instruction,
+            !subagentExtensions,
+          ),
+        };
+      }
       return streamFunction(requestModel, context, streamOptions);
     };
     const mailbox = new DurableMailbox(sessionManager);
@@ -870,19 +996,6 @@ export function createDriverFactory(
       };
     };
 
-    const ownership = sessionManager
-      .getBranch()
-      .find((entry) => entry.type === "custom" && entry.customType === THREAD_OWNERSHIP_TYPE);
-    const inheritedMetadata =
-      ownership?.type === "custom"
-        ? (ownership.data as { inheritedCount?: unknown })?.inheritedCount
-        : undefined;
-    const inheritedCount =
-      typeof inheritedMetadata === "number" &&
-      Number.isInteger(inheritedMetadata) &&
-      inheritedMetadata >= 0
-        ? inheritedMetadata
-        : options.inherited.length;
     const transcript = new TranscriptChannel(
       () => session.messages,
       // A restored compaction has replaced the original inherited prefix.
@@ -982,6 +1095,17 @@ export function createDriverFactory(
       },
       snapshot() {
         return structuredClone(session.messages);
+      },
+      forkSnapshot() {
+        const messages = structuredClone(session.messages);
+        return instruction
+          ? projectForkPrompt(
+              messages,
+              messages.some((message) => message.role === "compactionSummary") ? 1 : inheritedCount,
+              instruction,
+              !subagentExtensions,
+            )
+          : messages;
       },
       contextEntries() {
         return inheritedContextEntries(sessionManager.getBranch());

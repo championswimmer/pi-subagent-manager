@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { type AssistantMessage, type JsonObject } from "@earendil-works/pi-ai";
+import { type AssistantMessage, type JsonObject, normalizeContext } from "@earendil-works/pi-ai";
+import { streamSimple as streamResponses } from "@earendil-works/pi-ai/api/openai-responses";
 import { buildSessionContext, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { RegistryDelta } from "../src/orch/registry.ts";
 import type { AgentType, SavedThread, ThreadView } from "../src/types.ts";
@@ -61,6 +62,139 @@ const sessionLeafId = (thread: SavedThread) => {
   return thread.view.sessionLeafId;
 };
 
+test("Responses fork keeps the parent's wire prefix and appends a developer message", async () => {
+  await withOfflineHarness(
+    {
+      agentFiles: { offline: offlineAgent },
+      builtinTools: true,
+      modelCompat: { supportsMidConvoSystemMessages: true },
+      onRequest: () => answer("Done"),
+    },
+    async ({ cwd, open, tool, requests }) => {
+      const session = await open(SessionManager.create(cwd));
+      await session.prompt("Parent history");
+      const fork = await tool<ThreadView>(session, "agent_spawn", {
+        path: "worker",
+        type: "offline",
+        task: "Child task",
+      });
+      assert.equal(fork.state, "completed");
+      const payload = async (messagesText: string) => {
+        const context = normalizeContext({ messages: JSON.parse(messagesText) });
+        const model = {
+          ...session.model!,
+          api: "openai-responses" as const,
+          reasoning: true,
+          compat: { supportsMidConvoSystemMessages: true },
+        };
+        let body: { input: { role?: string; content?: unknown }[]; tools: unknown[] } | undefined;
+        await streamResponses(model, context, {
+          apiKey: "offline",
+          onPayload(value) {
+            body = value as typeof body;
+            throw new Error("Stop after capturing the payload");
+          },
+        }).result();
+        assert.ok(body);
+        return body;
+      };
+      const root = await payload(requests[0]!.messagesText);
+      const child = await payload(
+        requests.find((request) => request.path === "/root/worker")!.messagesText,
+      );
+      assert.deepEqual(child.tools, root.tools);
+      assert.deepEqual(child.input.slice(0, root.input.length), root.input);
+      const childSuffix = child.input.slice(root.input.length);
+      assert.deepEqual(
+        childSuffix.map((item) => item.role),
+        ["assistant", "developer", "user"],
+      );
+      assert.match(String(childSuffix[1]!.content), /ONLY OFFLINE CHILD/);
+      assert.match(JSON.stringify(childSuffix[2]!.content), /Child task/);
+      const saved = SessionManager.open(fork.sessionFile!);
+      assert.equal(
+        saved
+          .buildSessionContext()
+          .messages.filter(
+            (message) =>
+              message.role === "system" &&
+              typeof message.content === "string" &&
+              message.content.startsWith("You are now running as a subagent."),
+          ).length,
+        1,
+      );
+    },
+  );
+});
+
+test("a folding model keeps the parent's leading prompt and appends instructions as a user message", async () => {
+  await withOfflineHarness(
+    {
+      agentFiles: { offline: offlineAgent },
+      builtinTools: true,
+      onRequest: () => answer("Done"),
+    },
+    async ({ cwd, open, tool, requests }) => {
+      const session = await open(SessionManager.create(cwd));
+      await session.prompt("Parent history");
+      const fork = await tool<ThreadView>(session, "agent_spawn", {
+        path: "worker",
+        type: "offline",
+        task: "Child task",
+      });
+      assert.equal(fork.state, "completed");
+      const root = requests[0]!;
+      const child = requests.find((request) => request.path === "/root/worker")!;
+      const rootMessages = JSON.parse(root.messagesText);
+      const childMessages = JSON.parse(child.messagesText);
+      // Pi folds later system messages into the leading prompt, so the instructions
+      // must travel as a user message to keep the parent's cached prefix intact.
+      assert.equal(childMessages[0].role, "system");
+      assert.equal(childMessages[0].content, rootMessages[0].content);
+      assert.deepEqual(child.toolNames, root.toolNames);
+      assert.deepEqual(childMessages.slice(0, rootMessages.length), rootMessages);
+      const suffix = childMessages.slice(rootMessages.length);
+      assert.deepEqual(
+        suffix.map((message: { role: string }) => message.role),
+        ["assistant", "user", "user"],
+      );
+      assert.match(suffix[1].content, /ONLY OFFLINE CHILD/);
+      assert.match(JSON.stringify(suffix[2].content), /Child task/);
+    },
+  );
+});
+
+test("an idle fork inherits the final prompt override from the parent request", async () => {
+  const override = "FINAL PROMPT FROM LATER EXTENSION";
+  await withOfflineHarness(
+    {
+      agentFiles: { offline: offlineAgent },
+      builtinTools: true,
+      extensionFactories: [
+        (pi) => {
+          pi.on("before_agent_start", () => ({ systemPrompt: override }));
+        },
+      ],
+      onRequest: () => answer("Done"),
+    },
+    async ({ cwd, open, tool, requests }) => {
+      const session = await open(SessionManager.create(cwd));
+      await session.prompt("Parent history");
+      assert.ok(session.isIdle);
+      const fork = await tool<ThreadView>(session, "agent_spawn", {
+        path: "worker",
+        type: "offline",
+        task: "Child task",
+      });
+      assert.equal(fork.state, "completed");
+      const rootMessages = JSON.parse(requests[0]!.messagesText);
+      const child = requests.find((request) => request.path === "/root/worker")!;
+      assert.equal(rootMessages[0].content, override);
+      assert.deepEqual(JSON.parse(child.messagesText).slice(0, rootMessages.length), rootMessages);
+    },
+  );
+});
+
 // One lifecycle scenario using real SDK sessions, JSONL storage, and extension binding; no driver mocks.
 test(
   "offline extension retains paused/completed child across parent reopen and isolates a fork",
@@ -72,7 +206,7 @@ test(
         agentFiles: { offline: offlineAgent },
         onRequest(request) {
           const isChild =
-            request.path === "/root/worker" && request.system.includes("ONLY OFFLINE CHILD");
+            request.path === "/root/worker" && request.instructions.includes("ONLY OFFLINE CHILD");
           if (request.path !== null && !isChild) unexpectedCalls++;
           return isChild && request.pathCall === 1
             ? toolUse("pause-1", "agent_pause", { reason: "Need parent input" })

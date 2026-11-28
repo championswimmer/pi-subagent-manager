@@ -34,6 +34,7 @@ test(
     await withOfflineHarness(
       {
         agentFiles: { worker },
+        builtinTools: true,
         managerSettings: { toolFiltering: "allowed" },
         onRequest: answer,
       },

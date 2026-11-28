@@ -92,6 +92,7 @@ async function withCommands(
     hasUI: true,
     mode: "tui",
     isProjectTrusted: () => false,
+    getSystemPrompt: () => "",
     ui: {
       theme: driver.theme,
       setStatus() {},

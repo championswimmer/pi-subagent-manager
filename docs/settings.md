@@ -208,6 +208,7 @@ How the type's `tools.allow` / `tools.block` lists are applied.
 | `all` — **All**                                      | Ignores both lists.                                               | Trusted local experiments.                |
 
 - "All" includes child-local built-in and manager tools plus the main session's registered non-hidden tools. Exact-name allow/block lists apply to this inventory.
+- Forks do not activate built-ins absent from the parent by default. Use an explicit allowlist in `allowed` mode to opt into additional built-ins. Independent roots keep their own tool selection.
 - Inherited tools retain exposure and active status. Deferred/codemode tools are discoverable through child-local codemode when permitted; direct tools remain model-facing when active.
 - By default, built-in tools, manager controls, codemode and tool search remain child-local. External calls reuse main-session resources/context rather than loading fresh extensions or MCP connections. With [Enable subagent extensions](#labs-enable-subagent-extensions-subagentextensions), reloaded extension tools execute in the child instead. Bridged callable tools remain subject to the main session's tool policy; session-mutating external tools are not necessarily isolated to the child. Skills and project context files are not automatically loaded.
 - Other custom **model-only** tools fail closed: the SDK cannot bridge them while preserving root permission/result hooks. Run those in the main session.
